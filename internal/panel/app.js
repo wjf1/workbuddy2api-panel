@@ -1153,19 +1153,53 @@ async function openExport() {
     return;
   }
   try {
-    listEl.innerHTML = list.map(s => {
+    // 用 DOM API 逐元素创建 + 关键样式内联：不依赖全局 CSS 解析与 innerHTML
+    // 字符串拼接（用户环境曾出现"行在 DOM 但整体不可见"的渲染错乱，内联样式
+    // 优先级最高，任何全局规则/插件改写都无法覆盖）；账号文本走 textContent，
+    // 无注入面。tag 为固定枚举字符串，是唯一的 innerHTML。
+    const frag = document.createDocumentFragment();
+    list.forEach(s => {
       const uid = String(s.uid || '');
       const short = uid.length > 16 ? uid.slice(0, 16) + '…' : uid;
       const name = String(s.nickname || '') || short || '（无昵称）';
+      const cred = s.credits == null ? '' : ' · 积分 ' + s.credits + (s.credits_total > 0 ? '/' + s.credits_total : '');
       const tag = s.disabled ? '<span class="tag bad">已禁用</span>'
         : s.paused ? '<span class="tag warn">已暂停</span>'
         : (s.cool_remaining_sec || 0) > 0 ? '<span class="tag warn">冷却中</span>'
         : '<span class="tag ok">可用</span>';
-      const cred = s.credits == null ? '' : ' · 积分 ' + s.credits + (s.credits_total > 0 ? '/' + s.credits_total : '');
-      return '<label class="exp-row"><input type="checkbox" class="exp-check" value="' + esc(uid) + '">'
-        + '<span class="exp-name">' + esc(name) + '</span>'
-        + '<span class="exp-meta hint">' + esc(short + cred) + '</span>' + tag + '</label>';
-    }).join('');
+
+      const row = document.createElement('label');
+      row.className = 'exp-row';
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;min-height:14px;padding:7px 8px;border-radius:6px;cursor:pointer';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'exp-check';
+      cb.value = uid;
+      cb.style.cssText = 'width:14px;height:14px;flex-shrink:0;accent-color:#3b66f5;cursor:pointer;margin:0';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'exp-name';
+      nameEl.style.cssText = 'font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px';
+      nameEl.textContent = name;
+
+      const meta = document.createElement('span');
+      meta.className = 'exp-meta hint';
+      meta.style.cssText = 'font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:auto';
+      meta.textContent = short + cred;
+
+      const tagEl = document.createElement('span');
+      tagEl.style.cssText = 'flex-shrink:0';
+      tagEl.innerHTML = tag;
+
+      row.appendChild(cb);
+      row.appendChild(nameEl);
+      row.appendChild(meta);
+      row.appendChild(tagEl);
+      frag.appendChild(row);
+    });
+    listEl.innerHTML = '';
+    listEl.appendChild(frag);
   } catch (e) {
     listEl.innerHTML = '<div class="exp-loading">账号列表渲染失败：' + esc(String(e.message || e)) + '</div>';
     return;
