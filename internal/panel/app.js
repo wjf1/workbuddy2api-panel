@@ -1131,6 +1131,32 @@ $('importFile').onchange = async () => {
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
 $('btnAdd').onclick = openAdd;
+$('btnExport').onclick = async () => {
+  const b = $('btnExport');
+  b.disabled = true; b.textContent = '导出中…';
+  try {
+    const h = {};
+    const k = localStorage.getItem(LS_KEY);
+    if (k) h['Authorization'] = 'Bearer ' + k;
+    const r = await fetch('/panel/api/export/cockpit', { headers: h });
+    if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    if (!Array.isArray(data)) throw new Error('响应不是账号数组');
+    if (!data.length) { toast('没有可导出的账号（池为空或 uids 未命中）', 'err'); return; }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'workbuddy_accounts_' + new Date().toISOString().slice(0, 10).replaceAll('-', '') + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast('已导出 ' + data.length + ' 个账号（cockpit tools 兼容格式）', 'ok');
+  } catch (e) { toast('导出失败：' + e.message, 'err'); }
+  finally { b.disabled = false; b.textContent = '导出'; }
+};
 $('btnRefresh').onclick = async () => {
   const b = $('btnRefresh');
   b.disabled = true; b.textContent = '刷新中…';
