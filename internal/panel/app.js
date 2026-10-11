@@ -1138,32 +1138,38 @@ async function openExport() {
   $('exportVeil').classList.add('on');
   $('expErr').hidden = true;
   const listEl = $('expList');
-  listEl.innerHTML = '<div class="state" style="padding:14px"><span class="dots">正在获取账号列表</span></div>';
+  listEl.innerHTML = '<div class="exp-loading">正在获取账号列表…</div>';
   $('btnDoExport').disabled = true;
   let list;
   try {
     list = (await api('overview')).accounts || [];
   } catch (e) {
-    listEl.innerHTML = '';
-    $('expErr').hidden = false; $('expErr').textContent = '获取账号列表失败：' + e.message;
+    listEl.innerHTML = '<div class="exp-loading">获取账号列表失败：' + esc(String(e.message || e)) + '（可关闭后重试）</div>';
     return;
   }
   if (!list.length) {
-    listEl.innerHTML = '<div class="empty"><div class="big">账号池是空的</div>没有可导出的账号</div>';
+    listEl.innerHTML = '<div class="exp-loading">账号池是空的，没有可导出的账号</div>';
     expSync();
     return;
   }
-  listEl.innerHTML = list.map(s => {
-    const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
-    const tag = s.disabled ? '<span class="tag bad">已禁用</span>'
-      : s.paused ? '<span class="tag warn">已暂停</span>'
-      : (s.cool_remaining_sec || 0) > 0 ? '<span class="tag warn">冷却中</span>'
-      : '<span class="tag ok">可用</span>';
-    const cred = s.credits == null ? '' : ' · 积分 ' + s.credits + (s.credits_total > 0 ? '/' + s.credits_total : '');
-    return '<label class="exp-row"><input type="checkbox" value="' + esc(s.uid) + '">'
-      + '<span class="exp-name">' + esc(s.nickname || short) + '</span>'
-      + '<span class="exp-meta hint">' + esc(short + cred) + '</span>' + tag + '</label>';
-  }).join('');
+  try {
+    listEl.innerHTML = list.map(s => {
+      const uid = String(s.uid || '');
+      const short = uid.length > 16 ? uid.slice(0, 16) + '…' : uid;
+      const name = String(s.nickname || '') || short || '（无昵称）';
+      const tag = s.disabled ? '<span class="tag bad">已禁用</span>'
+        : s.paused ? '<span class="tag warn">已暂停</span>'
+        : (s.cool_remaining_sec || 0) > 0 ? '<span class="tag warn">冷却中</span>'
+        : '<span class="tag ok">可用</span>';
+      const cred = s.credits == null ? '' : ' · 积分 ' + s.credits + (s.credits_total > 0 ? '/' + s.credits_total : '');
+      return '<label class="exp-row"><input type="checkbox" class="exp-check" value="' + esc(uid) + '">'
+        + '<span class="exp-name">' + esc(name) + '</span>'
+        + '<span class="exp-meta hint">' + esc(short + cred) + '</span>' + tag + '</label>';
+    }).join('');
+  } catch (e) {
+    listEl.innerHTML = '<div class="exp-loading">账号列表渲染失败：' + esc(String(e.message || e)) + '</div>';
+    return;
+  }
   listEl.querySelectorAll('input[type=checkbox]').forEach(b => b.onchange = expSync);
   expSetAll(true);
   expSync();

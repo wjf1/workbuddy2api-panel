@@ -5,7 +5,7 @@
 ## 1. 项目概况与当前状态
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
-- **当前版本**：`1.13.1-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
+- **当前版本**：`1.13.2-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
 - **仓库**：`https://github.com/linguo2625469/workbuddy2api-panel`，本地工作区 `F:\AI\Qdor\review\workbuddy2api-panel`，分支 `main`。
 - **最近提交 / tag**：`9478287 chore: 版本号 1.12.0-panel`；历史 tag 到 `v1.9.2`（tag 命名与 `appVersion` 演进不同步，以 `appVersion` 为准）。
 - **本工作区未推送**：`1.13.0-panel` 的导出功能为本地变更，尚未 commit / push（见第 4、5 节）。
@@ -42,15 +42,14 @@ config.json            运行配置（listen / api_key / panel …），面板�
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化。
 
-## 4. 最近一轮变更与交付成果（1.13.1-panel）
+## 4. 最近一轮变更与交付成果（1.13.2-panel）
 
-- **导出弹窗：账号勾选（单选 / 多选 / 全选）**：
-  - `index.html` 新增 `exportVeil` 弹窗（`.exp-*` 样式：头部全选开关 + 勾选列表 + 计数）与 `app.js` 的 `openExport` / `expSync` / `expSetAll` / `fetchExportJson` / `downloadAccounts`；`btnExport` 由"直接全量导出"改为打开弹窗。
-  - 默认全选；行勾选与头部开关双向联动；全选导出不带 `uids`，部分选中按 uid 拼接 `?uids=`；成功后关弹窗 + toast。
-  - 后端零改动（复用 1.13.0 的 `uids` 过滤语义）。
-  - 验证：`go test ./internal/panel/` 全绿；独立测试实例（临时端口 + camelCase 假 auth 文件 + 双假账号）浏览器实测联动与两种导出请求（`?uids=test-uid-2 → 200`、全量不带参数 → 200）。
-- **上一轮（1.13.0-panel）**：账号池导出能力与测试，详见 `CHANGELOG.md`。
-- **测试验证数据**：panel 包测试通过（app.js 语法校验 / CSP 断言 / 鉴权 / 字段契约 / 回环）；浏览器实测见上。
+- **面板静态资源 `Cache-Control: no-cache`**（`index.go`）：index.html / app.js 响应加 no-cache 协商校验。根因背景：两份文件同版本强耦合但 URL 不带版本号，无缓存头时浏览器启发式强缓存旧 app.js，网关升级后出现"半新半旧"错乱界面（用户实测：导出弹窗列表空白但计数显示 0/4）。
+- **导出弹窗健壮性加固**（`app.js`）：渲染全路径 try/catch、异常显示明确文案、字段防空、失败禁用按钮；CSS 兜底（`.exp-loading` 固定加载态、`.exp-check` 显式复选框尺寸、`.exp-list` min-height）。
+- **上一轮（1.13.1-panel）**：导出弹窗账号勾选（单选/多选/全选）。
+- **验证**：panel 包测试全绿；4 账号实例浏览器实测——列表渲染 computed style 断言（行 flex/36px、checkbox 13x14）、单选导出 3 个 uid `?uids=…→200`、console 无 JS 错误、`Cache-Control: no-cache` 头生效。
+- **测试环境注意**：TaskStop 停后台 bash 包装不会杀掉它启动的 exe 子进程，重启用同端口会 `bind: Only one usage...`——先 `taskkill /F /IM wb2api*.exe` 再起。
+- **上一轮交付**（1.13.0-panel）：账号池导出能力与测试，详见 `CHANGELOG.md`。
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 

@@ -349,11 +349,13 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 @keyframes blink { 0% { opacity: 1; } 50% { opacity: .3; } 100% { opacity: 1; } }
 /* 导出弹窗：账号勾选列表 */
 .exp-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; cursor: pointer; }
-.exp-list { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.exp-list { min-height: 46px; max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.exp-loading { display: flex; align-items: center; justify-content: center; min-height: 38px; font-size: 13px; color: var(--ink-3); padding: 8px 10px; }
+.exp-check { width: 14px; height: 14px; accent-color: #3b66f5; flex-shrink: 0; cursor: pointer; }
 .exp-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
-.exp-row:hover { background: var(--hover, rgba(127,127,127,.12)); }
+.exp-row:hover { background: rgba(127,127,127,.12); }
 .exp-name { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
-.exp-meta { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exp-meta { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; }
 .exp-row .tag { flex-shrink: 0; }
 
 /* ── 券码弹窗（票券式卡片，类名全部 vc- 前缀防越界）────────────────── */

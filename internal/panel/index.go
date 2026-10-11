@@ -44,9 +44,18 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 }
 
+// noCache 单文件嵌入资源（index.html / app.js）的缓存策略：禁止启发式强缓存，
+// 每次 no-cache 协商校验。html 与 js 是【同版本强耦合】的两份独立文件（弹窗 DOM
+// 与其交互逻辑分属两处），URL 不带版本号，一旦浏览器用旧缓存拼新页面就会出现
+// 半新半旧的错乱界面——宁多一次 304 往返，也不容忍版本错配。
+func noCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-cache")
+}
+
 // index 输出面板页面（静态无秘密；数据接口 /panel/api/* 才走鉴权）。
 func (p *Panel) index(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
+	noCache(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(indexHTML)
@@ -55,6 +64,7 @@ func (p *Panel) index(w http.ResponseWriter, r *http.Request) {
 // appScript 输出前端逻辑（同源脚本，供 CSP script-src 'self' 加载）。
 func (p *Panel) appScript(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
+	noCache(w)
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(appJS)
