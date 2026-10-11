@@ -1131,31 +1131,99 @@ $('importFile').onchange = async () => {
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
 $('btnAdd').onclick = openAdd;
-$('btnExport').onclick = async () => {
-  const b = $('btnExport');
+$('btnExport').onclick = openExport;
+
+/* ── 导出账号（弹窗：单选 / 多选 / 全选）──────────────────────────── */
+async function openExport() {
+  $('exportVeil').classList.add('on');
+  $('expErr').hidden = true;
+  const listEl = $('expList');
+  listEl.innerHTML = '<div class="state" style="padding:14px"><span class="dots">正在获取账号列表</span></div>';
+  $('btnDoExport').disabled = true;
+  let list;
+  try {
+    list = (await api('overview')).accounts || [];
+  } catch (e) {
+    listEl.innerHTML = '';
+    $('expErr').hidden = false; $('expErr').textContent = '获取账号列表失败：' + e.message;
+    return;
+  }
+  if (!list.length) {
+    listEl.innerHTML = '<div class="empty"><div class="big">账号池是空的</div>没有可导出的账号</div>';
+    expSync();
+    return;
+  }
+  listEl.innerHTML = list.map(s => {
+    const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
+    const tag = s.disabled ? '<span class="tag bad">已禁用</span>'
+      : s.paused ? '<span class="tag warn">已暂停</span>'
+      : (s.cool_remaining_sec || 0) > 0 ? '<span class="tag warn">冷却中</span>'
+      : '<span class="tag ok">可用</span>';
+    const cred = s.credits == null ? '' : ' · 积分 ' + s.credits + (s.credits_total > 0 ? '/' + s.credits_total : '');
+    return '<label class="exp-row"><input type="checkbox" value="' + esc(s.uid) + '">'
+      + '<span class="exp-name">' + esc(s.nickname || short) + '</span>'
+      + '<span class="exp-meta hint">' + esc(short + cred) + '</span>' + tag + '</label>';
+  }).join('');
+  listEl.querySelectorAll('input[type=checkbox]').forEach(b => b.onchange = expSync);
+  expSetAll(true);
+  expSync();
+  $('btnDoExport').disabled = false;
+}
+
+/* 行勾选状态 → 头部全选框 / 计数 / 标签 的联动 */
+function expSync() {
+  const boxes = [...$('expList').querySelectorAll('input[type=checkbox]')];
+  const sel = boxes.filter(b => b.checked).length;
+  $('expCount').textContent = '已选 ' + sel + ' / ' + boxes.length;
+  const all = boxes.length > 0 && sel === boxes.length;
+  $('expAll').checked = all;
+  $('expAllLabel').textContent = all ? '全不选' : '全选';
+}
+function expSetAll(on) {
+  $('expList').querySelectorAll('input[type=checkbox]').forEach(b => b.checked = on);
+}
+$('expAll').onchange = () => { expSetAll($('expAll').checked); expSync(); };
+$('btnCloseExport').onclick = () => { $('exportVeil').classList.remove('on'); };
+$('btnDoExport').onclick = async () => {
+  const boxes = [...$('expList').querySelectorAll('input[type=checkbox]')];
+  const sel = boxes.filter(b => b.checked).map(b => b.value);
+  if (!sel.length) {
+    $('expErr').hidden = false; $('expErr').textContent = '请至少勾选一个账号';
+    return;
+  }
+  $('expErr').hidden = true;
+  const b = $('btnDoExport');
   b.disabled = true; b.textContent = '导出中…';
   try {
-    const h = {};
-    const k = localStorage.getItem(LS_KEY);
-    if (k) h['Authorization'] = 'Bearer ' + k;
-    const r = await fetch('/panel/api/export/cockpit', { headers: h });
-    if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const data = await r.json();
-    if (!Array.isArray(data)) throw new Error('响应不是账号数组');
-    if (!data.length) { toast('没有可导出的账号（池为空或 uids 未命中）', 'err'); return; }
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'workbuddy_accounts_' + new Date().toISOString().slice(0, 10).replaceAll('-', '') + '.json';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    // 全选 = 不带 uids 全量导出；部分选中 = 按 uid 过滤（后端对未命中 uid 返回空数组）
+    const qs = sel.length === boxes.length ? '' : '?uids=' + encodeURIComponent(sel.join(','));
+    const data = await fetchExportJson(qs);
+    downloadAccounts(data);
+    $('exportVeil').classList.remove('on');
     toast('已导出 ' + data.length + ' 个账号（cockpit tools 兼容格式）', 'ok');
-  } catch (e) { toast('导出失败：' + e.message, 'err'); }
-  finally { b.disabled = false; b.textContent = '导出'; }
+  } catch (e) {
+    $('expErr').hidden = false; $('expErr').textContent = '导出失败：' + e.message;
+  } finally { b.disabled = false; b.textContent = '导出选中'; }
+};
+async function fetchExportJson(qs) {
+  const h = {};
+  const k = localStorage.getItem(LS_KEY);
+  if (k) h['Authorization'] = 'Bearer ' + k;
+  const r = await fetch('/panel/api/export/cockpit' + qs, { headers: h });
+  if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const d = await r.json();
+  if (!Array.isArray(d)) throw new Error('响应不是账号数组');
+  return d;
+}
+function downloadAccounts(data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'workbuddy_accounts_' + new Date().toISOString().slice(0, 10).replaceAll('-', '') + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
 };
 $('btnRefresh').onclick = async () => {
   const b = $('btnRefresh');

@@ -347,6 +347,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 .state.ok { color: var(--ok); } .state.err { color: var(--bad); }
 .dots::after { content: "…"; animation: blink 1.2s steps(4) infinite; }
 @keyframes blink { 0% { opacity: 1; } 50% { opacity: .3; } 100% { opacity: 1; } }
+/* 导出弹窗：账号勾选列表 */
+.exp-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; cursor: pointer; }
+.exp-list { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.exp-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.exp-row:hover { background: var(--hover, rgba(127,127,127,.12)); }
+.exp-name { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+.exp-meta { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exp-row .tag { flex-shrink: 0; }
 
 /* ── 券码弹窗（票券式卡片，类名全部 vc- 前缀防越界）────────────────── */
 .vc-acct { display: flex; align-items: baseline; gap: 7px; margin: 18px 2px 8px;
@@ -1214,6 +1222,31 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <button id="btnCopyUrl" hidden>复制链接</button>
       <button id="btnOpenUrl" class="primary" hidden>在浏览器打开</button>
       <button id="btnCloseAdd">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 导出账号（cockpit tools 兼容，支持单选 / 全选） -->
+<div class="veil" id="exportVeil">
+  <div class="dlg" style="width:480px">
+    <header>
+      <h3>导出账号</h3>
+      <div class="hint">勾选要导出的账号，导出为 cockpit tools 兼容 JSON。文件含完整凭据，请妥善保管。</div>
+    </header>
+    <div class="body">
+      <label class="exp-head">
+        <input type="checkbox" id="expAll">
+        <b id="expAllLabel">全选</b>
+        <span class="grow"></span>
+        <span class="hint" id="expCount">已选 0 / 0</span>
+      </label>
+      <div id="expList" class="exp-list"></div>
+      <div class="state err" id="expErr" hidden style="margin-top:8px"></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button id="btnDoExport" class="primary">导出选中</button>
+      <button id="btnCloseExport">关闭</button>
     </footer>
   </div>
 </div>

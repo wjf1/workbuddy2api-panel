@@ -5,7 +5,7 @@
 ## 1. 项目概况与当前状态
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
-- **当前版本**：`1.13.0-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
+- **当前版本**：`1.13.1-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
 - **仓库**：`https://github.com/linguo2625469/workbuddy2api-panel`，本地工作区 `F:\AI\Qdor\review\workbuddy2api-panel`，分支 `main`。
 - **最近提交 / tag**：`9478287 chore: 版本号 1.12.0-panel`；历史 tag 到 `v1.9.2`（tag 命名与 `appVersion` 演进不同步，以 `appVersion` 为准）。
 - **本工作区未推送**：`1.13.0-panel` 的导出功能为本地变更，尚未 commit / push（见第 4、5 节）。
@@ -42,15 +42,15 @@ config.json            运行配置（listen / api_key / panel …），面板�
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化。
 
-## 4. 最近一轮变更与交付成果（1.13.0-panel）
+## 4. 最近一轮变更与交付成果（1.13.1-panel）
 
-- **新增账号池导出能力（cockpit tools 兼容）**：
-  - 后端 `internal/panel/export.go`：`GET /panel/api/export/cockpit?uids=a,b`，字段契约见文件头注释；`uids` 未命中不回落全量；`Content-Disposition` 附件头；日志只记条数不落 token。
-  - 路由注册于 `panel.go` routes()（紧邻 `import/cockpit`，同挂 `withAuth`）。
-  - 前端 `index.html` 顶部「导出」按钮 + `app.js` 下载逻辑（Blob 下载 `workbuddy_accounts_<日期>.json`，401 时弹密钥框）。
-  - 版本号 bump 至 `1.13.0-panel`；README 三处、CHANGELOG 新建。
-- **测试验证数据**：`go build ./...` 通过、`go vet` 通过、新增 5 组导出测试全过（鉴权 401/200、空池数组、字段契约含毫秒转换、uids 过滤、导出→`[]cockpitAccount` 回环）、`go test ./... -count=1` 全绿（panel 包 14.7s，含 app.js 语法校验）。
-- **外部兼容性依据**：cockpit-tools（jlcodes99/cockpit-tools，Rust/Tauri 开源）`crates/cockpit-core/src/modules/workbuddy_account.rs` 的 `export_accounts`（导出即 `Vec<WorkbuddyAccount>` 纯数组）与 `import_from_json`（第 2 分支直接吃账号数组）——本实现的导出格式与两者双向兼容。
+- **导出弹窗：账号勾选（单选 / 多选 / 全选）**：
+  - `index.html` 新增 `exportVeil` 弹窗（`.exp-*` 样式：头部全选开关 + 勾选列表 + 计数）与 `app.js` 的 `openExport` / `expSync` / `expSetAll` / `fetchExportJson` / `downloadAccounts`；`btnExport` 由"直接全量导出"改为打开弹窗。
+  - 默认全选；行勾选与头部开关双向联动；全选导出不带 `uids`，部分选中按 uid 拼接 `?uids=`；成功后关弹窗 + toast。
+  - 后端零改动（复用 1.13.0 的 `uids` 过滤语义）。
+  - 验证：`go test ./internal/panel/` 全绿；独立测试实例（临时端口 + camelCase 假 auth 文件 + 双假账号）浏览器实测联动与两种导出请求（`?uids=test-uid-2 → 200`、全量不带参数 → 200）。
+- **上一轮（1.13.0-panel）**：账号池导出能力与测试，详见 `CHANGELOG.md`。
+- **测试验证数据**：panel 包测试通过（app.js 语法校验 / CSP 断言 / 鉴权 / 字段契约 / 回环）；浏览器实测见上。
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 
@@ -67,6 +67,7 @@ config.json            运行配置（listen / api_key / panel …），面板�
 - **auth.Auth 并发读**：token / domain / expires 等字段会被刷新线程写回，**必须**走带锁访问器（`AccessTokenValue` / `RefreshTokenValue` / `DomainValue`）或 `Lock()/Unlock()` 成组读；直读字段是数据竞争（`auth.go` 头注释有 `-race` 实证说明）。`export.go` 的 `cockpitAccountFromAuth` 是标准示例。
 - **毫秒 vs 秒**：cockpit tools 口径 `expires_at` 为**毫秒**；本面板落盘为 **Unix 秒**。导入（`import.go:94`）÷1000，导出（`export.go`）×1000，改任何一侧都要同步。
 - **uids 过滤语义**：`export/cockpit` 的 `uids` 全部未命中返回**空数组**（非 4xx、非回落全量），前端据此 toast 提示；改动该语义需同步 `export_test.go`。
+- **auth 文件扁平形字段是 camelCase**：手写 / 造测试账号时写 `accessToken` / `refreshToken` / `expiresAt` / `uid` / `nickname`（见 `auth.go` Parse）；写成 snake_case 会静默解析失败（启动日志 `loaded 0 account(s)`），排查先看这行。
 - **app.js 是嵌入资源**：Go 编译器不检查其语法，`frontend_test.go` 用 `node --check` 兜底（无 node 时 skip）——改完前端务必让该测试跑一次（本机已装 node）。
 - **CSP 严格策略**：面板禁止内联 `<script>` 与内联事件；新交互逻辑一律写进 `app.js`，按钮用 `id` + `addEventListener`（或 `.onclick`）绑定。
 - **测试环境**：本机（Windows）无 gcc → `-race` 不可用；`panel.New(Config{...})` 起面板测试无需网络，`Upstream` 为 nil 时**不可**调用会触达上游的 handler（如 `importCockpit` 的签到/激活分支），否则 nil panic——导出 handler 无上游依赖，可直接测。

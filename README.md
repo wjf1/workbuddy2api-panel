@@ -312,7 +312,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit ./cmd/credit
 
 打开 `http://127.0.0.1:7863/panel/`，点右上角「**添加账号**」：面板展示授权链接 → 浏览器完成登录 → 自动检测并落盘凭证 → **热加载进池（无需重启）**，顺带完成首次签到。
 
-「添加账号」弹窗的「**导入 JSON**」页签还支持批量导入 **cockpit tools 导出的账号 JSON**（账号数组格式，`uid` / `access_token` / `refresh_token` 必填），导入后自动入池、签到 / 激活。反向操作：点顶部「**导出**」按钮，可把账号池导出为同格式 JSON（`GET /panel/api/export/cockpit`，支持 `?uids=a,b` 选择性导出），既能回灌 cockpit tools 的 WorkBuddy 账号库，也可再导入本面板做迁移 / 备份。
+「添加账号」弹窗的「**导入 JSON**」页签还支持批量导入 **cockpit tools 导出的账号 JSON**（账号数组格式，`uid` / `access_token` / `refresh_token` 必填），导入后自动入池、签到 / 激活。反向操作：点顶部「**导出**」按钮打开导出弹窗，**勾选要导出的账号（单选 / 多选 / 全选）** 后导出为同格式 JSON（`GET /panel/api/export/cockpit`，后端亦支持 `?uids=a,b` 直接过滤），既能回灌 cockpit tools 的 WorkBuddy 账号库，也可再导入本面板做迁移 / 备份。
 
 **方式 B：命令行脚本（仅 Linux / macOS，依赖 bash + python3）**
 
