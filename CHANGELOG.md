@@ -4,6 +4,23 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.14.1-panel] - 2026-10-11
+
+### 修复
+
+- **导出 → 导入往返不完整（真实服务端到端实测发现）**：用边界账号（带 device_token / 显式 realm 与 domain 推断不一致 / 零过期时间戳）实测「面板导出 → 面板导入」全字段对比，发现三处缺口并修复两处：
+  - **device_token 丢失**：导出/导入格式均无 `device_token` 键，带设备风控 Token（X-Device-Token 头来源）的账号往返后该头静默消失。修复：`cockpitExportAccount` / `cockpitAccount` 补 `device_token`（omitempty / 空不落盘），导入写回 auth 文件。新增 `auth.DeviceTokenValue()` 带锁访问器（出站取值点 `upstream/client.go` 既有直读保持不变——该字段落盘后静态）。
+  - **显式 realm 被搬家**：导出格式无 `realm` 键，导入按 domain 推断——显式 `realm=global` 但 domain 为空/CN 域的账号（手工标注场景）往返后变成 cn，路由被切到错误域。修复：导出补 `realm`（`RealmStored()`，omitempty）；导入**显式标识优先**（`ResolveRealm(acc.Realm, acc.Domain)`），无显式标识时回落 domain 推断（cockpit-tools 导出等旧格式行为不变，测试锁定）。
+  - **零过期时间戳回落 +365d**（未改，既有兜底设计）：`expires_at=0` 的账号导出时 omitempty 省略、导入回落 +365 天——正常账号均有过期时间（keepalive 持续续期），影响面为零，测试锁定该语义防漂移。
+  - 导入的上游副作用（注册激活 / trial / 签到 / 余额刷新）增加 `Upstream == nil` 守卫：裸装配（测试面板）导入不再 panic，导入核心语义（凭据落盘 + 入池）不依赖上游。
+- 兼容性：导出 JSON 新增 `realm` / `device_token` 键对 cockpit-tools 无影响（serde 默认忽略未知字段，已核对其 `WorkbuddyAccount` 无 `deny_unknown_fields`）；旧格式（无这两个键）导入行为不变。
+
+### 验证
+
+- 新增 `roundtrip_test.go`：导出 → 导入全字段往返（token/昵称/过期秒↔毫秒/domain/tags/realm/device_token）、旧格式回落推断、零过期兜底三个用例。
+- 真实服务端到端复测（修复版）：4 个边界账号导出 → 导入全字段对比 **全部完美往返**（含 device_token 保留、显式 realm 保留）。
+- `go vet` 干净；`go test ./... -count=1` 全绿（15 包）。
+
 ## [1.14.0-panel] - 2026-10-11
 
 ### 新增

@@ -5,10 +5,10 @@
 ## 1. 项目概况与当前状态
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
-- **当前版本**：`1.14.0-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
+- **当前版本**：`1.14.1-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
 - **仓库**：`https://github.com/wjf1/workbuddy2api-panel`，本地工作区 `F:\AI\workbuddy2api-panel`（2026-10-11 新克隆），分支 `main`。历史工作区 `F:\AI\Qdor\review\workbuddy2api-panel` 已废弃。
-- **最近 tag**：`v1.14.0`（`v1.14.0: 账号回收站、标签管理、余额预警与定时备份`），历史 tag 到 `v1.13.4`。
-- **1.14.0 状态**：代码、测试、真实点击走查、四文档均已完成并推送 GitHub，Release 已发布。
+- **最近 tag**：`v1.14.1`（`v1.14.1: 导出导入往返完整性修复`）；历史 `v1.14.0`（账号回收站、标签管理、余额预警与定时备份）。
+- **本地生产网关**：`F:\AI\wb2api-panel-v1.13.0-windows-amd64\`（目录名是历史遗留，实际内容随更新推进），Windows 计划任务 `WorkBuddy2API`（SYSTEM、开机自启、失败重启）跑 `start-gateway.cmd`；更新惯例 = 停任务 → `wb2api.exe.pre-<新版本>.bak` 备份 → 替换官方 Release exe → 起任务（停/启需管理员，走 PowerShell `-Verb RunAs` + UAC，`schtasks /End|/Run` 在 Git Bash 需 `MSYS_NO_PATHCONV=1`）。
 
 ## 2. 技术栈与运行基线
 
@@ -47,14 +47,20 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（1.14.0-panel）
+## 4. 最近一轮变更与交付成果（1.14.1-panel）
+
+- **导出 → 导入往返完整性修复**：边界账号端到端实测发现三缺口——device_token 往返丢失（导出/导入格式补 `device_token` 键 + `auth.DeviceTokenValue()` 访问器）、显式 realm 被 domain 推断搬家（导出补 `realm`，导入显式优先、空回落推断）、零过期回落 +365d（既有兜底设计，测试锁定）。导入的上游副作用加 `Upstream == nil` 守卫（裸装配不 panic）。
+- **导出/导入字段契约（1.14.1 起完整清单）**：`id / uid / nickname / access_token / refresh_token / token_type / expires_at(毫秒) / domain / tags / realm(显式) / device_token`——往返全字段无损（正常账号）；新增 `roundtrip_test.go` 三个用例锁定。
+- **验证**：`go vet` 干净；`go test ./... -count=1` 全绿（15 包）；真实服务端到端复测 4 个边界账号全字段对比全部完美往返。
+
+## 4.1 上一轮（1.14.0-panel）
 
 - **账号回收站（软删除）**：`accountRemove` 改为凭证移入 `data/trash/`（mtime=删除时刻），回收站弹窗恢复（规范名移回 auths/ + `Pool.Add`+`Revive`）/ 彻底删除 / 清空；`StartTrashLoop` 每小时按 `trash.retention_days`（默认 30，0=永久）清过期。同 uid 重复删除加时间戳共存；`moveFile` rename 跨盘失败回退 copy+delete；未注入 TrashDir 的装配回退硬删（测试覆盖）。
 - **账号标签（tags）**：`auth.Auth` 加锁保护 `tags` 字段（`TagsValue/SetTags/NormalizeTags`，归一化 16×32 上限），落盘嵌套形 `account.tags`（空不写键，旧文件兼容；扁平形顶层 tags 也可读）；`POST /panel/api/accounts/{uid}/tags` 全量覆盖；overview 透出 `tags` 映射；导出/导入对齐 cockpit `tags` 字段；前端徽章 + 标签/关键字双维筛选（`accFilter`，仿 `mdFilter` 模式）。
 - **余额预警**：overview 现算 `low_credit`（`credits < pool.credit_floor`，0/0 未查询账号跳过），前端 `#alertBox` 横幅（仿 `#expBox`），与选号保底共用阈值、零上游请求、零新增配置。
-- **定时备份**：`RunBackupNow` 打包 `auths/*.json` + `state.json`（打包前 `Pool.Flush()`；**不含 config.json**）为毫秒文件名 zip；`StartBackupLoop` 10 分钟粒度检查「整点命中且当日未跑」；`SetBackupSettings` 热改（enabled/hour/keep）；`backup/list`、`backup/{name}/download`（Content-Disposition）；keep 轮转按文件名序删最旧。
+- **定时备份**：`RunBackupNow` 打包 `auths/*.json` + `state.json`（打包前 `Pool.Flush()`；**不含 config.json**）为毫秒文件名 zip；`StartBackupLoop` 10 分钟粒度检查「整点命中且当日未跑」；`SetBackupSettings` 热改（enabled/hour/keep）；`backup/list`、`backup/{name}/download`（Content-Disposition）；keep 轮转按文件名序删最旧。文件名冲突自动外推 +i 毫秒（同毫秒连点/CI 高速循环不撞名，字典序=时间序）。
 - **配置**：`trash.retention_days`、`backup.enabled/hour/keep` 四键（Default+normalize+面板表单+热应用，`saveConfig` 增加 `pn *panel.Panel` 参数）。
-- **验证**：`go test ./... -count=1` 全绿（新增 tags_test.go、trash_backup_test.go 共 10 个用例；TestIndexHTMLUniqueIDs / TestAppJSSyntax 通过）；chrome-devtools 真实点击走查全通过（预警横幅渲染与联动、标签编辑/徽章/筛选/往返、移除→恢复→彻底删除、手动备份→列表→下载、配置页四项保存持久化）。
+- **验证**：`go test ./... -count=1` 全绿（新增 tags_test.go、trash_backup_test.go）；chrome-devtools 真实点击走查全通过。
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 

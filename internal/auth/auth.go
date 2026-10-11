@@ -96,6 +96,17 @@ func (a *Auth) RefreshTokenValue() string {
 	return a.RefreshToken
 }
 
+// DeviceTokenValue 加锁读取 DeviceToken（出站 X-Device-Token 头取值点；与
+// AccessTokenValue 同口径——SaveAtomic/Parse 与面板导出均可能并发触碰）。
+func (a *Auth) DeviceTokenValue() string {
+	if a == nil {
+		return ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.DeviceToken
+}
+
 // globalEnabled 全局开关：global realm 是否路由（D5 双保险）。
 // 默认开启（与 config global.enabled 缺省 true 一致）：Realm() 正常按显式 realm/
 // domain 判定 global/cn。显式 SetGlobalEnabled(false)（config "enabled": false）关闭

@@ -24,6 +24,10 @@ type cockpitAccount struct {
 	TokenType     string `json:"token_type"`
 	ExpiresAt     int64  `json:"expires_at"`
 	Domain        string `json:"domain"`
+	// Realm 显式账号域（export.go 同口径；空 = 无显式标识，按 domain 回落推断）。
+	// DeviceToken 设备风控 Token（导出往返保留，缺省空 = 不注入该头）。
+	Realm         string   `json:"realm"`
+	DeviceToken   string   `json:"device_token"`
 	// Tags 标签（cockpit WorkbuddyAccount.tags 口径），导入后落盘 account.tags。
 	Tags          []string `json:"tags"`
 	DosageNotify  string   `json:"dosage_notify_code"`
@@ -89,8 +93,10 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 按 domain 推断 realm：workbuddy.ai 家族 → global，否则 cn。
-		realm := auth.ResolveRealm("", acc.Domain)
+		// realm：显式标识优先（export.go 同口径导出 RealmStored），空才按 domain
+		// 推断——显式与推断不一致的账号（如手工标 global 的 CN 域）往返不"搬家"。
+		explicitRealm := strings.TrimSpace(acc.Realm)
+		realm := auth.ResolveRealm(explicitRealm, acc.Domain)
 
 		// cockpit tools 的 expires_at 为毫秒时间戳，转为秒。
 		expiresAt := acc.ExpiresAt / 1000
@@ -110,12 +116,13 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 			Domain:       acc.Domain,
 			UID:          uid,
 			Nickname:     nickname,
+			DeviceToken:  strings.TrimSpace(acc.DeviceToken),
 			FilePath:     filepath.Join(p.cfg.AuthDir, fmt.Sprintf("workbuddy-%s.json", uid)),
 		}
 		a.SetTags(acc.Tags)
 
-		if realm == "global" {
-			if _, err := auth.BackfillRealmFor(a, "global"); err != nil {
+		if explicitRealm != "" {
+			if _, err := auth.BackfillRealmFor(a, realm); err != nil {
 				skipped++
 				errs = append(errs, fmt.Sprintf("uid=%s: set realm failed: %v", uid, err))
 				continue
@@ -133,25 +140,28 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		p.cfg.Pool.Add(a)
 		p.cfg.Pool.Revive(uid)
 
-		// 顺带签到/激活（幂等；失败仅记日志，不阻断导入）。
-		if realm == "global" {
-			if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
-				log.Printf("panel: import global 注册激活 uid=%s: %v", uid, err)
-			} else if activated {
-				log.Printf("panel: import global 注册激活 uid=%s 完成", uid)
+		// 顺带签到/激活（幂等；失败仅记日志，不阻断导入）。Upstream 为 nil 的裸
+		// 装配（测试面板）跳过副作用——导入的核心语义是凭据落盘 + 入池。
+		if p.cfg.Upstream != nil {
+			if realm == "global" {
+				if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
+					log.Printf("panel: import global 注册激活 uid=%s: %v", uid, err)
+				} else if activated {
+					log.Printf("panel: import global 注册激活 uid=%s 完成", uid)
+				}
+				if claimed, err := p.cfg.Upstream.ClaimTrial(a); err != nil {
+					log.Printf("panel: import global trial uid=%s: %v", uid, err)
+				} else if claimed {
+					log.Printf("panel: import global trial uid=%s 已领", uid)
+				}
+			} else {
+				if err := p.cfg.Upstream.DailyCheckin(a); err != nil {
+					log.Printf("panel: import checkin uid=%s: %v", uid, err)
+				}
 			}
-			if claimed, err := p.cfg.Upstream.ClaimTrial(a); err != nil {
-				log.Printf("panel: import global trial uid=%s: %v", uid, err)
-			} else if claimed {
-				log.Printf("panel: import global trial uid=%s 已领", uid)
+			if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
+				p.cfg.Pool.ReenableIfCredits(uid, rm, tt)
 			}
-		} else {
-			if err := p.cfg.Upstream.DailyCheckin(a); err != nil {
-				log.Printf("panel: import checkin uid=%s: %v", uid, err)
-			}
-		}
-		if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
-			p.cfg.Pool.ReenableIfCredits(uid, rm, tt)
 		}
 
 		imported++

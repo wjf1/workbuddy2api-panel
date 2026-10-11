@@ -36,6 +36,13 @@ type cockpitExportAccount struct {
 	// Tags 标签（cockpit WorkbuddyAccount.tags 为 Option<Vec<String>>，缺失即 None）。
 	// 本面板 account.tags 落盘口径的透出，双向往返不丢分组信息。
 	Tags []string `json:"tags,omitempty"`
+	// Realm 显式账号域标识（cn/global；空 = 落盘时未 backfill，导入侧按 domain 回落
+	// 推断）。不带它，显式 realm 与 domain 推断不一致的账号导出→导入会被"搬家"。
+	// 非 cockpit 字段：serde 默认忽略未知键，cockpit-tools 导入安全。
+	Realm string `json:"realm,omitempty"`
+	// DeviceToken 设备风控 Token（X-Device-Token 头来源）。不带它，带风控头的
+	// 账号导出→导入后该头静默消失。
+	DeviceToken string `json:"device_token,omitempty"`
 }
 
 // exportCockpit 把账号池导出为 cockpit tools 兼容 JSON（账号数组）。
@@ -94,6 +101,8 @@ func cockpitAccountFromAuth(a *auth.Auth) cockpitExportAccount {
 		TokenType:    "Bearer",
 		Domain:       a.DomainValue(),
 		Tags:         a.TagsValue(),
+		Realm:        a.RealmStored(),
+		DeviceToken:  a.DeviceTokenValue(),
 	}
 	if expires > 0 {
 		acc.ExpiresAt = expires * 1000
