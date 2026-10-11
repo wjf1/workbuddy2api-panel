@@ -24,14 +24,16 @@ type cockpitAccount struct {
 	TokenType     string `json:"token_type"`
 	ExpiresAt     int64  `json:"expires_at"`
 	Domain        string `json:"domain"`
-	DosageNotify  string `json:"dosage_notify_code"`
-	PaymentType   string `json:"payment_type"`
-	Status        string `json:"status"`
-	UsageUpdatedAt int64 `json:"usage_updated_at"`
-	LastCheckin   int64  `json:"last_checkin_time"`
-	CheckinStreak int    `json:"checkin_streak"`
-	CreatedAt     int64  `json:"created_at"`
-	LastUsed      int64  `json:"last_used"`
+	// Tags 标签（cockpit WorkbuddyAccount.tags 口径），导入后落盘 account.tags。
+	Tags          []string `json:"tags"`
+	DosageNotify  string   `json:"dosage_notify_code"`
+	PaymentType   string   `json:"payment_type"`
+	Status        string   `json:"status"`
+	UsageUpdatedAt int64   `json:"usage_updated_at"`
+	LastCheckin   int64    `json:"last_checkin_time"`
+	CheckinStreak int      `json:"checkin_streak"`
+	CreatedAt     int64    `json:"created_at"`
+	LastUsed      int64    `json:"last_used"`
 }
 
 // importCockpit 接收 cockpit tools 导出的 JSON 文件，批量导入账号到池中。
@@ -110,6 +112,7 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 			Nickname:     nickname,
 			FilePath:     filepath.Join(p.cfg.AuthDir, fmt.Sprintf("workbuddy-%s.json", uid)),
 		}
+		a.SetTags(acc.Tags)
 
 		if realm == "global" {
 			if _, err := auth.BackfillRealmFor(a, "global"); err != nil {

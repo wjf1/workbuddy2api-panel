@@ -644,6 +644,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <svg id="icoTheme" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/></svg>
       </button>
       <button id="btnRefresh">刷新</button>
+      <button id="btnTrash" title="已移除账号的凭证在回收站保留（默认 30 天），可恢复或彻底删除">回收站</button>
       <button id="btnExport" title="把账号池导出为 cockpit tools 兼容 JSON（可回灌 cockpit tools 或再导入本面板）">导出</button>
       <button class="primary" id="btnAdd">添加账号</button>
     </div>
@@ -669,10 +670,21 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="pad"><div id="expList"></div></div>
       </div>
 
+      <div class="box" id="alertBox" hidden>
+        <header>
+          <h3>余额预警<span class="hint">以下账号积分已低于「积分保底线」（pool.credit_floor），不再参与收费模型选号</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="alertNote"></span>
+        </header>
+        <div class="pad"><div id="alertList"></div></div>
+      </div>
+
       <div class="box">
         <header>
           <h3>账号池</h3>
           <span class="grow"></span>
+          <input id="accFilterQ" type="search" placeholder="筛选：昵称 / uid" style="width:150px;margin-right:6px" title="按昵称或 uid 过滤账号列表">
+          <select id="accFilterTag" style="margin-right:6px" title="按标签过滤账号列表"><option value="">全部标签</option></select>
           <span class="note" id="accNote"></span>
           <button class="xs" id="btnCheckinAll">全部签到</button>
           <button class="xs" id="btnTravelAll">旅行巡检</button>
@@ -960,6 +972,29 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
 
         <div class="box">
+          <header><h3>回收站与备份</h3></header>
+          <div class="pad">
+            <div class="grid2">
+              <label class="fld"><span class="lb">回收站保留天数</span>
+                <input name="trash_retention_days" type="number" min="0" placeholder="30">
+                <span class="hint">移除账号的凭证在 data/trash/ 保留天数；0 = 永久保留（仅手动清空）</span></label>
+              <label class="fld"><span class="lb">备份触发整点（0-23）</span>
+                <input name="backup_hour" type="number" min="0" max="23" placeholder="3">
+                <span class="hint">每日该点自动备份 auths/ + state 到 data/backups/（不含 config.json）</span></label>
+            </div>
+            <div class="grid2">
+              <div class="switch"><span class="lb">每日定时备份</span>
+                <input type="checkbox" name="backup_enabled"></div>
+              <label class="fld"><span class="lb">备份保留份数</span>
+                <input name="backup_keep" type="number" min="0" placeholder="7">
+                <span class="hint">超出删最旧；0 = 不轮转。备份可在「账号池 → 回收站」旁查看下载</span></label>
+            </div>
+            <div class="hr"></div>
+            <div class="hint">手动备份 / 下载 / 恢复：账号池页右上角「回收站」弹窗内提供备份列表与下载。</div>
+          </div>
+        </div>
+
+        <div class="box">
           <header><h3>账号池与流量治理</h3></header>
           <div class="pad">
             <div class="grid3">
@@ -1224,6 +1259,56 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <button id="btnCopyUrl" hidden>复制链接</button>
       <button id="btnOpenUrl" class="primary" hidden>在浏览器打开</button>
       <button id="btnCloseAdd">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 回收站（软删除的账号凭证：恢复 / 彻底删除 / 清空） -->
+<div class="veil" id="trashVeil">
+  <div class="dlg" style="width:560px">
+    <header>
+      <h3>回收站</h3>
+      <div class="hint">已移除账号的凭证文件在此保留（默认 30 天，配置页可改），过期自动清理。恢复会移回 auths/ 并热加载进账号池。</div>
+    </header>
+    <div class="body">
+      <div id="trashList" class="exp-list"></div>
+      <div class="state" id="trashEmpty" hidden>回收站是空的</div>
+      <div class="state err" id="trashErr" hidden style="margin-top:8px"></div>
+      <div class="hr"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <b style="font-size:13px">定时备份</b>
+        <span class="hint">每日自动备份 auths/ 与账号池状态（不含 config.json）</span>
+        <span class="grow"></span>
+        <button class="xs" id="btnBackupRun">立即备份</button>
+      </div>
+      <div id="backupList" class="exp-list" style="max-height:140px"></div>
+      <div class="state" id="backupEmpty" hidden>暂无备份</div>
+    </div>
+    <footer>
+      <button id="btnTrashPurgeAll" class="xs ghost danger" title="彻底删除回收站内全部凭证，不可恢复">清空回收站</button>
+      <span class="grow"></span>
+      <button id="btnCloseTrash">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 标签编辑（单账号，逗号分隔） -->
+<div class="veil" id="tagVeil">
+  <div class="dlg" style="width:420px">
+    <header>
+      <h3>编辑标签</h3>
+      <div class="hint" id="tagTarget"></div>
+    </header>
+    <div class="body">
+      <label class="fld"><span class="lb">标签（逗号分隔，最多 16 个）</span>
+        <input id="tagInput" placeholder="主力, 签到号" autocomplete="off"></label>
+      <div class="hint">标签随账号落盘，可按标签筛选账号列表；导出 cockpit JSON 时一并带上。</div>
+      <div class="state err" id="tagErr" hidden style="margin-top:8px"></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button id="btnTagSave" class="primary">保存</button>
+      <button id="btnCloseTag">关闭</button>
     </footer>
   </div>
 </div>

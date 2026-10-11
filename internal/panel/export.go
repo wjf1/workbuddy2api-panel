@@ -33,6 +33,9 @@ type cockpitExportAccount struct {
 	// 无效（≤0）省略，两侧导入各有兜底。
 	ExpiresAt int64  `json:"expires_at,omitempty"`
 	Domain    string `json:"domain,omitempty"`
+	// Tags 标签（cockpit WorkbuddyAccount.tags 为 Option<Vec<String>>，缺失即 None）。
+	// 本面板 account.tags 落盘口径的透出，双向往返不丢分组信息。
+	Tags []string `json:"tags,omitempty"`
 }
 
 // exportCockpit 把账号池导出为 cockpit tools 兼容 JSON（账号数组）。
@@ -90,6 +93,7 @@ func cockpitAccountFromAuth(a *auth.Auth) cockpitExportAccount {
 		RefreshToken: a.RefreshTokenValue(),
 		TokenType:    "Bearer",
 		Domain:       a.DomainValue(),
+		Tags:         a.TagsValue(),
 	}
 	if expires > 0 {
 		acc.ExpiresAt = expires * 1000

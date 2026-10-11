@@ -108,6 +108,23 @@ type Config struct {
 		BalanceRefreshMinutes int  `json:"balance_refresh_minutes"` // 缺省 5；<=0 回落 5
 	} `json:"schedule"`
 
+	Trash struct {
+		// RetentionDays 回收站保留天数：面板「移除账号」的凭证文件在 data/trash/
+		// 保留多久，过期自动清理。缺省 30；<=0 = 永久保留（仅手动清空）。
+		RetentionDays int `json:"retention_days"`
+	} `json:"trash"`
+
+	Backup struct {
+		// Enabled 每日定时备份开关（缺省 true）：把 auths/*.json + state.json 打包为
+		// zip 落 data/backups/。刻意不含 config.json（内有 api_key 明文）。
+		Enabled bool `json:"enabled"`
+		// Hour 每日触发的本地整点（0-23），缺省 3（凌晨低峰）。非法值回落 3。
+		// 热生效（panel.SetBackupSettings）。
+		Hour int `json:"hour"`
+		// Keep 备份保留份数（超出删最旧），缺省 7；<=0 = 不轮转。热生效。
+		Keep int `json:"keep"`
+	} `json:"backup"`
+
 	Global struct {
 		// Enabled global realm 路由开关。缺省 true：Realm() 正常把 realm=global/
 		// domain=workbuddy.ai 的账号判为 global 并路由 global base/路径。
@@ -245,6 +262,11 @@ func Default() *Config {
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
+	// 回收站 / 定时备份缺省值（见字段注释）。
+	c.Trash.RetentionDays = 30
+	c.Backup.Enabled = true
+	c.Backup.Hour = 3
+	c.Backup.Keep = 7
 	// 缺省 true 靠显式赋值实现（同 Schedule 开关）：JSON 里键缺席时字段保留此值，
 	// 只有显式 false 才关闭来源记录。
 	c.Logging.RequestClientInfo = true
@@ -526,6 +548,17 @@ func (c *Config) normalize() error {
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {
 		c.Pool.CreditFloor = 0
+	}
+	// 回收站保留天数：负值钳 0（= 永久保留）；0 本身是合法取值（永久）。
+	if c.Trash.RetentionDays < 0 {
+		c.Trash.RetentionDays = 0
+	}
+	// 备份整点：非法（负数/超 23）回落默认 3 点；Keep 负值钳 0（= 不轮转）。
+	if c.Backup.Hour < 0 || c.Backup.Hour > 23 {
+		c.Backup.Hour = 3
+	}
+	if c.Backup.Keep < 0 {
+		c.Backup.Keep = 0
 	}
 	if c.Pool.BreakerThreshold <= 0 {
 		c.Pool.BreakerThreshold = 3

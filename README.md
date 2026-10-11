@@ -6,8 +6,10 @@
 
 <p align="center">
   <b>把腾讯 CodeBuddy 账号变成 OpenAI 兼容 API 的多账号网关 · 附 Web 管理面板</b><br>
-  Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（17/18）</b> · 流式 / 非流式
+  Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（17/18）</b> · 回收站 / 标签 / 余额预警 / 定时备份 · 流式 / 非流式
 </p>
+
+<p align="center"><b>English</b>: A multi-account gateway that turns Tencent CodeBuddy (WorkBuddy) accounts into an OpenAI-compatible API, with a built-in web panel — account pool rotation, OAuth login, scheduled check-in / keep-alive, one-click growth tasks, soft-delete recycle bin, account tags, balance alerts and daily backups. See <a href="#核心能力">核心能力</a> below (docs in Chinese).</p>
 
 <p align="center">
   <img alt="Go" src="https://img.shields.io/badge/Go-1.22.5-00ADD8?logo=go&logoColor=white&style=flat-square">
@@ -68,6 +70,8 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 🗑️ **指纹脱敏** | 出站请求体黑名单指纹字段清洗（可关闭），与提示词体系两层叠加 |
 | 📊 **可观测** | 每请求一行表格日志（TTFB / token 速率 / uid）；`/healthz` 带 `service` 身份标识可接负载均衡 / 宿主探活 |
 | 💾 **状态持久化** | 池状态本地原子落盘 + Upstash Redis 异步镜像（可选），重启择新恢复 |
+| ♻️ **回收站与定时备份** | 「移除账号」软删除进 `data/trash/`（默认保留 30 天，可恢复 / 彻底删除 / 过期自动清理）；每日整点自动备份 `auths/` + 池状态为 zip（保留 N 份轮转，**不含 config.json**），面板内可手动备份与下载 |
+| 🏷️ **账号标签与预警** | 账号多标签（落盘随导出/导入往返）+ 列表按标签 / 关键字筛选；积分低于「积分保底线」的账号自动进面板预警横幅（与选号保底共用阈值，零上游请求） |
 | 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题），账号运维 / cockpit 兼容账号导入导出 / 模型档位查询 / 在线改配置（热生效）/ 运行日志 / 积分任务，见 [Web 管理面板](#-web-管理面板) |
 
 ## 🎯 成长任务一键完成（17/18）
@@ -157,6 +161,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 能力 | 说明 |
 |---|---|
 | **Web 管理面板** | `internal/panel`，前端 go:embed 单文件进二进制，零外部依赖。账号池可视化（健康色条 / 积分量条 / 冷却倒计时）、积分到期分布、单号运维、批量任务、日志查看、明暗主题 |
+| **回收站 / 标签 / 预警 / 备份（1.14.0）** | 「移除账号」软删除进回收站（恢复 / 彻底删除 / 过期清理）；账号多标签落盘并随 cockpit 导出导入往返；低于积分保底线的账号进面板预警横幅；每日定时备份 auths + 池状态为 zip（可下载，不含 config.json） |
 | **请求指标与脱敏日志** | 面板展示完成成功率 / HTTP 成功率 / 平均耗时 / 最近请求，响应带 `X-Request-Id`；JSONL 只归档请求元数据，不写提示词、响应正文或凭证。请求记录表带**调用来源**（客户端 IP / User-Agent，按 `logging.request_client_info` 可关），支持按 IP / UA / 模型 / 账号 / 请求 ID 与结果筛选 |
 | **浏览器内 OAuth 添加账号** | 面板「添加账号」按钮完成设备授权 → 凭证落盘 → **热加载进池（免重启）**，替代命令行 `login.sh` 流程；同弹窗「导入 JSON」支持 cockpit tools 账号批量导入，顶部「导出」按钮反向导出 cockpit 兼容 JSON（`GET /panel/api/export/cockpit`） |
 | **在线配置编辑（热生效）** | 面板直接改 `config.json`：API 密钥 / `soft_rate` / 脱敏开关 / 池参数 / 任务排程**立即生效**；装配期字段（listen 等）保存后提示需重启。写入采用深合并 + 原子替换，保留未知键 |
@@ -402,6 +407,10 @@ curl -s http://localhost:7863/v1/chat/completions \
 | `session_sticky.enabled` | `true` | 会话粘性路由开关 |
 | `session_sticky.ttl` | `30m` | 会话绑定 TTL（滚动续期） |
 | `session_sticky.gc_interval` | `5m` | 过期绑定 GC 周期 |
+| `trash.retention_days` | `30` | 回收站保留天数：面板「移除账号」的凭证文件在 `data/trash/` 保留多久，过期自动清理；`0` = 永久保留（仅手动清空）。**热生效** |
+| `backup.enabled` | `true` | 每日定时备份开关：把 `auths/*.json` + `state.json` 打包为 zip 落 `data/backups/`（**刻意不含 config.json**，内有 api_key 明文） |
+| `backup.hour` | `3` | 每日触发备份的本地整点（0-23）；非法值回落 3。**热生效** |
+| `backup.keep` | `7` | 备份保留份数（超出删最旧）；`0` = 不轮转。**热生效** |
 
 ### 上游超时语义（三段各归其位）
 

@@ -36,6 +36,14 @@
     "balance_refresh_minutes": 5,
     "include_disabled_in_tasks": false
   },
+  "trash": {
+    "retention_days": 30
+  },
+  "backup": {
+    "enabled": true,
+    "hour": 3,
+    "keep": 7
+  },
   "global": {
     "enabled": true,
     "chat_base": "",

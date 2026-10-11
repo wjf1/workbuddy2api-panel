@@ -31,7 +31,7 @@ import (
 )
 
 // appVersion 网关版本（fork 版：面板 + 任务体系），透出到 /panel/api/overview。
-const appVersion = "1.13.4-panel"
+const appVersion = "1.14.0-panel"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
@@ -262,7 +262,10 @@ func main() {
 		log.Printf("[reqlog] 请求指标已启用；JSONL 归档已关闭")
 	}
 
-	pn := panel.New(panel.Config{
+	// pn 先声明再赋值：SaveConfig 闭包需引用 pn 本身（配置页热改备份/回收站设置），
+	// 闭包执行时 pn 已完成装配（首次保存必然发生在面板可用之后）。
+	var pn *panel.Panel
+	pn = panel.New(panel.Config{
 		Pool:        p,
 		Usage:       rec,
 		RequestLog:  requestLog,
@@ -274,6 +277,12 @@ func main() {
 		StickyCount: sessCount,
 		Version:     appVersion,
 		Live:        live,
+		// 回收站与备份目录：均落 state 文件同目录（data/，Docker 已挂载的持久化卷），
+		// 容器销毁不丢已删除凭证 / 备份。
+		TrashDir:           stateSibling(cfg.StateFile, "trash"),
+		TrashRetentionDays: cfg.Trash.RetentionDays,
+		BackupDir:          stateSibling(cfg.StateFile, "backups"),
+		StateFile:          cfg.StateFile,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
 		ProbeFile:  stateSibling(cfg.StateFile, "output_probes.json"),
@@ -282,9 +291,12 @@ func main() {
 			return Load(*cfgPath)
 		},
 		SaveConfig: func(raw []byte) ([]string, error) {
-			return saveConfig(raw, *cfgPath, live, p, up, sch)
+			return saveConfig(raw, *cfgPath, live, p, up, sch, pn)
 		},
 	})
+	// 备份设置注入 + 每日定时备份与回收站过期清理循环（随 ctx 取消退出）。
+	pn.SetBackupSettings(cfg.Backup.Enabled, cfg.Backup.Hour, cfg.Backup.Keep)
+	log.Printf("定时备份已启用：每日 %d 点 → %s（保留 %d 份）", cfg.Backup.Hour, stateSibling(cfg.StateFile, "backups"), cfg.Backup.Keep)
 	// 成长任务队列每日自动执行（与「执行全部待办」同管线）：Sequential 族零点解锁后
 	// 无需手动扫描；hook 返回即启动（异步执行），已在跑时内部跳过。
 	sch.SetGrowthHook(pn.RunGrowthQueueOnce)
@@ -316,6 +328,9 @@ func main() {
 	defer stop()
 	go sch.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
+	// 回收站过期清理（启动即清一次 + 每小时巡检）与每日定时备份循环。
+	go pn.StartTrashLoop(ctx)
+	go pn.StartBackupLoop(ctx)
 
 	// 启动即预热模型积分倍率表：倍率只在 FetchModels/FetchGlobalModelInfos 成功时
 	// 填充（两者均懒触发），重启后到首次 /v1/models 或面板模型页被访问之前，
@@ -412,6 +427,7 @@ func panelListenPath(listen string) string {
 //   - api_key / cooldown.soft_rate / features.sanitize_blacklist_fingerprints → livecfg 快照
 //   - pool.* → pool.SetBreaker/SetMaxInFlight/SetSoftRateMax/SetWeights/SetCostExploreInterval/SetPreferExpiring/SetCreditFloor
 //   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetExpiringSoonWindow
+//   - trash.retention_days / backup.* → panel.SetTrashRetention/SetBackupSettings
 //
 // 需重启（涉及监听地址、HTTP client 超时、auth_dir 等装配期依赖）：
 //   - listen / auth_dir / state_file / upstream.* / upstash.* / session_sticky.*（TTL 类）
@@ -419,7 +435,7 @@ func panelListenPath(listen string) string {
 // 落盘用"先写 tmp 再 rename"原子替换，且优先保留磁盘上的原始 JSON 结构（只改
 // 面板表单覆盖到的键），避免把用户手写的注释性字段/未知键洗掉——这里直接整体
 // 序列化校验后的配置，未知键在 json.Unmarshal 时已丢失，故先合并原始 map。
-func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up *upstream.Client, sch *scheduler.Scheduler) ([]string, error) {
+func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up *upstream.Client, sch *scheduler.Scheduler, pn *panel.Panel) ([]string, error) {
 	// 1) 解析原始 JSON 为 map（保留用户手写的未知键），再叠加面板提交的键。
 	oldRaw, err := os.ReadFile(path)
 	if err != nil {
@@ -505,6 +521,11 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		!newCfg.Schedule.GrowthEnabled)
 	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
+	// 回收站保留天数与备份设置热生效（panel 侧锁字段，下一次巡检/触发即用新值）。
+	if pn != nil {
+		pn.SetTrashRetention(newCfg.Trash.RetentionDays)
+		pn.SetBackupSettings(newCfg.Backup.Enabled, newCfg.Backup.Hour, newCfg.Backup.Keep)
+	}
 
 	return restartRequiredFields(newCfg), nil
 }

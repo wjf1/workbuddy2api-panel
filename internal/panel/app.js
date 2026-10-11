@@ -354,10 +354,24 @@ setTimeout(() => {
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
-function renderAccounts(list) {
+/* accFilter 账号列表筛选（仿 mdFilter 模式）：q 匹配昵称/uid 子串，tag 精确命中。 */
+const accFilter = { q: '', tag: '' };
+function accApply(list) {
+  const tagsMap = (overviewData && overviewData.tags) || {};
+  const q = accFilter.q.trim().toLowerCase();
+  return (list || []).filter(s => {
+    if (q && !(String(s.nickname || '').toLowerCase().includes(q) || String(s.uid || '').toLowerCase().includes(q))) return false;
+    if (accFilter.tag && !((tagsMap[s.uid] || []).includes(accFilter.tag))) return false;
+    return true;
+  });
+}
+function renderAccounts(list, filtered) {
   const tb = $('accBody');
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>';
+    const msg = filtered
+      ? '<div class="big">没有匹配筛选条件的账号</div>调整关键字或标签筛选，或点击右上角「添加账号」'
+      : '<div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号';
+    tb.innerHTML = '<tr><td colspan="9"><div class="empty">' + msg + '</div></td></tr>';
     return;
   }
   // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
@@ -376,6 +390,11 @@ function renderAccounts(list) {
       tag = '<span class="tag warn">' + kind + ' · ' + dur(cool) + '</span>';
     } else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
     const note = s.reason ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' + esc(s.reason) + '</div>' : '';
+    // 标签徽章（overview.tags 透出，落盘 account.tags；随导出/导入往返）。
+    const myTags = ((overviewData && overviewData.tags) || {})[s.uid] || [];
+    const tagBadges = myTags.length
+      ? '<div style="margin-top:3px">' + myTags.map(t => '<span class="tag" style="font-size:10.5px">' + esc(t) + '</span>').join(' ') + '</div>'
+      : '';
     const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now());
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
     const cred = s.credits == null ? '—' : (s.credits_total > 0 ? s.credits + '<span class="of">/' + s.credits_total + '</span>' : String(s.credits));
@@ -400,7 +419,7 @@ function renderAccounts(list) {
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + '</div><div class="id">' + esc(short) + '</div>' + tagBadges + '</td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -416,6 +435,7 @@ function renderAccounts(list) {
         '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>' +
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '">余额</button>' +
         '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' +
+        '<button class="xs ghost" data-a="tags" data-u="' + esc(s.uid) + '"' + (myTags.length ? ' title="' + esc(myTags.join(' / ')) + '"' : '') + '>标签</button>' +
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额">暂停选号</button>')) +
@@ -446,15 +466,60 @@ async function loadOverview(quiet) {
     $('accNote').textContent = d.in_flight_full ? d.in_flight_full + ' 个账号在途占满' : '';
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
-    renderAccounts(d.accounts || []);
+    refreshTagOptions(d);
+    renderAlertBox(d);
+    const raw = d.accounts || [];
+    const shown = accApply(raw);
+    renderAccounts(shown, shown.length !== raw.length);
   } catch (e) { if (!quiet) toast(e.message, 'err'); }
 }
+
+/* 标签筛选下拉选项：从 overview.tags 汇总去重（保序），保留当前选中项。 */
+function refreshTagOptions(d) {
+  const sel = $('accFilterTag');
+  const cur = accFilter.tag;
+  const tags = Object.values((d && d.tags) || {}).flat();
+  const uniq = [...new Set(tags)].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  sel.innerHTML = '<option value="">全部标签</option>' +
+    uniq.map(t => '<option value="' + esc(t) + '">' + esc(t) + '</option>').join('');
+  if (cur && uniq.includes(cur)) sel.value = cur;
+  else { sel.value = ''; accFilter.tag = ''; }
+}
+
+/* 余额预警横幅：overview 现算的 low_credit（credits 低于积分保底线）。 */
+function renderAlertBox(d) {
+  const box = $('alertBox');
+  const low = (d && d.low_credit) || [];
+  if (!low.length) { box.hidden = true; return; }
+  const floor = (d && d.credit_floor) || 0;
+  $('alertNote').textContent = '保底线 ' + floor + ' · 触底 ' + low.length + ' 个';
+  $('alertList').innerHTML = low.map(a =>
+    '<div style="padding:3px 0;font-size:12.5px">' +
+    '<span class="tag warn">' + (a.credits == null ? '?' : a.credits) + ' 分</span> ' +
+    esc(a.nickname || '未命名') + ' <span class="hint">uid ' + esc(a.uid) + '</span></div>'
+  ).join('') +
+  '<div class="hint" style="margin-top:6px">签到回血 / 手动「刷新」余额后自动解除；调整阈值见配置页「积分保底」。</div>';
+  box.hidden = false;
+}
+
+$('accFilterQ').addEventListener('input', () => {
+  accFilter.q = $('accFilterQ').value || '';
+  const raw = (overviewData && overviewData.accounts) || [];
+  const shown = accApply(raw);
+  renderAccounts(shown, shown.length !== raw.length);
+});
+$('accFilterTag').addEventListener('change', () => {
+  accFilter.tag = $('accFilterTag').value || '';
+  const raw = (overviewData && overviewData.accounts) || [];
+  const shown = accApply(raw);
+  renderAccounts(shown, shown.length !== raw.length);
+});
 
 $('accBody').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-a]');
   if (!b) return;
   const u = b.dataset.u, a = b.dataset.a;
-  if (a === 'remove' && !confirm('移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。确认移除？')) return;
+  if (a === 'remove' && !confirm('移除后账号退出账号池，凭证文件移入回收站（默认保留 30 天，可随时恢复或彻底删除）。确认移除？')) return;
   if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
   b.disabled = true;
   try {
@@ -478,9 +543,12 @@ $('accBody').addEventListener('click', async ev => {
       toast('已恢复选号', 'ok');
     } else if (a === 'tasks') {
       openTasks(u);
+    } else if (a === 'tags') {
+      openTagModal(u);
     } else if (a === 'remove') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/remove', { method: 'POST' });
-      toast(r.file_error ? '已移除（凭证文件删除失败：' + r.file_error + '）' : '已移除', 'ok');
+      toast(r.file_error ? '已移除（凭证移入回收站失败：' + r.file_error + '）'
+        : (r.trashed ? '已移除，凭证在回收站保留（' + r.trashed + '）' : '已移除'), 'ok');
     }
   } catch (e) { toast(e.message, 'err'); }
   finally { b.disabled = false; loadOverview(true); }
@@ -904,6 +972,8 @@ const CFG_MAP = {
   keepalive_hours: ['schedule', 'keepalive_hours'], keepalive_enabled: ['schedule', 'keepalive_enabled'],
   balance_refresh_enabled: ['schedule', 'balance_refresh_enabled'], balance_refresh_minutes: ['schedule', 'balance_refresh_minutes'],
   include_disabled_in_tasks: ['schedule', 'include_disabled_in_tasks'],
+  trash_retention_days: ['trash', 'retention_days'],
+  backup_enabled: ['backup', 'enabled'], backup_hour: ['backup', 'hour'], backup_keep: ['backup', 'keep'],
   max_in_flight: ['pool', 'max_in_flight'], max_in_flight_global: ['pool', 'max_in_flight_global'],
   breaker_threshold: ['pool', 'breaker_threshold'],
   degrade_threshold: ['pool', 'degrade_threshold'], degrade_cooldown: ['pool', 'degrade_cooldown'],
@@ -1265,6 +1335,153 @@ function downloadAccounts(data) {
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 };
+/* ── 标签编辑（单账号） ───────────────────────────────────────────── */
+let tagUid = '';
+function openTagModal(uid) {
+  tagUid = uid;
+  const st = ((overviewData && overviewData.accounts) || []).find(s => s.uid === uid);
+  const tags = ((overviewData && overviewData.tags) || {})[uid] || [];
+  $('tagTarget').textContent = '账号：' + ((st && st.nickname) || '未命名') + '（uid ' + uid + '）';
+  $('tagInput').value = tags.join(', ');
+  $('tagErr').hidden = true;
+  $('tagVeil').classList.add('on');
+  setTimeout(() => $('tagInput').focus(), 60);
+}
+$('btnCloseTag').onclick = () => $('tagVeil').classList.remove('on');
+$('btnTagSave').onclick = async () => {
+  if (!tagUid) return;
+  const tags = $('tagInput').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  try {
+    const r = await api('accounts/' + encodeURIComponent(tagUid) + '/tags', {
+      method: 'POST', body: JSON.stringify({ tags })
+    });
+    toast(r.changed ? '标签已保存' : '标签未变化', 'ok');
+    $('tagVeil').classList.remove('on');
+    loadOverview(true);
+  } catch (e) {
+    $('tagErr').textContent = e.message;
+    $('tagErr').hidden = false;
+  }
+};
+
+/* ── 回收站 + 定时备份 ────────────────────────────────────────────── */
+function openTrash() {
+  $('trashVeil').classList.add('on');
+  $('trashErr').hidden = true;
+  loadTrash();
+  loadBackups();
+}
+$('btnTrash').onclick = openTrash;
+$('btnCloseTrash').onclick = () => $('trashVeil').classList.remove('on');
+
+async function loadTrash() {
+  const wrap = $('trashList');
+  try {
+    const d = await api('trash');
+    const items = d.items || [];
+    $('trashEmpty').hidden = items.length > 0;
+    $('btnTrashPurgeAll').disabled = items.length === 0;
+    wrap.innerHTML = items.map(it => {
+      const days = it.purge_at ? Math.max(0, Math.ceil((it.purge_at * 1000 - Date.now()) / 86400000)) : null;
+      return '<div class="exp-row" style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line-1)">' +
+        '<div style="min-width:0;flex:1">' +
+          '<div style="font-size:12.5px">' + esc(it.nickname || '未命名') + ' <span class="hint">uid ' + esc(it.uid || '?') + '</span></div>' +
+          '<div class="hint" style="font-size:11px">' + esc(it.name) + ' · 删除于 ' + (it.deleted_at ? new Date(it.deleted_at * 1000).toLocaleString() : '?') +
+          (days == null ? ' · 永久保留' : ' · ' + days + ' 天后自动清理') + '</div>' +
+        '</div>' +
+        '<button class="xs" data-ta="restore" data-name="' + esc(it.name) + '">恢复</button>' +
+        '<button class="xs ghost danger" data-ta="purge" data-name="' + esc(it.name) + '">彻底删除</button>' +
+      '</div>';
+    }).join('');
+  } catch (e) {
+    wrap.innerHTML = '';
+    $('trashEmpty').hidden = true;
+    $('trashErr').textContent = e.message;
+    $('trashErr').hidden = false;
+  }
+}
+
+$('trashList').addEventListener('click', async ev => {
+  const b = ev.target.closest('button[data-ta]');
+  if (!b) return;
+  const name = b.dataset.name, act = b.dataset.ta;
+  if (act === 'purge' && !confirm('彻底删除「' + name + '」？该操作不可恢复。')) return;
+  b.disabled = true;
+  try {
+    if (act === 'restore') {
+      const r = await api('trash/' + encodeURIComponent(name) + '/restore', { method: 'POST' });
+      toast('已恢复账号 ' + (r.uid || name) + '（已热加载进账号池）', 'ok');
+      loadOverview(true);
+    } else {
+      await api('trash/' + encodeURIComponent(name) + '/purge', { method: 'POST' });
+      toast('已彻底删除', 'ok');
+    }
+  } catch (e) {
+    $('trashErr').textContent = e.message;
+    $('trashErr').hidden = false;
+  } finally {
+    b.disabled = false;
+    loadTrash();
+  }
+});
+
+$('btnTrashPurgeAll').onclick = async () => {
+  if (!confirm('清空回收站将彻底删除全部已移除账号的凭证文件，不可恢复。确认清空？')) return;
+  try {
+    const r = await api('trash/purge_all', { method: 'POST' });
+    toast('已清空回收站（删除 ' + r.removed + ' 个文件）', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+  loadTrash();
+};
+
+async function loadBackups() {
+  const wrap = $('backupList');
+  try {
+    const d = await api('backup/list');
+    const items = d.items || [];
+    $('backupEmpty').hidden = items.length > 0;
+    wrap.innerHTML = items.map(it =>
+      '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line-1);font-size:12px">' +
+        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(it.name) + '</span>' +
+        '<span class="hint" style="white-space:nowrap">' + (it.size / 1024).toFixed(1) + ' KB · ' + new Date(it.mtime * 1000).toLocaleString() + '</span>' +
+        '<button class="xs" data-ba="' + esc(it.name) + '">下载</button>' +
+      '</div>').join('');
+  } catch (e) {
+    wrap.innerHTML = '';
+    $('backupEmpty').hidden = true;
+  }
+}
+
+$('btnBackupRun').onclick = async () => {
+  const b = $('btnBackupRun');
+  b.disabled = true;
+  try {
+    const r = await api('backup/run', { method: 'POST' });
+    toast('备份完成：' + r.name, 'ok');
+    loadBackups();
+  } catch (e) { toast('备份失败：' + e.message, 'err'); }
+  finally { b.disabled = false; }
+};
+
+$('backupList').addEventListener('click', async ev => {
+  const b = ev.target.closest('button[data-ba]');
+  if (!b) return;
+  try {
+    const h = {};
+    const k = localStorage.getItem(LS_KEY);
+    if (k) h['Authorization'] = 'Bearer ' + k;
+    const r = await fetch('/panel/api/backup/' + encodeURIComponent(b.dataset.ba) + '/download', { headers: h });
+    if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = b.dataset.ba;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { toast('下载失败：' + e.message, 'err'); }
+});
+
 $('btnRefresh').onclick = async () => {
   const b = $('btnRefresh');
   b.disabled = true; b.textContent = '刷新中…';

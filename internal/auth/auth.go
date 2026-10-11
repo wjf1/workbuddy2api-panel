@@ -43,6 +43,11 @@ type Auth struct {
 	// 手写扁平形 auth 文件可直接写 "device_token": "..."；插件 OAuth 嵌套形
 	// 顶层 device_token 也会被解析（与桌面端共用状态文件的部署方式）。
 	DeviceToken string
+
+	// tags 账号标签（面板手工分组用，如「主力/签到号/试用号」）。落盘于嵌套形
+	// account.tags（扁平形顶层 tags），空 = 无标签（旧文件零回归）。
+	// 未导出同 realm 口径：面板 SetTags 改写、导出/展示经 TagsValue() 锁读。
+	tags []string
 }
 
 // Lock 供同进程内其他包（upstream.RefreshToken）在改写 Auth 字段期间加锁。
@@ -187,6 +192,78 @@ func BackfillRealmFor(a *Auth, realm string) (bool, error) {
 	return true, nil
 }
 
+// TagsValue 加锁读取标签列表（返回副本，调用方改副本不影响原数据）。
+// 面板展示 / cockpit 导出经此取值；与 SetTags 同锁，无数据竞争。
+func (a *Auth) TagsValue() []string {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, len(a.tags))
+	copy(out, a.tags)
+	return out
+}
+
+// SetTags 归一化后写入标签（trim、去空、去重、上限 16 个 × 32 字符——
+// 防止把 auth 文件当记事本）。返回是否发生变更；无变更不落盘由调用方判断。
+func (a *Auth) SetTags(tags []string) bool {
+	normalized := NormalizeTags(tags)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if slicesEqual(a.tags, normalized) {
+		return false
+	}
+	a.tags = normalized
+	return true
+}
+
+// NormalizeTags 标签归一化：trim、去空、去重（保序）、限量。
+func NormalizeTags(tags []string) []string {
+	seen := make(map[string]struct{}, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if len([]rune(t)) > maxTagRunes {
+			t = string([]rune(t)[:maxTagRunes])
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+		if len(out) >= maxTags {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// maxTags / maxTagRunes 单账号标签数量与单标签长度上限（NormalizeTags 口径）。
+const (
+	maxTags    = 16
+	maxTagRunes = 32
+)
+
+// slicesEqual 判定两个字符串切片内容相等（顺序敏感；均为空视为相等）。
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // IsGlobal 报告账号是否属于 global realm（= Realm() == "global"）。
 func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
 
@@ -230,15 +307,22 @@ func Parse(raw []byte) (*Auth, error) {
 				Realm        string `json:"realm"`
 			} `json:"auth"`
 			Account struct {
-				UID          string `json:"uid"`
-				EnterpriseID string `json:"enterpriseId"`
-				Nickname     string `json:"nickname"`
+				UID          string   `json:"uid"`
+				EnterpriseID string   `json:"enterpriseId"`
+				Nickname     string   `json:"nickname"`
+				Tags         []string `json:"tags"`
 			} `json:"account"`
 			// DeviceToken 顶层 device_token（嵌套形与扁平形共用；手写时无需嵌进 auth 对象）。
 			DeviceToken string `json:"device_token"`
+			// Tags 顶层 tags（宽容口径：手工合并/旧工具写在顶层也能读）。
+			Tags []string `json:"tags"`
 		}
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
+		}
+		tags := n.Account.Tags
+		if len(tags) == 0 {
+			tags = n.Tags
 		}
 		a = Auth{
 			AccessToken:  n.Auth.AccessToken,
@@ -250,18 +334,20 @@ func Parse(raw []byte) (*Auth, error) {
 			EnterpriseID: n.Account.EnterpriseID,
 			Nickname:     n.Account.Nickname,
 			DeviceToken:  n.DeviceToken,
+			tags:         NormalizeTags(tags),
 		}
 	} else {
 		var f struct {
-			AccessToken  string `json:"accessToken"`
-			RefreshToken string `json:"refreshToken"`
-			ExpiresAt    int64  `json:"expiresAt"`
-			Domain       string `json:"domain"`
-			Realm        string `json:"realm"`
-			UID          string `json:"uid"`
-			EnterpriseID string `json:"enterpriseId"`
-			Nickname     string `json:"nickname"`
-			DeviceToken  string `json:"device_token"`
+			AccessToken  string   `json:"accessToken"`
+			RefreshToken string   `json:"refreshToken"`
+			ExpiresAt    int64    `json:"expiresAt"`
+			Domain       string   `json:"domain"`
+			Realm        string   `json:"realm"`
+			UID          string   `json:"uid"`
+			EnterpriseID string   `json:"enterpriseId"`
+			Nickname     string   `json:"nickname"`
+			DeviceToken  string   `json:"device_token"`
+			Tags         []string `json:"tags"`
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
@@ -276,6 +362,7 @@ func Parse(raw []byte) (*Auth, error) {
 			EnterpriseID: f.EnterpriseID,
 			Nickname:     f.Nickname,
 			DeviceToken:  f.DeviceToken,
+			tags:         NormalizeTags(f.Tags),
 		}
 	}
 	if strings.TrimSpace(a.AccessToken) == "" {
@@ -309,6 +396,11 @@ func (a *Auth) SaveAtomic() error {
 			"enterpriseId": a.EnterpriseID,
 			"nickname":     a.Nickname,
 		},
+	}
+	// tags 非空才写回 account.tags：与 DeviceToken 同口径，不在无标签的旧文件里
+	// 引入空键（插件读取忽略未知键，但保持形状最小变化仍是更稳的选择）。
+	if len(a.tags) > 0 {
+		doc["account"].(map[string]any)["tags"] = a.tags
 	}
 	// DeviceToken 非空才写回顶层 device_token：避免在无该字段的旧文件里引入空键
 	// （保持与插件 OAuth 输出形状一致，插件读取忽略未知键）。

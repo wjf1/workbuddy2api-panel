@@ -41,6 +41,13 @@ type Config struct {
 	RedisMode string               // "upstash" / "noop"，仅观测透出
 	Version   string               // 面板版本号（展示用）
 
+	// 回收站（软删除）与定时备份：均为空 = 对应功能接口返回 501（保持既有硬删 /
+	// 无备份行为，测试面板与旧装配零回归）。
+	TrashDir           string // 回收站目录（main 按 state_file 同目录推导 data/trash）
+	TrashRetentionDays int    // 回收站保留天数；<=0 = 永久保留（main 缺省 30）
+	BackupDir          string // 备份输出目录（main 按 state_file 同目录推导 data/backups）
+	StateFile          string // 池状态文件路径（备份打包用；空 = 备份仅含 auths）
+
 	// Live 运行期可变配置（在线改配置立即生效）。
 	Live *livecfg.Holder
 
@@ -90,6 +97,22 @@ type Panel struct {
 	// 任务中心执行队列（taskcenter.go）。
 	queueOnce sync.Once
 	q         *queueState
+
+	// backup 定时备份设置（SetBackupSettings 热改；StartBackupLoop / 手动触发共用）。
+	backupMu sync.Mutex
+	backup   backupSettings
+
+	// trashRetentionDays 回收站保留天数（New 时取 cfg.TrashRetentionDays；
+	// SetTrashRetention 配置页热改）。<=0 = 永久保留。
+	trashMu            sync.Mutex
+	trashRetentionDays int
+}
+
+// SetTrashRetention 热更新回收站保留天数（saveConfig 调用）。
+func (p *Panel) SetTrashRetention(days int) {
+	p.trashMu.Lock()
+	defer p.trashMu.Unlock()
+	p.trashRetentionDays = days
 }
 
 // tryLockAccount 尝试锁定账号的任务执行；已在执行返回 false。
@@ -138,6 +161,10 @@ func New(cfg Config) *Panel {
 		started: time.Now(),
 		logs:    NewRing(500),
 		logins:  map[string]loginSession{},
+
+		backup: backupSettings{enabled: true, hour: 3, keep: 7},
+
+		trashRetentionDays: cfg.TrashRetentionDays,
 	}
 	p.routes()
 	return p
@@ -166,6 +193,14 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/checkin", p.withAuth(p.accountCheckin))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/balance", p.withAuth(p.accountBalance))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/remove", p.withAuth(p.accountRemove))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tags", p.withAuth(p.accountTags))
+	p.mux.HandleFunc("GET /panel/api/trash", p.withAuth(p.trashList))
+	p.mux.HandleFunc("POST /panel/api/trash/{name}/restore", p.withAuth(p.trashRestore))
+	p.mux.HandleFunc("POST /panel/api/trash/{name}/purge", p.withAuth(p.trashPurge))
+	p.mux.HandleFunc("POST /panel/api/trash/purge_all", p.withAuth(p.trashPurgeAll))
+	p.mux.HandleFunc("POST /panel/api/backup/run", p.withAuth(p.backupRun))
+	p.mux.HandleFunc("GET /panel/api/backup/list", p.withAuth(p.backupList))
+	p.mux.HandleFunc("GET /panel/api/backup/{name}/download", p.withAuth(p.backupDownload))
 	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/tasks", p.withAuth(p.accountTasks))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept", p.withAuth(p.accountTaskAccept))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept_all", p.withAuth(p.taskAcceptAll))
@@ -230,12 +265,15 @@ func (p *Panel) expiringSoonWindow() time.Duration {
 // ---------------------------------------------------------------------------
 
 // overview 总览：池计数 + 每账号状态 + 面板元信息。
+// 附带 credit_floor 余额预警（low_credit）与账号标签（tags）——均为现算：
+// credits 是余额刷新任务维护的缓存值，此处零上游请求。
 func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	total, healthy, cooling, disabled, inFlightFull := p.cfg.Pool.CountsDetailed()
 	sticky := 0
 	if p.cfg.StickyCount != nil {
 		sticky = p.cfg.StickyCount()
 	}
+	accounts := p.cfg.Pool.List()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":         p.cfg.Version,
 		"uptime_sec":      int(time.Since(p.started).Seconds()),
@@ -247,8 +285,56 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"cooling":         cooling,
 		"disabled":        disabled,
 		"in_flight_full":  inFlightFull,
-		"accounts":        p.cfg.Pool.List(),
+		"accounts":        accounts,
+		"tags":            p.tagsByUID(),
+		"credit_floor":    p.creditFloor(),
+		"low_credit":      p.lowCreditAccounts(accounts),
 	})
+}
+
+// creditFloor 生效的积分保底线（0 = 关闭/未配置）。预警横幅据此现算。
+func (p *Panel) creditFloor() int64 {
+	return p.cfg.Pool.CreditFloor()
+}
+
+// lowCreditAccounts 余额预警名单：credits 低于积分保底线的账号。
+// 积分与总额均为 0 的账号视为「从未查询」，不参与判定（新导入未刷新余额的
+// 账号不应误报为触底）。
+func (p *Panel) lowCreditAccounts(accounts []pool.Status) []map[string]any {
+	floor := p.creditFloor()
+	if floor <= 0 {
+		return []map[string]any{}
+	}
+	var out []map[string]any
+	for _, st := range accounts {
+		if st.Credits <= 0 && st.CreditsTotal <= 0 {
+			continue
+		}
+		if st.Credits < floor {
+			out = append(out, map[string]any{
+				"uid": st.UID, "nickname": st.Nickname, "credits": st.Credits,
+			})
+		}
+	}
+	if out == nil {
+		return []map[string]any{}
+	}
+	return out
+}
+
+// tagsByUID 汇总各账号标签（仅非空账号入表；uid → tags）。
+func (p *Panel) tagsByUID() map[string][]string {
+	out := map[string][]string{}
+	for _, st := range p.cfg.Pool.List() {
+		a := p.cfg.Pool.AuthByUID(st.UID)
+		if a == nil {
+			continue
+		}
+		if t := a.TagsValue(); len(t) > 0 {
+			out[st.UID] = t
+		}
+	}
+	return out
 }
 
 // logsHandler 返回日志环形缓冲快照（时间升序，含频道标记 chat/task/sys）。
@@ -558,7 +644,8 @@ func (p *Panel) accountBalance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credits": remain, "credits_total": total})
 }
 
-// accountRemove 移除账号：先出池（立即落盘 state），再删 auth 文件。
+// accountRemove 移除账号：先出池（立即落盘 state），再把凭证文件移入回收站
+// （软删除，可在回收站恢复 / 彻底删除）。未配置回收站目录时保持既有硬删行为。
 func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.cfg.Pool.Remove(uid)
@@ -566,19 +653,60 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
-	fileMsg := ""
-	if a.FilePath != "" {
-		if err := os.Remove(a.FilePath); err != nil && !os.IsNotExist(err) {
-			fileMsg = err.Error()
+	if p.cfg.TrashDir == "" {
+		// 旧装配（未注入 TrashDir）：既有硬删语义，零回归。
+		fileMsg := ""
+		if a.FilePath != "" {
+			if err := os.Remove(a.FilePath); err != nil && !os.IsNotExist(err) {
+				fileMsg = err.Error()
+			}
 		}
-	}
-	if fileMsg != "" {
-		log.Printf("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": fileMsg})
+		if fileMsg != "" {
+			log.Printf("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": fileMsg})
+			return
+		}
+		log.Printf("panel: remove uid=%s（已出池并删除凭证文件）", uid)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	log.Printf("panel: remove uid=%s（已出池并删除凭证文件）", uid)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	name, err := p.moveToTrash(a)
+	if err != nil {
+		// 出池已成功、文件仍在原地：如实告知（文件残留比静默丢失好）。
+		log.Printf("panel: remove uid=%s 出池成功但移入回收站失败: %v", uid, err)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": err.Error()})
+		return
+	}
+	log.Printf("panel: remove uid=%s（已出池，凭证移入回收站 %s）", uid, name)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "trashed": name})
+}
+
+// accountTags 更新账号标签（body {"tags": ["a","b"]}，全量覆盖）。
+// 空数组 = 清空标签。落盘 auth 文件（account.tags），重启不丢。
+func (p *Panel) accountTags(w http.ResponseWriter, r *http.Request) {
+	uid := r.PathValue("uid")
+	a := p.cfg.Pool.AuthByUID(uid)
+	if a == nil {
+		writeErr(w, http.StatusNotFound, "account not found")
+		return
+	}
+	var body struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	if !a.SetTags(body.Tags) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tags": a.TagsValue(), "changed": false})
+		return
+	}
+	if err := a.SaveAtomic(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "save auth: "+err.Error())
+		return
+	}
+	log.Printf("panel: tags uid=%s -> %v", uid, a.TagsValue())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tags": a.TagsValue(), "changed": true})
 }
 
 // ---------------------------------------------------------------------------

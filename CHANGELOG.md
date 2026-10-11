@@ -4,6 +4,26 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.14.0-panel] - 2026-10-11
+
+### 新增
+
+- **账号回收站（软删除）**：面板「移除账号」不再硬删凭证文件，改为移入 `data/trash/`（Docker 持久化卷内），可在回收站弹窗**恢复**（移回 `auths/` 并热加载进池）或**彻底删除**（二次确认）；超期自动清理（`trash.retention_days`，默认 30 天，`0` = 永久保留）。删除时刻记于文件 mtime，不引入额外元数据文件；同 uid 重复删除自动加时间戳共存；跨盘移动回退 copy+delete。未注入回收站目录的旧装配保持既有硬删行为（零回归）。
+- **账号标签（tags）**：账号可打多个标签（面板「标签」弹窗，逗号分隔，归一化 trim/去重/限量 16×32 字符），落盘 auth 文件 `account.tags`（旧文件兼容），账号行徽章展示 + 列表按标签/关键字筛选；cockpit 导出/导入格式对齐 cockpit-tools 的 `tags` 字段（`Option<Vec<String>>`），双向迁移不丢分组信息。
+- **余额预警（面板内横幅）**：账号积分低于「积分保底线」（`pool.credit_floor`）时，账号池页顶部横幅列出触底账号与剩余分值——与选号侧保底共用同一阈值，零新增配置、零上游请求（overview 现算缓存值）；积分与总额均为 0（从未查询）的账号不误报。
+- **定时备份**：每日整点（`backup.hour`，默认凌晨 3 点）把 `auths/*.json` + `state.json` 打包为 zip 落 `data/backups/`（**不含 config.json**，避免 api_key 明文扩散），保留 `backup.keep` 份（默认 7）轮转；文件名毫秒精度 + 冲突自动外推重命名（手动连点 / CI 高速循环不会同名覆盖，且文件名字典序恒等于时间序）。回收站弹窗内提供「立即备份 / 备份列表 / 下载」（Content-Disposition 附件，便于把备份拿出容器；列表按完整 mtime 新→旧排序）。
+
+### 变更
+
+- **配置**：`config.example.json` 与配置页新增 `trash.retention_days`、`backup.enabled` / `backup.hour` / `backup.keep` 四项，均热生效（`panel.SetTrashRetention` / `SetBackupSettings`）；旧配置缺键走默认值，无感升级。
+- **overview 接口**：`GET /panel/api/overview` 新增 `tags`（uid→标签）、`credit_floor`、`low_credit`（触底账号列表）三个纯增量字段。
+- **新增 API**：`GET /panel/api/trash`、`POST /panel/api/trash/{name}/restore|purge`、`POST /panel/api/trash/purge_all`、`POST /panel/api/backup/run`、`GET /panel/api/backup/list`、`GET /panel/api/backup/{name}/download`、`POST /panel/api/accounts/{uid}/tags`。回收站/备份文件名均做白名单校验（`workbuddy-*.json` / `wb2api-backup-*.zip`，纯文件名，防路径穿越）。
+
+### 验证
+
+- `go test ./... -count=1` 全绿；新增 `internal/auth/tags_test.go`（归一化 / 落盘往返 / 旧文件兼容 / 变更检测）与 `internal/panel/trash_backup_test.go`（软删→恢复→彻底删全链路、同名冲突共存、过期清理、保留期热改、备份 zip 条目 / keep 轮转 / 下载与穿越拒绝、overview 预警与标签透出、旧装配回退硬删与 501）；`TestIndexHTMLUniqueIDs`（id 全局唯一门禁）与 `TestAppJSSyntax`（node --check）通过。
+- 真实浏览器点击走查（chrome-devtools，真实账号数据）：预警横幅渲染与出池联动、标签编辑→徽章→双维筛选、移除（新确认文案）→回收站恢复（标签随文件往返）→彻底删除、手动备份→列表出现→下载按钮、配置页四项回填与保存持久化，全部通过。
+
 ## [1.13.4-panel] - 2026-10-11
 
 ### 修复
