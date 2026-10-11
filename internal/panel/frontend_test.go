@@ -6,11 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// idRe 匹配 HTML 静态属性里的 id="..."（页面无内联脚本，动态 id 不存在）。
+var idRe = regexp.MustCompile(`\bid="([^"]+)"`)
 
 // TestAppJSSyntax app.js 必须能通过 JS 解析器语法校验。
 //
@@ -58,6 +62,32 @@ func TestIndexHTMLNoInlineScript(t *testing.T) {
 			t.Fatalf("index.html contains inline <script> (blocked by CSP): %s", tag)
 		}
 		rest = rest[end:]
+	}
+}
+
+// TestIndexHTMLUniqueIDs index.html 中的 id 必须全局唯一：JS 侧 $('...') /
+// getElementById 恒取文档顺序第一个，重复 id 会让新功能的读写静默落到旧元素上
+// （1.13.1~1.13.3 的导出弹窗 #expList 与既有 #expBox 内 #expList 重名，账号行
+// 被渲染进被弹窗遮罩盖住的旧容器——用户看到空列表且点击无效，而所有基于
+// getElementById 的断言全绿）。此测试把"id 唯一性"前移到 CI。
+func TestIndexHTMLUniqueIDs(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	seen := map[string]string{} // id -> 首次出现位置
+	for _, m := range idRe.FindAllStringSubmatchIndex(body, -1) {
+		id := body[m[2]:m[3]]
+		line := 1 + strings.Count(body[:m[2]], "\n")
+		if prev, dup := seen[id]; dup {
+			t.Errorf("duplicate id %q at line %d (first seen at line %s)", id, line, prev)
+			continue
+		}
+		seen[id] = strconv.Itoa(line)
+	}
+	if len(seen) == 0 {
+		t.Fatal("no id= attributes found — regex out of sync with index.html?")
 	}
 }
 

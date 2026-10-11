@@ -1137,7 +1137,7 @@ $('btnExport').onclick = openExport;
 async function openExport() {
   $('exportVeil').classList.add('on');
   $('expErr').hidden = true;
-  const listEl = $('expList');
+  const listEl = $('expAccList');
   listEl.innerHTML = '<div class="exp-loading">正在获取账号列表…</div>';
   $('btnDoExport').disabled = true;
   let list;
@@ -1212,7 +1212,7 @@ async function openExport() {
 
 /* 行勾选状态 → 头部全选框 / 计数 / 标签 的联动 */
 function expSync() {
-  const boxes = [...$('expList').querySelectorAll('input[type=checkbox]')];
+  const boxes = [...$('expAccList').querySelectorAll('input[type=checkbox]')];
   const sel = boxes.filter(b => b.checked).length;
   $('expCount').textContent = '已选 ' + sel + ' / ' + boxes.length;
   const all = boxes.length > 0 && sel === boxes.length;
@@ -1220,12 +1220,12 @@ function expSync() {
   $('expAllLabel').textContent = all ? '全不选' : '全选';
 }
 function expSetAll(on) {
-  $('expList').querySelectorAll('input[type=checkbox]').forEach(b => b.checked = on);
+  $('expAccList').querySelectorAll('input[type=checkbox]').forEach(b => b.checked = on);
 }
 $('expAll').onchange = () => { expSetAll($('expAll').checked); expSync(); };
 $('btnCloseExport').onclick = () => { $('exportVeil').classList.remove('on'); };
 $('btnDoExport').onclick = async () => {
-  const boxes = [...$('expList').querySelectorAll('input[type=checkbox]')];
+  const boxes = [...$('expAccList').querySelectorAll('input[type=checkbox]')];
   const sel = boxes.filter(b => b.checked).map(b => b.value);
   if (!sel.length) {
     $('expErr').hidden = false; $('expErr').textContent = '请至少勾选一个账号';

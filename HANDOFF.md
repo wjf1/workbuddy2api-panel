@@ -5,7 +5,7 @@
 ## 1. 项目概况与当前状态
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
-- **当前版本**：`1.13.3-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
+- **当前版本**：`1.13.4-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
 - **仓库**：`https://github.com/linguo2625469/workbuddy2api-panel`，本地工作区 `F:\AI\Qdor\review\workbuddy2api-panel`，分支 `main`。
 - **最近提交 / tag**：`9478287 chore: 版本号 1.12.0-panel`；历史 tag 到 `v1.9.2`（tag 命名与 `appVersion` 演进不同步，以 `appVersion` 为准）。
 - **本工作区未推送**：`1.13.0-panel` 的导出功能为本地变更，尚未 commit / push（见第 4、5 节）。
