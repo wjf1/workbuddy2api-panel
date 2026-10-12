@@ -1,11 +1,14 @@
 package panel
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -40,45 +43,91 @@ type cockpitAccount struct {
 	LastUsed      int64    `json:"last_used"`
 }
 
-// importCockpit 接收 cockpit tools 导出的 JSON 文件，批量导入账号到池中。
+// importCockpit 接收账号 JSON 文件（多文件 / zip 包）批量导入账号到池中。
 //
 //	POST /panel/api/import/cockpit
 //	Content-Type: multipart/form-data
-//	Body: file=<json>
+//	Body: file=<json|zip>（字段可重复，多文件一次请求）
 //
+// 兼容负载形状（1.14.2 起逐文件/逐元素嗅探）：
+//   - cockpit 扁平数组 [{"uid":...,"access_token":...}]（毫秒，既有口径）
+//   - 扁平单对象；嵌套形 {"account":{...},"auth":{...}}（落盘/插件输出，秒）单对象或数组
+//   - 以上形状的混合数组；zip 包自动解包内部 *.json（跳过目录 / __MACOSX / ._ 前缀 / 非 json）
+//
+// 错误语义：整个请求只有一个负载单元时硬错误直接 400（兼容既有单文件行为）；
+// 多负载（zip / 多文件）时单个负载失败只记 errors 不阻断其余。
 // 返回 {ok, total, imported, skipped, errors}。
 func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeErr(w, http.StatusBadRequest, "parse form: "+err.Error())
 		return
 	}
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "missing file field: "+err.Error())
-		return
-	}
-	defer file.Close()
-
-	raw, err := io.ReadAll(file)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "read file: "+err.Error())
+	fhs := r.MultipartForm.File["file"]
+	if len(fhs) == 0 {
+		writeErr(w, http.StatusBadRequest, "missing file field")
 		return
 	}
 
-	var accounts []cockpitAccount
-	if err := json.Unmarshal(raw, &accounts); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
-		return
+	// 展开阶段：每个上传文件 → 若干负载单元（zip 解包；读取/结构失败成为 Err 单元）。
+	var units []payloadFile
+	for _, fh := range fhs {
+		f, err := fh.Open()
+		if err != nil {
+			units = append(units, payloadFile{Name: fh.Filename, Err: err})
+			continue
+		}
+		raw, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			units = append(units, payloadFile{Name: fh.Filename, Err: err})
+			continue
+		}
+		fs, err := expandPayloadFile(fh.Filename, raw)
+		if err != nil {
+			units = append(units, payloadFile{Name: fh.Filename, Err: err})
+			continue
+		}
+		units = append(units, fs...)
 	}
-	if len(accounts) == 0 {
+
+	// 解析阶段：单单元请求保留"硬错误直接 400"的既有语义（非 zip 单文件、仅含一个
+	// 条目的 zip）；多单元时单个负载失败降级为 errors 条目，不阻断其余。
+	single := len(units) == 1
+	var errs []string
+	var pending []cockpitAccount
+	skippedElems := 0
+	for _, u := range units {
+		if u.Err != nil {
+			if single {
+				writeErr(w, http.StatusBadRequest, u.Name+": "+u.Err.Error())
+				return
+			}
+			errs = append(errs, u.Name+": "+u.Err.Error())
+			continue
+		}
+		accts, elemErrs, err := parseImportPayload(u.Data)
+		if err != nil {
+			if single {
+				writeErr(w, http.StatusBadRequest, u.Name+": "+err.Error())
+				return
+			}
+			errs = append(errs, u.Name+": "+err.Error())
+			continue
+		}
+		pending = append(pending, accts...)
+		for _, e := range elemErrs {
+			errs = append(errs, u.Name+": "+e)
+		}
+		skippedElems += len(elemErrs)
+	}
+	if len(pending) == 0 && skippedElems == 0 && len(errs) == 0 {
 		writeErr(w, http.StatusBadRequest, "empty accounts array")
 		return
 	}
 
 	var total, imported, skipped int
-	var errs []string
 
-	for _, acc := range accounts {
+	for _, acc := range pending {
 		uid := strings.TrimSpace(acc.UID)
 		at := strings.TrimSpace(acc.AccessToken)
 		rt := strings.TrimSpace(acc.RefreshToken)
@@ -167,7 +216,8 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		imported++
 	}
 
-	total = len(accounts)
+	total = len(pending) + skippedElems
+	skipped += skippedElems
 	log.Printf("panel: cockpit import finished total=%d imported=%d skipped=%d", total, imported, skipped)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
@@ -191,4 +241,150 @@ func validImportUID(uid string) bool {
 		}
 	}
 	return true
+}
+
+// maxImportEntry zip 内单个 *.json 条目读取上限（防 zip bomb；整包总量由
+// ParseMultipartForm 的 32MB 上限兜底）。
+const maxImportEntry = 4 << 20
+
+// payloadFile 一个待解析的 JSON 负载单元（来源名 + 字节）。
+// Err 非 nil：该单元在展开/读取阶段失败，调用方记错跳过。
+type payloadFile struct {
+	Name string
+	Data []byte
+	Err  error
+}
+
+// expandPayloadFile 展开上传的单个文件为若干 JSON 负载单元：zip 包（PK magic 探测）
+// 解包内部 *.json（跳过目录条目、__MACOSX/ 与 ._ 前缀、非 .json 文件），其余原样返回
+// 单单元。zip 结构无效或包内无 json → 整体错误。
+func expandPayloadFile(name string, raw []byte) ([]payloadFile, error) {
+	if !looksLikeZip(raw) {
+		return []payloadFile{{Name: name, Data: raw}}, nil
+	}
+	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		return nil, fmt.Errorf("invalid zip: %w", err)
+	}
+	var out []payloadFile
+	for _, f := range zr.File {
+		base := path.Base(f.Name)
+		if f.FileInfo().IsDir() ||
+			strings.HasPrefix(f.Name, "__MACOSX/") ||
+			strings.HasPrefix(base, "._") ||
+			!strings.HasSuffix(strings.ToLower(f.Name), ".json") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			out = append(out, payloadFile{Name: f.Name, Err: err})
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(rc, maxImportEntry))
+		rc.Close()
+		if err != nil {
+			out = append(out, payloadFile{Name: f.Name, Err: err})
+			continue
+		}
+		out = append(out, payloadFile{Name: f.Name, Data: data})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("zip contains no .json files")
+	}
+	return out, nil
+}
+
+// looksLikeZip 判断内容是否为 zip（本地文件头 / 空档记录两种 magic）。
+func looksLikeZip(raw []byte) bool {
+	return bytes.HasPrefix(raw, []byte("PK\x03\x04")) || bytes.HasPrefix(raw, []byte("PK\x05\x06"))
+}
+
+// parseImportPayload 嗅探导入负载的形状并归一化为 cockpit 导入口径。
+//
+// 兼容形状（1.14.2 起）：
+//   - cockpit 扁平数组 [{"uid":...,"access_token":...}]（毫秒）
+//   - 扁平单对象 / 嵌套形 {"account":{...},"auth":{...}}（落盘/插件输出，秒）单对象
+//   - 嵌套形与 cockpit 扁平条目的混合数组
+//
+// 语义：整个负载不可用（语法坏 / 空 / 顶层无法识别）→ err（单单元语境 400）；
+// 数组内单个元素不可用 → elemErrs（调用方记错并计 skipped），其余元素照常导入。
+func parseImportPayload(raw []byte) (accts []cockpitAccount, elemErrs []string, err error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, nil, fmt.Errorf("empty payload")
+	}
+	switch trimmed[0] {
+	case '{':
+		acc, err := classifyAccountEntry(trimmed)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []cockpitAccount{acc}, nil, nil
+	case '[':
+		var elems []json.RawMessage
+		if err := json.Unmarshal(trimmed, &elems); err != nil {
+			return nil, nil, fmt.Errorf("invalid json: %w", err)
+		}
+		for i, elem := range elems {
+			acc, err := classifyAccountEntry(elem)
+			if err != nil {
+				elemErrs = append(elemErrs, fmt.Sprintf("entry %d: %v", i, err))
+				continue
+			}
+			accts = append(accts, acc)
+		}
+		return accts, elemErrs, nil
+	default:
+		return nil, nil, fmt.Errorf("unrecognized format: expected JSON object or array")
+	}
+}
+
+// classifyAccountEntry 识别单个账号条目的形状：嵌套形 / 扁平 camelCase 形走
+// auth.Parse（落盘口径，秒），cockpit 扁平 snake_case 形直接反序列化（毫秒）。
+func classifyAccountEntry(raw json.RawMessage) (cockpitAccount, error) {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return cockpitAccount{}, fmt.Errorf("not a JSON object")
+	}
+	_, hasNested := probe["auth"]
+	_, hasCamel := probe["accessToken"]
+	if hasNested || hasCamel {
+		a, err := auth.Parse(raw)
+		if err != nil {
+			return cockpitAccount{}, err
+		}
+		return nestedToCockpit(a), nil
+	}
+	_, hasUID := probe["uid"]
+	_, hasSnake := probe["access_token"]
+	if !hasUID && !hasSnake {
+		return cockpitAccount{}, fmt.Errorf("unrecognized format: no account fields")
+	}
+	var acc cockpitAccount
+	if err := json.Unmarshal(raw, &acc); err != nil {
+		return cockpitAccount{}, err
+	}
+	return acc, nil
+}
+
+// nestedToCockpit 把 auth.Parse 出的嵌套/扁平 camelCase 账号映射为 cockpit 导入口径。
+// 落盘 expiresAt 为秒，×1000 对齐 cockpit 毫秒（≥1e12 视为已是毫秒不换算）；
+// realm 取 RealmStored 显式持久值（空则由导入主循环按 domain 回落推断）。
+func nestedToCockpit(a *auth.Auth) cockpitAccount {
+	expires := a.ExpiresAt
+	if expires > 0 && expires < 1e12 {
+		expires *= 1000
+	}
+	return cockpitAccount{
+		ID:           "workbuddy_" + a.UID,
+		UID:          a.UID,
+		Nickname:     a.Nickname,
+		AccessToken:  a.AccessTokenValue(),
+		RefreshToken: a.RefreshTokenValue(),
+		Domain:       a.DomainValue(),
+		Realm:        a.RealmStored(),
+		ExpiresAt:    expires,
+		Tags:         a.TagsValue(),
+		DeviceToken:  a.DeviceTokenValue(),
+	}
 }

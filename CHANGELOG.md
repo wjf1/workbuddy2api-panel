@@ -4,6 +4,29 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.14.2-panel] - 2026-10-12
+
+### 新增
+
+- **导入格式兼容升级：嵌套形账号文件 / 扁平单对象 / zip 整包 / 多文件**。`POST /panel/api/import/cockpit` 从「仅 cockpit 扁平数组」升级为逐文件、逐元素的形状嗅探（复用 `auth.Parse` 的 probe 双形态解析模式），直接吃下四类既有产物，前端「导入 JSON」不再对合法账号文件报错：
+  - **嵌套形**（`{"account":{...},"auth":{...}}`，本面板 `auths/` 落盘 / 插件输出口径，秒级 `expiresAt`）单对象或数组——此前单对象直接 400（`cannot unmarshal object into []panel.cockpitAccount`）、嵌套数组全员 skipped（`missing required fields`），是导入受阻的主要来源；
+  - **扁平单对象**与**嵌套形 + cockpit 扁平条目的混合数组**（逐元素嗅探，`realm` 显式优先、`expiresAt` 秒↔毫秒自动对齐）；
+  - **zip 整包上传**：自动解包内部 `*.json`（跳过目录条目 / `__MACOSX` / `._` 前缀 / 非 json 文件；条目 4MB 读取上限防 zip bomb），包内单个坏文件只记 `errors` 不阻断其余；
+  - **多文件 multipart**（前端 input 加 `multiple`，一次可选多个 json / zip）。
+- 前端：「导入 JSON」页签提示文案与 `accept` 更新（`.json,.zip` + `multiple`）；导入结果区 `#importErr` 展示 `errors` 前 3 条明细（此前仅写入 console）。
+
+### 变更
+
+- 导入错误语义分层：整个请求只有一个负载单元时硬错误直接 400（保留既有单文件行为与文案）；多负载（zip / 多文件）时单个负载失败降级为 `errors` 条目。`total` 口径 = 所有负载单元中提取到的账号条目数（含无法解析条目）。
+- 无法识别的形状报错更明确（`unrecognized format: no account fields`，此前笼统 `invalid json`），并带来源文件名前缀（如 `weird.json: unrecognized format: ...`）。
+- cockpit 扁平数组口径与导出口径零改动（往返契约不动，既有测试全绿为回归门禁）。
+
+### 验证
+
+- 新增 `roundtrip_test.go` 六用例：嵌套单对象、嵌套数组混合 cockpit 条目、数组坏元素跳过、扁平单对象、zip 整包（2 好 + 1 坏 + 无关文件）、无法识别形状 400；既有三用例（导出导入往返 / 旧格式回落 / 零过期兜底）回归全绿。`go vet` 干净，`go test ./... -count=1` 全绿（15 包）。
+- 真实浏览器走查（临时实例，隔离端口 `:7864` 与独立 auths 目录）：添加账号 → 导入页签 → 上传 zip（3 个嵌套形账号 + 1 坏 json + 1 无关文件）→ 「导入完成：成功 3 个」+ 坏文件明细红字（断言祖先链含 `#addTabImport`）→ 账号列表渲染 3 个新账号；非法 JSON 单文件 → 「导入失败：weird.json: unrecognized format」（清晰指向来源与原因）；账号落盘嵌套形无损（token / realm / 秒级时间戳原值）。
+- 走查环境说明：本次走查在本机 ZCode 内置浏览器（IAB）执行，该后端定位器/坐标点击在本页面持续超时（宿主工具限制），点击动作经页面内真实 handler 触发完成；其余链路（change 事件 → fetch 上传 → 后端解析 → DOM 渲染）均为真实执行，断言按规范验证祖先链。
+
 ## [1.14.1-panel] - 2026-10-11
 
 ### 修复

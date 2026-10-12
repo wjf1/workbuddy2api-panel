@@ -1174,11 +1174,11 @@ $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank');
 $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textContent)
   .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
 $('importFile').onchange = async () => {
-  const file = $('importFile').files[0];
-  if (!file) return;
+  const files = Array.from($('importFile').files);
+  if (!files.length) return;
   $('importDone').hidden = true; $('importErr').hidden = true;
   const fd = new FormData();
-  fd.append('file', file);
+  for (const f of files) fd.append('file', f);
   const h = {};
   const k = localStorage.getItem(LS_KEY);
   if (k) h['Authorization'] = 'Bearer ' + k;
@@ -1189,6 +1189,8 @@ $('importFile').onchange = async () => {
     $('importDone').hidden = false;
     $('importDone').textContent = '导入完成：成功 ' + d.imported + ' 个' + (d.skipped ? '，跳过 ' + d.skipped + ' 个' : '');
     if (d.errors && d.errors.length) {
+      $('importErr').hidden = false;
+      $('importErr').textContent = d.errors.slice(0, 3).join('；') + (d.errors.length > 3 ? '（等 ' + d.errors.length + ' 条，详见控制台）' : '');
       console.warn('import errors:', d.errors);
     }
     loadOverview(true);
