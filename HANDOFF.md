@@ -85,7 +85,7 @@ data/backups/          备份输出（同上）
   - `count_tokens` 是无 tokenizer 的估算（请求 JSON 字节数 / 3）；要精确可接 tiktoken 类实现，注意依赖与本机无 cgo 的约束。
   - 检索后端目前只有 so.com（`internal/websearch`，`Searcher` 接口已就位）：可加 Bing / SearXNG 等实现并按 `search.*` 选择；`anthropicTool` 已解析 `allowed_domains` / `blocked_domains` 但**尚未落到过滤**（接了就能用）。
   - `web_fetch_*` / `code_execution_*` 服务端工具目前剥离（能力降级）；如需支持，可参照 websearch 包加 fetch 实现并复用同一编排骨架。
-  - 客户端工具与检索同轮混用的语义已固定（检索执行完立即终局、交客户端）：`anthropic_websearch.go` 头注释 + 轮次条件 `len(searchCalls)==0 || len(otherCalls)>0` 是唯一事实来源，改前先读。
+  - 客户端工具与检索同轮混用的语义已固定（本轮**不执行检索**、立即终局、交客户端；丢弃该轮的 web_search 调用）：`anthropic_websearch.go` 头注释 + 终局条件 `len(searchCalls)==0 || len(otherCalls)>0` 是唯一事实来源。**这块缺一个契约测试**——下次改动前建议先补：复用 `TestAnthropicWebSearchMultiRound` 的 SSE 夹具，加一条「同帧含 web_search 与客户端工具两个 tool_calls」的回复，断言 `searcher.calls` 为空、`stop_reason=tool_use` 且只有客户端工具块。
 - **其他可演进项**：
   - 导出接口可加「仅导出健康账号 / 排除禁用号」过滤参数（当前按池内全量 + uids）。
   - cockpit 的 `plan_type` / `checkin_streak` 等运维字段面板仍无数据源，导出省略（`tags` 已于 1.14.0 补齐）；若后续新增这些维度，在 `cockpitExportAccount` 补 `omitempty` 字段即可。
