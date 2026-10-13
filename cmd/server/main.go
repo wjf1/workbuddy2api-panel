@@ -28,10 +28,11 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/websearch"
 )
 
 // appVersion 网关版本（fork 版：面板 + 任务体系），透出到 /panel/api/overview。
-const appVersion = "1.14.2-panel"
+const appVersion = "1.15.0-panel"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
@@ -303,6 +304,16 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stderr, pn.Logs()))
 	server.SetChatLogOutput(io.MultiWriter(os.Stdout, pn.Logs()))
 
+	// 服务端 web_search 检索后端（/v1/messages 的 web_search 工具，见
+	// internal/websearch）：enabled=false 时不构造，handler 侧把该服务端
+	// 工具剥离、模型照常作答。
+	var searcher websearch.Searcher
+	if cfg.Search.Enabled {
+		searcher = websearch.NewSo(time.Duration(cfg.Search.TimeoutSeconds)*time.Second, "")
+		log.Printf("服务端 web_search 已启用（360 搜索抓取；单次 %d 条 / %ds 超时）",
+			cfg.Search.MaxResults, cfg.Search.TimeoutSeconds)
+	}
+
 	h := server.NewHandler(server.Config{
 		Pool:         p,
 		Upstream:     up,
@@ -322,6 +333,10 @@ func main() {
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
 		// handler 侧第三道闸（global realm）：false（显式逃生门）时不列 global: 模型名。
 		GlobalEnabled: cfg.Global.Enabled,
+		// 服务端 web_search（/v1/messages）：检索后端 + 条数/超时。
+		Search:           searcher,
+		SearchMaxResults: cfg.Search.MaxResults,
+		SearchTimeout:    time.Duration(cfg.Search.TimeoutSeconds) * time.Second,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

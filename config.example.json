@@ -44,6 +44,11 @@
     "hour": 3,
     "keep": 7
   },
+  "search": {
+    "enabled": true,
+    "max_results": 5,
+    "timeout_seconds": 10
+  },
   "global": {
     "enabled": true,
     "chat_base": "",

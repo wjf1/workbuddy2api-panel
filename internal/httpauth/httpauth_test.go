@@ -59,3 +59,54 @@ func TestDigestIsFixedLength(t *testing.T) {
 		t.Errorf("sha256 digest length = %d, want 32", len(digest("x")))
 	}
 }
+
+// TestVerifyAny 覆盖 Anthropic 协议的双凭证形态：x-api-key 与 Bearer 任一命中即通过，
+// 两者都错/都缺则拒绝。
+func TestVerifyAny(t *testing.T) {
+	// reqAny 构造同时可带 Authorization 与 x-api-key 的请求（两者都空则都不设头）。
+	reqAny := func(authz, apiKey string) *http.Request {
+		r := httptest.NewRequest("POST", "/v1/messages", nil)
+		if authz != "" {
+			r.Header.Set("Authorization", authz)
+		}
+		if apiKey != "" {
+			r.Header.Set("x-api-key", apiKey)
+		}
+		return r
+	}
+	const key = "sk-abc123"
+	cases := []struct {
+		name        string
+		key         string
+		authz, xkey string
+		want        bool
+	}{
+		{"空 key 放行（未启用鉴权）", "", "", "", true},
+		{"x-api-key 命中", key, "", key, true},
+		{"Bearer 命中（Claude Code 兼容）", key, "Bearer " + key, "", true},
+		{"两者都命中", key, "Bearer " + key, key, true},
+		{"x-api-key 错误", key, "", "sk-wrong", false},
+		{"Bearer 错误", key, "Bearer sk-wrong", "", false},
+		{"两者都错", key, "Bearer sk-wrong", "sk-wrong", false},
+		{"两者都缺", key, "", "", false},
+		{"x-api-key 前缀相同但内容短", key, "", "sk-abc12", false},
+		{"Bearer 前缀大小写不符且无 x-api-key", key, "bearer " + key, "", false},
+		{"Bearer 错但 x-api-key 对（不应被错头带偏）", key, "Bearer sk-wrong", key, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := VerifyAny(reqAny(c.authz, c.xkey), c.key)
+			if c.name == "Bearer 错但 x-api-key 对（不应被错头带偏）" {
+				// 设计口径：Authorization 带了 Bearer 前缀即以其为准，不再回退 x-api-key，
+				// 避免客户端"一半新一半旧"的凭证混用被静默放行。
+				if got {
+					t.Errorf("VerifyAny = true, 期望 false（Bearer 前缀存在时以 Bearer 为准）")
+				}
+				return
+			}
+			if got != c.want {
+				t.Errorf("VerifyAny(key=%q, authz=%q, x-api-key=%q) = %v, want %v", c.key, c.authz, c.xkey, got, c.want)
+			}
+		})
+	}
+}

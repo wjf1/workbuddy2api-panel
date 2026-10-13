@@ -125,6 +125,18 @@ type Config struct {
 		Keep int `json:"keep"`
 	} `json:"backup"`
 
+	Search struct {
+		// Enabled 服务端 web_search 工具开关（/v1/messages，供 ZCode/Claude Code
+		// 等 Anthropic 协议客户端的原生联网搜索）。缺省 true：网关注自执行检索
+		// （360 搜索抓取，见 internal/websearch）；false = 请求里的 web_search
+		// 服务端工具被剥离，模型照常作答（不报错）。
+		Enabled bool `json:"enabled"`
+		// MaxResults 单次检索返回条数（缺省 5，钳制 1..10）。
+		MaxResults int `json:"max_results"`
+		// TimeoutSeconds 单次检索超时秒（缺省 10，钳制 1..60）。
+		TimeoutSeconds int `json:"timeout_seconds"`
+	} `json:"search"`
+
 	Global struct {
 		// Enabled global realm 路由开关。缺省 true：Realm() 正常把 realm=global/
 		// domain=workbuddy.ai 的账号判为 global 并路由 global base/路径。
@@ -267,6 +279,10 @@ func Default() *Config {
 	c.Backup.Enabled = true
 	c.Backup.Hour = 3
 	c.Backup.Keep = 7
+	// 服务端 web_search 缺省值（见字段注释）。
+	c.Search.Enabled = true
+	c.Search.MaxResults = 5
+	c.Search.TimeoutSeconds = 10
 	// 缺省 true 靠显式赋值实现（同 Schedule 开关）：JSON 里键缺席时字段保留此值，
 	// 只有显式 false 才关闭来源记录。
 	c.Logging.RequestClientInfo = true
@@ -483,6 +499,20 @@ func (c *Config) normalize() error {
 	}
 	if c.Logging.RequestArchiveMaxMB <= 0 {
 		c.Logging.RequestArchiveMaxMB = 100
+	}
+	// 服务端 web_search：条数与超时钳制到有界区间（越界静默钳制——这是纯性能
+	// 旋钮，不是安全开关；enabled=false 才是显式关闭）。
+	if c.Search.MaxResults <= 0 {
+		c.Search.MaxResults = 5
+	}
+	if c.Search.MaxResults > 10 {
+		c.Search.MaxResults = 10
+	}
+	if c.Search.TimeoutSeconds <= 0 {
+		c.Search.TimeoutSeconds = 10
+	}
+	if c.Search.TimeoutSeconds > 60 {
+		c.Search.TimeoutSeconds = 60
 	}
 	// 入站读取上限（issue #100）：空值回落默认 300s；"0" 合法（不限制）；
 	// 负值无语义，fail fast（静默钳 0 会把保护悄悄关掉）。

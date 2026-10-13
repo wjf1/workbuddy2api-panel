@@ -4,6 +4,34 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.15.0-panel] - 2026-10-13
+
+### 新增
+
+- **Anthropic Messages API 兼容层 `POST /v1/messages`（含 `POST /v1/messages/count_tokens`）**：Anthropic 协议客户端（Claude Code、ZCode 等）可直接把 base URL 指向本网关。实现策略是**适配而非另起一套**：Anthropic 请求 → 内部 OpenAI chat body → 复用既有 `chatCompletions` 管线（挑号 / 轮转 / 超时与 WAF 处置 / 记账）→ 响应翻译回 Anthropic 形状（流式用「转换型 ResponseWriter」把 OpenAI SSE 逐帧改写为 `message_start` / `content_block_start` / `content_block_delta` / `content_block_stop` / `message_delta` / `message_stop` 事件序列；非流式聚合为 message 对象）。错误统一为 Anthropic 错误体（`{"type":"error","error":{"type":…,"message":…}}`，状态码映射 `authentication_error` / `invalid_request_error` / `rate_limit_error` 等）。请求侧支持 `system`（字符串或文本块数组）、文本 / 图片 / `tool_use` / `tool_result` 块、`tool_choice`、`stop_sequences`；非 `web_search` 的其它服务端工具（`web_fetch_*` / `code_execution_*`）出站前静默剥离，模型照常作答（能力降级而非报错）。
+- **服务端 `web_search` 工具由网关自执行**：上游供应商不实现任何服务端工具，故客户端声明 `web_search_*` 时由网关注入函数工具 → 模型决定查询 → 网关执行检索（`internal/websearch`：so.com 结果页抓取与解析，`data-mdurl` 取真实 URL、`res-title` / `res-desc` / `data-result-summary` 取标题与摘要、`page_age` 规范化）→ 以 `server_tool_use` / `web_search_tool_result` 块回吐客户端，同时把结果以 `role:"tool"` 回灌模型继续作答。一轮内支持多轮检索（`max_uses` 预算，缺省 8、钳制 1..8）；预算耗尽自动**撤掉搜索工具 + 追加显式限额提示**；正文完全没引用来源时自动补 `Sources:` 链接列表（客户端 WebSearch 工具从正文 Markdown 链接提取来源）；检索失败以 `web_search_tool_result_error` 回执、不阻断整轮作答；模型单轮同时调用客户端工具时，检索照常执行但立即终局，把客户端工具以 `tool_use` 交回（网关内部搜索循环与客户端工具循环不混跑）。
+- **双凭证鉴权**：`internal/httpauth.VerifyAny`——Anthropic 端点同时接受 `x-api-key: <api_key>` 与 `Authorization: Bearer <api_key>`（任一命中即通过，仍走 SHA-256 摘要 + 常量时间比较）。
+- **伪工具调用文本清洗（`internal/server/dsml.go`）**：模型对「想调用但不可用的工具」会把调用语法当**正文**吐出，实测两种形态——全角竖线 DSML 标记（开块 / 参数 / 闭块，`calls` / `invoke` / `parameter` 标签）与 `<tool_call>{…}</tool_call>` 伪 XML 调用（同一提示词约 1/3 次数出现）；两者在**流式与非流式路径一致清洗**（流式为增量过滤：跨帧 holdback、字节级锚点、64KB 兜底），`<tool_call>` 形态只在块内是「工具调用形状的 JSON」时丢弃——正文里对语法的引用、普通 JSON 原样保留，防误伤。
+
+### 修复
+
+- **`StripDSMLText` 过度截断**：完整块剥离后，残留的闭合标签会再次触发「截到文末」规则，把块之后的正常正文整段吞掉（单测复现：`正文开头` + 块 + `正文结尾` → 只剩 `正文开头`）。未闭合尾规则改为只认**起始**（非闭合）标记。
+- **流式过滤器漏判闭合形态的标记起点**：只认「尖括号紧跟双竖线」，闭合标签的斜杠挡在前面，导致残留的闭合标签被当正文放行——端到端实测该缺陷会把一个闭合 `calls` 标签（17 字符）作为整段正文下发给客户端。锚点改为「尖括号 + 可选空白 + 可选斜杠 + 空白 + 双竖线」。
+- **逐字节 / 逐片喂入时的 holdback 缺口**：半截多字节竖线、半个锚点会被当正文放行（且 `strings.ToLower` 对半个多字节字符的替换会让长度与索引错位），改为字节级锚点 + 只折叠 ASCII 的 `asciiLower`，补齐前缀扣留判定。
+- **`<tool_call>` 形态清洗漏写标签之前的前缀**：删除伪调用块时把块之前的正常正文一并丢掉（新增单测锁定）。
+- **挂起态收尾判定**：流在 `<tool_call>` 未闭合时结束，改为按**载荷**（开标签之后）而非整段缓冲判断是否伪调用；非伪调用载荷会重新扫描残余锚点后原样放行。
+
+### 变更
+
+- `config.json` 新增 `search` 段：`enabled`（缺省 `true`）、`max_results`（缺省 5，钳制 1..10）、`timeout_seconds`（缺省 10，钳制 1..60），越界静默钳制；`config.example.json` 同步补充。
+- 面板「账号池」批量按钮（全部签到 / 旅行巡检 / 活跃上报 / 全部保活）补充悬浮说明（`title`）：把各按钮实际触发的动作、与每日定时任务的对应关系写在按钮上，降低「点了会发生什么」的猜测成本。
+- 版本号 `1.14.2-panel` → `1.15.0-panel`（`cmd/server/main.go` 的 `appVersion`）。
+
+### 验证
+
+- **单元测试**：`internal/server/anthropic_test.go` 21 用例（请求映射 / 图片与未知块 / 服务端工具剥离 / 非流式与流式翻译 / 工具调用事件 / 鉴权 / 参数校验 / `count_tokens` / 检索编排的多轮、预算耗尽与后端失败 / 错误体形状 / DSML 两种形态的整段与流式清洗 / 真实帧切分 / 截断兜底）；`internal/httpauth` 新增 `VerifyAny` 11 子用例；`internal/websearch` 5 用例（richsum、多空格开标签、畸形条目、去重截断、空查询与拦截页）。`go build ./...`、`go vet`（server / httpauth / websearch / cmd/server）干净，`go test ./... -count=1` **16 包全绿**。
+- **端到端**（独立沙箱实例 `:7866`，隔离 `auths/`，全调度与备份禁用，真实上游账号 + 真实 so.com 检索）：① 非流式多轮检索 3 次——`richsum` 解析出 title / url / page_age、`encrypted_content` 已填、`usage.server_tool_use.web_search_requests=3`、正文 1819 字含来源链接；② 流式事件序列完整（`message_start` → `message_stop`、5 个内容块）且正文 1700 字含来源；③ `max_uses=1` 预算耗尽——实际检索 1 次、无 DSML 泄漏、模型基于已有结果作答；④ 客户端自定义工具回传——`stop_reason=tool_use` 且 `tool_use` 块为客户端工具；⑤ 鉴权失败 401 / 缺参 400 均为 Anthropic 错误体，`count_tokens` 200；⑥ 伪调用泄漏路径 6 次采样（「模型想搜但未声明工具」场景）：**零残留**，其中 5 次伪调用被整段清除（正文为空，属预期：该轮模型只吐了伪调用）、1 次正文 1106 字完整未被误伤。
+
 ## [1.14.2-panel] - 2026-10-12
 
 ### 新增

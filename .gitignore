@@ -47,3 +47,7 @@ docs/
 *.zip
 server.exe
 .DS_Store
+
+# 发布产物与本地缓存（不入版本库）
+/dist/
+/rel.json

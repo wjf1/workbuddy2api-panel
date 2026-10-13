@@ -26,6 +26,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/websearch"
 )
 
 // Config handler 依赖。
@@ -74,6 +75,14 @@ type Config struct {
 	// 来自 logging.request_client_info（缺省 true）；关闭时 reqlog 事件的来源字段
 	// 保持为空，归档与面板都不出现来源信息。
 	RecordClientInfo bool
+
+	// Search 服务端 web_search 工具（/v1/messages）的检索后端（可选；nil =
+	// 该服务端工具被剥离、模型照常作答）。
+	Search websearch.Searcher
+	// SearchMaxResults 单次检索返回条数上限（缺省 5）。
+	SearchMaxResults int
+	// SearchTimeout 单次检索超时（缺省 10s）。
+	SearchTimeout time.Duration
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -134,11 +143,21 @@ func NewHandler(cfg Config) *Handler {
 	if cfg.PromptMode == "" {
 		cfg.PromptMode = "custom" // 缺省 custom：网关自有提示词
 	}
+	if cfg.SearchMaxResults <= 0 {
+		cfg.SearchMaxResults = 5
+	}
+	if cfg.SearchTimeout <= 0 {
+		cfg.SearchTimeout = 10 * time.Second
+	}
 	h := &Handler{cfg: cfg, mux: http.NewServeMux()}
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.models))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
+	// Anthropic Messages API 兼容层（ZCode/Claude Code 等 anthropic 协议客户端；
+	// web_search 服务端工具见 anthropic_websearch.go）。count_tokens 为估算实现。
+	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.messagesAnthropic))
+	h.mux.HandleFunc("POST /v1/messages/count_tokens", h.withAuth(h.countTokensAnthropic))
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
 	}
@@ -146,7 +165,8 @@ func NewHandler(cfg Config) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.cfg.RequestLog != nil && r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions" {
+	if h.cfg.RequestLog != nil && r.Method == http.MethodPost &&
+		(r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/messages") {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now()}
 		if h.loadLive().RecordClientInfo {
 			trace.captureClientInfo(r)
@@ -170,7 +190,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !httpauth.VerifyBearer(r, h.loadLive().APIKey) {
+		if !httpauth.VerifyAny(r, h.loadLive().APIKey) {
+			// Anthropic 面用 Anthropic 错误体（Claude Code / ZCode 按其协议解析）。
+			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
+				writeAnthropicError(w, http.StatusUnauthorized, "authentication_error",
+					"missing or invalid API key (send x-api-key or Authorization: Bearer)")
+				return
+			}
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 			return
 		}

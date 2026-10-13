@@ -686,10 +686,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <input id="accFilterQ" type="search" placeholder="筛选：昵称 / uid" style="width:150px;margin-right:6px" title="按昵称或 uid 过滤账号列表">
           <select id="accFilterTag" style="margin-right:6px" title="按标签过滤账号列表"><option value="">全部标签</option></select>
           <span class="note" id="accNote"></span>
-          <button class="xs" id="btnCheckinAll">全部签到</button>
-          <button class="xs" id="btnTravelAll">旅行巡检</button>
-          <button class="xs" id="btnActivityAll">活跃上报</button>
-          <button class="xs" id="btnKeepaliveAll">全部保活</button>
+          <button class="xs" id="btnCheckinAll" title="立即对全部账号执行一次签到：签到 + 刷新余额（余额恢复的冷却账号自动解冻），随后自动兑换连登已解锁档位、用完抽奖次数。等同提前跑一次每日定时签到（默认 9 / 21 点）。">全部签到</button>
+          <button class="xs" id="btnTravelAll" title="立即推进猫猫旅行：没领猫的自动同意协议并领养、在家的派出旅行、已到达的领取奖励。等同提前跑一次每日定时旅行（默认 9 / 21 点）。">旅行巡检</button>
+          <button class="xs" id="btnActivityAll" title="立即为全部账号上报一次对话活跃：点亮连登天数并解锁领养（first_buddy）前置条件，每号每天 1 次。等同提前跑一次每日定时活跃上报（默认 10 点）。">活跃上报</button>
+          <button class="xs" id="btnKeepaliveAll" title="立即刷新全部账号的登录凭证 token，保持账号持续有效；session 连续 3 次失效才会自动禁用（防误杀）。等同提前跑一次每日定时保活（默认 22 点）。">全部保活</button>
         </header>
         <div class="tbl-wrap">
         <table class="acc">
