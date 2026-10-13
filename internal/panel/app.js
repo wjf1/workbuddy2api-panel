@@ -2480,7 +2480,10 @@ function renderUsageChart(series) {
            '" text-anchor="start">均值 ' + fmtTok(avg) + '</text>';
   }
 
-  // 柱子
+  // 柱子：每个点用 <g> 包住「prompt 柱 + completion 柱 + <title>」。
+  // 关键：<title> 只描述它的**父元素**。此前把它与 <rect> 平级挂在 <svg> 下，
+  // 浏览器就把它当成整张图的说明且只取第一个——于是不管悬停哪根柱子，提示都
+  // 显示第一个桶的数字（实测：14:00 的 24.29M 峰值柱上悬停显示 09:00 的 4.62M）。
   const yBase = PT + ih;
   for (const p of pts) {
     const x = xOf(p.t) - bw / 2;
@@ -2490,6 +2493,7 @@ function renderUsageChart(series) {
     // 圆角只给堆叠顶端（贴轴的底边保持方角，柱子才像"立"在基线上）。
     // 类名用 usbar 而不是 bar：账号池的积分条是 .bar{height:3px}，而 SVG2 里
     // height 是 rect 的 CSS 几何属性，同名类会把每根柱子压成 3px 高（踩过）。
+    out += '<g>';
     if (hP > 0) out += '<rect class="usbar" x="' + x.toFixed(2) + '" y="' + (yBase - hP).toFixed(2) +
       '" width="' + bw.toFixed(2) + '" height="' + hP.toFixed(2) +
       '" fill="url(#usGradP)"' + (hC > 0 ? '' : ' rx="1.5"') + '/>';
@@ -2497,7 +2501,8 @@ function renderUsageChart(series) {
       '" width="' + bw.toFixed(2) + '" height="' + hC.toFixed(2) +
       '" fill="url(#usGradC)" rx="1.5"/>';
     out += '<title>' + esc(p.raw) + '  ' + fmtTok(p.pt) + ' prompt / ' +
-           fmtTok(p.ct) + ' completion / ' + p.req + ' 次</title>';
+           fmtTok(p.ct) + ' completion / ' + p.req + ' 次</title>' +
+           '</g>';
   }
 
   // 峰值标注：柱子够窄时文字压在柱顶，够宽时贴右侧避免和柱体重叠。

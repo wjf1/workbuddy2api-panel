@@ -461,6 +461,15 @@ const series = [
 ];
 ctx.renderUsageChart(series);
 const svg = host.innerHTML;
+// tooltip 归属断言：<title> 必须是「某根柱子所在 <g>」的子元素。挂在 <svg> 下
+// 时浏览器只认第一个，悬停任意柱子都会显示第一个桶的数字（2026-10-13 实测）。
+let depth = 0, outsideG = 0;
+for (const m of svg.matchAll(/<g>|<\/g>|<title>/g)) {
+  if (m[0] === '<g>') depth++;
+  else if (m[0] === '</g>') depth--;
+  else if (depth <= 0) outsideG++;
+}
+const gBlocks = svg.match(/<g>[\s\S]*?<\/g>/g) || [];
 process.stdout.write(JSON.stringify({
   hasUsbar: svg.includes('class="usbar"'),
   hasBareBar: /class="bar"/.test(svg),
@@ -468,6 +477,10 @@ process.stdout.write(JSON.stringify({
   barCount: (svg.match(/class="usbar"/g) || []).length,
   hasPeak: svg.includes('峰值'),
   hasAvg: svg.includes('均值'),
+  gBlocks: gBlocks.length,
+  titlesOutsideG: outsideG,
+  titlesPerPoint: gBlocks.length === series.length &&
+    gBlocks.every((b, i) => (b.match(/<title>/g) || []).length === 1 && b.includes(series[i].t)),
   emptyState: (function () { ctx.renderUsageChart([]); return host.innerHTML.includes('us-empty'); })(),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "usage-chart-*.cjs")
@@ -482,7 +495,7 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("usage chart node test failed: %v\n%s", err, out)
 	}
-	const want = `{"hasUsbar":true,"hasBareBar":false,"hasGradient":true,"barCount":6,"hasPeak":true,"hasAvg":true,"emptyState":true}`
+	const want = `{"hasUsbar":true,"hasBareBar":false,"hasGradient":true,"barCount":6,"hasPeak":true,"hasAvg":true,"gBlocks":3,"titlesOutsideG":0,"titlesPerPoint":true,"emptyState":true}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("usage chart=%s\nwant %s", out, want)
 	}

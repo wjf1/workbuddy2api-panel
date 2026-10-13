@@ -53,7 +53,14 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（1.15.0-panel）
+## 4. 最近一轮变更与交付成果（1.15.1-panel）
+
+- **用量时序图悬停提示绑错元素（真实面板报障 → 修复）**：`<title>` 写成了 `<svg>` 的直接子元素，而 SVG 的 `<title>` 只描述**父元素**，浏览器据此把它当作整张图的说明且只取第一个 → **悬停任意柱子都显示第一个时间桶的数字**。修复 = 每个点的「两根柱 + `<title>`」用 `<g>` 包住（`internal/panel/app.js` 的 `renderUsageChart`）。
+- **断言固化**：`frontend_test.go` 的图表用例新增「`<svg>` 直接子元素不得含 `<title>`」「每点一个 `<g>`」「每 `<g>` 恰好一个 `<title>`」三项，修复前会失败。
+- **验证**：`go test ./... -count=1` 16 包全绿；真实浏览器（IAB）逐柱 `elementFromPoint`/祖先链断言 + 真实鼠标移动 + `mouseover` 监听复核（09:00 → 4.62M/44.6k/65 次、14:00 → 23.97M/313.7k/149、15:00 → 24.82M/249.7k/193 各自命中）。
+- **注意**：原生 `<title>` 提示由浏览器 UI 层绘制，**不会出现在页面截图里**——验收必须用「真实事件命中的归属」判定，别拿截图当证据。
+
+## 4.1 上一轮（1.15.0-panel）
 
 - **Anthropic Messages API 兼容层**：新增 `POST /v1/messages` 与 `POST /v1/messages/count_tokens`（请求侧 `anthropic.go`、响应侧 `anthropic_response.go`）。核心取舍是**不复制调度逻辑**：Anthropic 请求转成内部 OpenAI chat body 后复用既有 `chatCompletions`（挑号 / 轮转 / 超时与 WAF 处置 / 记账），响应用「转换型 ResponseWriter」逐帧改写回 Anthropic 事件序列（流式）或 message 对象（非流式）；错误统一 Anthropic 错误体；非 `web_search` 的服务端工具（`web_fetch_*` / `code_execution_*`）出站前剥离（能力降级而非报错）。
 - **服务端 `web_search` 由网关自执行**（`anthropic_websearch.go` + `internal/websearch/`）：客户端声明 `web_search_*` → 网关注入函数工具 → 模型给查询 → 网关抓 so.com 并解析 → 回吐 `server_tool_use` / `web_search_tool_result` 块，同时以 `role:"tool"` 回灌模型继续作答；一轮内多轮检索受 `max_uses`（缺省 8、钳 1..8）约束，预算耗尽**撤工具 + 追加限额提示**；正文没引用来源时补 `Sources:` 列表；非流式路径走多 pass 聚合同样支持。
@@ -63,18 +70,18 @@ data/backups/          备份输出（同上）
 - **配置**：`search.enabled`（缺省 true）/ `search.max_results`（钳 1..10）/ `search.timeout_seconds`（钳 1..60），`config.example.json` 同步补充。
 - **验证**：`go build ./...`、`go vet`（server / httpauth / websearch / cmd/server）干净；`go test ./... -count=1` **16 包全绿**（`anthropic_test.go` 21 用例、httpauth `VerifyAny` 11 子用例、websearch 5 用例）。端到端在独立沙箱 `:7866`（隔离 `auths/`、全调度与备份禁用）跑完 6 项主矩阵 + 伪调用泄漏路径 6 采样，全部通过（具体数字见 CHANGELOG 1.15.0「验证」节）。
 
-## 4.1 上一轮（1.14.2-panel）
+## 4.2 上一轮（1.14.2-panel）
 
 - **导入格式兼容升级**：`POST /panel/api/import/cockpit` 从严格单形状（`[]cockpitAccount`）升级为**逐文件/逐元素形状嗅探**，直接兼容四类既有产物：嵌套形账号文件（`{"account":{...},"auth":{...}}`，即 auths 落盘口径，**秒**级 `expiresAt`；单对象与数组均支持）、扁平单对象、嵌套形+cockpit 扁平的混合数组、**zip 整包**（内部 `*.json` 自动解包，跳过 `__MACOSX`/`._`/非 json；单坏文件只记 errors 不阻断）；另支持多文件 multipart。实现分层：`parseImportPayload`（首字符 + probe 分派）→ `classifyAccountEntry`（含 `auth`/`accessToken` 键走 `auth.Parse` → `nestedToCockpit` 秒→毫秒映射；否则按 cockpitAccount 反序列化）→ `expandPayloadFile`（zip magic 探测与解包，条目 4MB LimitReader）。错误语义：单负载请求硬错误 400（保留既有文案），多负载降级 `errors` 条目。
 - **前端**：「导入 JSON」页签 `accept=".json,.zip"` + `multiple`，提示文案更新；`d.errors` 前 3 条渲染进 `#importErr`（此前仅 console）。
 - **验证**：新增 `roundtrip_test.go` 六用例（嵌套单对象/嵌套数组混合/数组坏元素/扁平单对象/zip 整包/形状无法识别 400），既有三用例回归全绿；`go vet` 干净、`go test ./... -count=1` 全绿（15 包）。真实浏览器走查（临时实例 :7864 + 独立 auths）：zip 导入成功 3 个 + 坏文件红字明细（祖先链含 `#addTabImport`）、非法 JSON 明确报错（`weird.json: unrecognized format`）、落盘嵌套形无损。注意：本次走查在 ZCode 内置浏览器（IAB）执行，该后端定位器/坐标点击在此页面持续超时（宿主工具限制），点击经页面内真实 handler 触发；其余链路真实执行。
 
-## 4.2 再上一轮（1.14.1-panel）
+## 4.3 再上一轮（1.14.1-panel）
 
 - **导出 → 导入往返完整性修复**：边界账号端到端实测发现三缺口——device_token 往返丢失（导出/导入格式补 `device_token` 键 + `auth.DeviceTokenValue()` 访问器）、显式 realm 被 domain 推断搬家（导出补 `realm`，导入显式优先、空回落推断）、零过期回落 +365d（既有兜底设计，测试锁定）。导入的上游副作用加 `Upstream == nil` 守卫（裸装配不 panic）。
 - **导出/导入字段契约（1.14.1 起完整清单）**：`id / uid / nickname / access_token / refresh_token / token_type / expires_at(毫秒) / domain / tags / realm(显式) / device_token`——往返全字段无损（正常账号）；`roundtrip_test.go` 锁定。
 
-## 4.3 更早一轮（1.14.0-panel）
+## 4.4 更早一轮（1.14.0-panel）
 
 - 账号回收站（软删除）/ 账号标签（tags）/ 余额预警横幅 / 定时备份四件套 + `trash.retention_days`、`backup.enabled/hour/keep` 四配置键（详见 CHANGELOG 1.14.0 条目）。
 
@@ -116,4 +123,6 @@ data/backups/          备份输出（同上）
 - **Anthropic E2E 沙箱（2026-10-13 状态：两个实例均已停止，目录与夹具保留）**：`:7865` → `F:\AI\wb2api-e2e\wb2api-test.exe`（上一轮遗留、旧二进制，已被 `:7866` 取代）；`:7866` → `F:\AI\wb2api-e2e-dev\wb2api-dev.exe`（开发用；key `sk-e2e-dev-7866`，`auths/` 是生产账号目录的复制，`config.json` 里全调度 / 备份禁用）。**重启方式**：`cd F:/AI/wb2api-e2e-dev && go build -o wb2api-dev.exe ./cmd/server`（在源码目录构建）+ 后台运行 `./wb2api-dev.exe`；请求样本与断言脚本都在该目录（`e2e-*.json` / `runner.sh` / `runner2.sh` / `check.js` / `check-dsml2.js`），改代码后重跑即可。测试账号可安全复制：token 刷新是 **rotate 不 revoke**（旧 token 仍有效），CN 账号约 27 天有效期。清理进程只按精确镜像名（`taskkill /F /IM wb2api-dev.exe`）或精确 PID，**不要用通配**（会连带杀掉生产的 `wb2api.exe`）。
 - **中文请求体必须走 UTF-8 文件**：Git Bash 内联 `-d '中文...'` 会按 GBK 编码发出，上游可能解析成乱码或 400；一律写 `.json` 文件 + `--data-binary @file`。
 - **Git Bash 的 `/tmp` 与 Node 不互通**：`curl -o /tmp/x.json` 之后 `node -e "readFileSync('/tmp/x.json')"` 会报 `ENOENT ... F:\tmp\x.json`（Node 按 Windows 语义解析）。要跨两者传文件就用相对路径（先 `cd` 到同一目录）或 Windows 绝对路径。
+- **SVG `<title>` 只描述父元素**（面板用量图踩过）：想给多个图形分别配提示，必须把「图形 + `<title>`」一起放进各自的 `<g>`；挂成 `<svg>` 的并列子元素时，浏览器只认第一个，于是所有柱子共用同一个提示。判据用「真实事件命中的元素 → 祖先链里最近的带 `<title>` 的容器」，**不要用截图**（原生提示由浏览器 UI 层绘制，不进页面截图）。
+- **用量图的读法（面板答疑）**：时序图只画**有流量的时间桶**，窗口内没请求的小时/日子没有柱子（横向按真实时间排布，所以中间留空白——不要误判为"数据缺失"）；「今天」范围下每点 = 一小时。顶部那句「**N 个分桶**」是窗口内命中的**存储桶条目数**（`internal/usage` 的 `matched`，每个「时段 × 账号 × 模型 × 倍率」组合算一条），**不是时间点数**。
 - **CI 发布的 Release 标题 / 正文不合规范**：`.github/workflows/go-binaries.yml` 的 publish 任务用 `name: <tag>-panel` + 通用正文，**推 tag 后必须** `gh release edit <tag> --title "vX.Y.Z: 中文摘要" --notes-file <对齐 CHANGELOG 的正文>`（保留 CI 给的 compare 链接在正文里），这是本仓既有惯例。
