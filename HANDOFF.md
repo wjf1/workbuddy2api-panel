@@ -8,7 +8,7 @@
 - **当前版本**：`1.15.0-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
 - **仓库**：`https://github.com/wjf1/workbuddy2api-panel`，本地工作区 `F:\AI\wb2api-src`（2026-10-13 当前开发目录；旧交接文档写的 `F:\AI\workbuddy2api-panel` 已不存在），分支 `main`。
 - **最近 tag**：`v1.15.0`（`v1.15.0: Anthropic Messages 兼容层与服务端 web_search`）；历史 `v1.14.2`（导入格式兼容升级）、`v1.14.1`（导出导入往返完整性修复）、`v1.14.0`（账号回收站、标签管理、余额预警与定时备份）。
-- **本地生产网关**：`F:\AI\wb2api-panel-v1.13.0-windows-amd64\`（目录名是历史遗留，实际内容随更新推进），Windows 计划任务 `WorkBuddy2API`（SYSTEM、开机自启、失败重启）跑 `start-gateway.cmd`；更新惯例 = 停任务 → `wb2api.exe.pre-<新版本>.bak` 备份 → 替换官方 Release exe → 起任务（停/启需管理员，走 PowerShell `-Verb RunAs` + UAC，`schtasks /End|/Run` 在 Git Bash 需 `MSYS_NO_PATHCONV=1`）。另有一处 `:7863` 实例（`F:\AI\wb2api`，含 `auths/` 14 个账号）在同机运行，改生产前先确认到底哪套在对外服务。
+- **本地生产网关（2026-10-13 核实）**：目录 `F:\AI\wb2api\`（`wb2api.exe` + `config.json` + `auths/` 14 个账号），监听 `:7863`，Windows 计划任务名就叫 **`wb2api`**（不是旧文档写的 `WorkBuddy2API`；任务定义备份在该目录 `wb2api-task.xml`）。更新惯例 = 停任务 → 备份成 `wb2api.exe.v<旧版本>-official.bak` → 替换 exe → 起任务（停/启需管理员，走 PowerShell `-Verb RunAs` + UAC，`schtasks /End|/Run` 在 Git Bash 需 `MSYS_NO_PATHCONV=1`）。该实例的 `config.json` **没有 `search` 段**——加载时取 `Default()` 兜底，升级后服务端 web_search 默认即启用（想关再显式写 `"search":{"enabled":false}`）。
 
 ## 2. 技术栈与运行基线
 
