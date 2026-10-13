@@ -98,6 +98,86 @@ func TestAnthropicToOpenAIMapping(t *testing.T) {
 	}
 }
 
+// 对话中途 system（role=system 出现在 messages 数组内）必须透传而非报错：
+// ZCode / Claude Code 等客户端用它承载中途注入的系统提醒。回归自 v1.15.2 之前
+// 该形态被拒为 400 messages[n]: unsupported role "system" 的问题。
+func TestAnthropicMidConversationSystemPassthrough(t *testing.T) {
+	reqJSON := `{
+	  "model":"cn:deepseek-v4.1-flash","max_tokens":64,
+	  "system":"顶层系统提示",
+	  "messages":[
+	    {"role":"user","content":"你好"},
+	    {"role":"system","content":"中途提醒：保持简洁"},
+	    {"role":"user","content":"继续"}
+	  ]
+	}`
+	var req anthropicRequest
+	if err := json.Unmarshal([]byte(reqJSON), &req); err != nil {
+		t.Fatal(err)
+	}
+	body, _, err := anthropicToOpenAI(&req)
+	if err != nil {
+		t.Fatalf("中途 system 不应报错: %v", err)
+	}
+	msgs, _ := body["messages"].([]any)
+	if len(msgs) != 4 { // 顶层 system + user + 中途 system + user
+		t.Fatalf("messages len = %d: %#v", len(msgs), msgs)
+	}
+	if m := msgs[0].(map[string]any); m["role"] != "system" || m["content"] != "顶层系统提示" {
+		t.Errorf("顶层 system = %#v", m)
+	}
+	if m := msgs[2].(map[string]any); m["role"] != "system" || m["content"] != "中途提醒：保持简洁" {
+		t.Errorf("中途 system = %#v", m)
+	}
+}
+
+// 中途 system 以 text 块数组承载时归一为纯字符串（与顶层 system 的处理一致）。
+func TestAnthropicMidConversationSystemBlocks(t *testing.T) {
+	var req anthropicRequest
+	if err := json.Unmarshal([]byte(`{"model":"m","max_tokens":8,"messages":[
+	  {"role":"user","content":"hi"},
+	  {"role":"system","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	body, _, err := anthropicToOpenAI(&req)
+	if err != nil {
+		t.Fatalf("块数组中途 system 不应报错: %v", err)
+	}
+	msgs, _ := body["messages"].([]any)
+	if m := msgs[1].(map[string]any); m["role"] != "system" || m["content"] != "a\nb" {
+		t.Errorf("中途 system(块) = %#v", m)
+	}
+}
+
+// 空 content 的中途 system 直接丢弃，不向上游转发空 system 消息。
+func TestAnthropicMidConversationSystemEmptyDropped(t *testing.T) {
+	var req anthropicRequest
+	if err := json.Unmarshal([]byte(`{"model":"m","max_tokens":8,"messages":[
+	  {"role":"user","content":"hi"},
+	  {"role":"system","content":""}]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	body, _, err := anthropicToOpenAI(&req)
+	if err != nil {
+		t.Fatalf("空中途 system 不应报错: %v", err)
+	}
+	msgs, _ := body["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("空 system 应被丢弃, messages = %#v", msgs)
+	}
+}
+
+// 白名单之外的 role 仍须报错，避免把畸形请求静默透传给上游。
+func TestAnthropicUnsupportedRoleStillRejected(t *testing.T) {
+	var req anthropicRequest
+	if err := json.Unmarshal([]byte(`{"model":"m","messages":[{"role":"developer","content":"x"}]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := anthropicToOpenAI(&req); err == nil {
+		t.Fatal("developer role 应被拒绝")
+	}
+}
+
 func fn2Schema(tool any) (any, bool) {
 	fn, _ := tool.(map[string]any)["function"].(map[string]any)
 	if fn == nil {

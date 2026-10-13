@@ -5,10 +5,11 @@
 ## 1. 项目概况与当前状态
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
-- **当前版本**：`1.15.0-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
-- **仓库**：`https://github.com/wjf1/workbuddy2api-panel`，本地工作区 `F:\AI\wb2api-src`（2026-10-13 当前开发目录；旧交接文档写的 `F:\AI\workbuddy2api-panel` 已不存在），分支 `main`。
-- **最近 tag**：`v1.15.0`（`v1.15.0: Anthropic Messages 兼容层与服务端 web_search`）；历史 `v1.14.2`（导入格式兼容升级）、`v1.14.1`（导出导入往返完整性修复）、`v1.14.0`（账号回收站、标签管理、余额预警与定时备份）。
-- **本地生产网关（2026-10-13 核实）**：目录 `F:\AI\wb2api\`（`wb2api.exe` + `config.json` + `auths/` 14 个账号），监听 `:7863`，Windows 计划任务名就叫 **`wb2api`**（不是旧文档写的 `WorkBuddy2API`；任务定义备份在该目录 `wb2api-task.xml`）。**当前已部署 `1.15.0-panel`**（2026-10-13 升级并验收：healthz 14/14 账号、`/v1/messages` 文本正常、服务端 web_search 实检索 3 轮通过；升级前 exe 备份为 `wb2api.exe.v1.14.2-local.bak`）。更新惯例 = 停任务 → 备份成 `wb2api.exe.v<旧版本>-<来源>.bak` → 替换 exe（Release 的 `wb2api-panel-v<版本>-windows-amd64.zip` 内）→ 起任务（停/启需管理员，走 PowerShell `-Verb RunAs` + UAC，`schtasks /End|/Run` 在 Git Bash 需 `MSYS_NO_PATHCONV=1`）。该实例的 `config.json` **没有 `search` 段**——加载时取 `Default()` 兜底，升级后服务端 web_search 默认即启用（想关再显式写 `"search":{"enabled":false}`）。
+- **当前版本**：`1.15.2-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。
+- **仓库**：`https://github.com/wjf1/workbuddy2api-panel`，本地工作区 `F:\AI\workbuddy2api-panel`（**2026-10-13 本机 DESKTOP-DVFFB09 实测存在**；本文件此前写的 `F:\AI\wb2api-src` 在本机并不存在——疑似上一轮会话在另一台机器/另一份检出上核实后写错，已按本机实际订正），分支 `main`。
+- **最近 tag**：`v1.15.2`（`v1.15.2: Anthropic 兼容层支持对话中途 system，修复 ZCode 接入 400`）；历史 `v1.15.1`（修复用量图悬停提示绑错元素）、`v1.15.0`（Anthropic Messages 兼容层与服务端 web_search）、`v1.14.2`（导入格式兼容升级）、`v1.14.1`（导出导入往返完整性修复）、`v1.14.0`（账号回收站、标签管理、余额预警与定时备份）。
+- **本地生产网关（2026-10-13 本机重新核实并升级）**：目录 **`F:\AI\wb2api-panel-v1.13.0-windows-amd64\`**（目录名是历史遗留，内容随版本推进；内有 `wb2api.exe` + `config.json` + `auths/` 17 个账号 + `start-gateway.cmd` + 历史 `wb2api.exe.*.bak`），监听 `:7863`；Windows 计划任务名 **`WorkBuddy2API`**（注册为 `S-1-5-18` SYSTEM，故**非提权读不到**——`schtasks /query /tn WorkBuddy2API` 报「拒绝访问」即任务存在，报「找不到」才是真没有；定义备份在该目录 `task-definition.xml`，动作 = `start-gateway.cmd`）。**当前已部署 `1.15.1-panel`**（2026-10-13 20:47 从 `1.14.2-panel` 升级并验收：healthz 17/17、`/v1/models` 200、`/v1/chat/completions` 真实请求返回正常、`/v1/messages` 路由在位、服务端 web_search 已启用；升级前 exe 备份为 `wb2api.exe.pre-1.15.1.bak`）。更新惯例 = 停任务 → 备份成 `wb2api.exe.pre-<新版本>.bak` → 替换 exe（Release 的 `wb2api-panel-v<版本>-windows-amd64.zip` 内，或本机 `go build`）→ 起任务；**停机约 2–3 秒**，任务失败重启策略（`PT1M`×3）与开机自启（`PT20S`）保留。该实例的 `config.json` **没有 `search` 段**——加载时取 `Default()` 兜底，故 1.15.0 起服务端 web_search 默认即启用（想关再显式写 `"search":{"enabled":false}`）。
+  - **本机部署避坑（2026-10-13 实测）**：① 计划任务注册为 SYSTEM，`schtasks /End|/Run`、`Get-ScheduledTask -TaskName`、`tasklist/taskkill` 均需**管理员**；本机 UAC 策略为 `ConsentPromptBehaviorAdmin=0`（管理员静默提权，不弹窗），`Start-Process -Verb RunAs` 可直接提权。② **无 BOM 的中文 `.ps1` 会被 Windows PowerShell 5.1 按 ANSI 读成乱码导致解析失败**（`Try 语句缺少 Catch/Finally`）——部署脚本改用**纯 ASCII 的 `.cmd` 批处理**最稳。③ Git Bash 里 `taskkill //F //IM x.exe` 会把 `//F` 原样传给程序报「无效参数」——用 `powershell Stop-Process -Name x` 或 `cmd /c` 代替。④ 清理测试进程**只能按精确镜像名**（如 `wb2api-smoke.exe`），**禁止 `wb2api*.exe` 通配**（会连带杀掉生产 `wb2api.exe`）。
 
 ## 2. 技术栈与运行基线
 
@@ -53,14 +54,22 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（1.15.1-panel）
+## 4. 最近一轮变更与交付成果（1.15.2-panel）
+
+- **Anthropic 兼容层拒绝「对话中途 system」，ZCode 接入直接 400（本机接入实测 → 修复）**：ZCode / Claude Code 会把中途注入的系统提醒作为 `{"role":"system"}` 放进 `messages` 数组（Anthropic Messages API 的 mid-conversation system 形态），而 `internal/server/anthropic.go` 的 `convertAnthropicMessage` 的 role 白名单只放行 `user` / `assistant`，命中即回 `400 messages[n]: unsupported role "system"`——在 ZCode 侧显示为 `Provider rejected the model request / invalid_request status=400`（`messages[1]: unsupported role "system"`）。修复 = 增加 `system` 分支，透传为 OpenAI `role:"system"` 消息并保持其在消息流中的位置（不合并、不重排）；`content` 为字符串或文本块数组都归一为纯文本，空 content 直接丢弃；白名单外的 role（`developer` 等）仍照旧拒绝。
+- **上游语义核对**（补齐 `internal/upstream/payload.go` 里「上游对多 system 的行为尚未实测」的空白）：经 `/v1/chat/completions` 实测上游接受 messages 中段的 system——单条中途 system、以及「顶层 system + 中途 system + user」组合均返回 `200`，故原位透传与上游语义一致。
+- **测试**：`internal/server/anthropic_test.go` 新增 4 条（中途 system 字符串形态 / 文本块数组形态透传且位置不变、空 content 的中途 system 被丢弃、白名单外 role 仍报错）；`go test ./internal/server/ -run Anthropic` 20 条全过；`go build ./...` 干净；`go test ./... -count=1` 16 包全绿。
+- **回归复现命令**：`curl -s http://127.0.0.1:7863/v1/messages -H "x-api-key: <key>" -H "content-type: application/json" -d '{"model":"cn:deepseek-v4.1-flash","max_tokens":8,"messages":[{"role":"user","content":"hi"},{"role":"system","content":"r"}]}'` —— 修复前 400 `unsupported role "system"`，修复后 200。
+
+## 4.1 上一轮（1.15.1-panel）
 
 - **用量时序图悬停提示绑错元素（真实面板报障 → 修复）**：`<title>` 写成了 `<svg>` 的直接子元素，而 SVG 的 `<title>` 只描述**父元素**，浏览器据此把它当作整张图的说明且只取第一个 → **悬停任意柱子都显示第一个时间桶的数字**。修复 = 每个点的「两根柱 + `<title>`」用 `<g>` 包住（`internal/panel/app.js` 的 `renderUsageChart`）。
 - **断言固化**：`frontend_test.go` 的图表用例新增「`<svg>` 直接子元素不得含 `<title>`」「每点一个 `<g>`」「每 `<g>` 恰好一个 `<title>`」三项，修复前会失败。
 - **验证**：`go test ./... -count=1` 16 包全绿；真实浏览器（IAB）逐柱 `elementFromPoint`/祖先链断言 + 真实鼠标移动 + `mouseover` 监听复核（09:00 → 4.62M/44.6k/65 次、14:00 → 23.97M/313.7k/149、15:00 → 24.82M/249.7k/193 各自命中）。
 - **注意**：原生 `<title>` 提示由浏览器 UI 层绘制，**不会出现在页面截图里**——验收必须用「真实事件命中的归属」判定，别拿截图当证据。
+- **本地生产网关同步升级（2026-10-13 20:47）**：本机 `F:\AI\wb2api-panel-v1.13.0-windows-amd64\` 实例由 `1.14.2-panel` 升级到 `1.15.1-panel`（跳过 1.15.0 首次部署，直接落到 1.15.1，同时带上 Anthropic `/v1/messages` 兼容层与服务端 web_search）。流程 = 停任务 `WorkBuddy2API` → 备份 `wb2api.exe.pre-1.15.1.bak` → 用 Release `wb2api-panel-v1.15.1-windows-amd64.zip`（sha256 `57ec8b5b…4470f`，与 `checksums.txt` 一致）内 exe 替换 → 起任务；停机约 2–3 秒。验收：隔离冒烟（版本 `1.15.1-panel`、`/v1/messages` 路由在位、`服务端 web_search 已启用`）+ 生产实例 healthz 17/17、`/v1/models` 200、`/v1/chat/completions` 真实返回 `OK`。
 
-## 4.1 上一轮（1.15.0-panel）
+## 4.2 上一轮（1.15.0-panel）
 
 - **Anthropic Messages API 兼容层**：新增 `POST /v1/messages` 与 `POST /v1/messages/count_tokens`（请求侧 `anthropic.go`、响应侧 `anthropic_response.go`）。核心取舍是**不复制调度逻辑**：Anthropic 请求转成内部 OpenAI chat body 后复用既有 `chatCompletions`（挑号 / 轮转 / 超时与 WAF 处置 / 记账），响应用「转换型 ResponseWriter」逐帧改写回 Anthropic 事件序列（流式）或 message 对象（非流式）；错误统一 Anthropic 错误体；非 `web_search` 的服务端工具（`web_fetch_*` / `code_execution_*`）出站前剥离（能力降级而非报错）。
 - **服务端 `web_search` 由网关自执行**（`anthropic_websearch.go` + `internal/websearch/`）：客户端声明 `web_search_*` → 网关注入函数工具 → 模型给查询 → 网关抓 so.com 并解析 → 回吐 `server_tool_use` / `web_search_tool_result` 块，同时以 `role:"tool"` 回灌模型继续作答；一轮内多轮检索受 `max_uses`（缺省 8、钳 1..8）约束，预算耗尽**撤工具 + 追加限额提示**；正文没引用来源时补 `Sources:` 列表；非流式路径走多 pass 聚合同样支持。
@@ -70,23 +79,24 @@ data/backups/          备份输出（同上）
 - **配置**：`search.enabled`（缺省 true）/ `search.max_results`（钳 1..10）/ `search.timeout_seconds`（钳 1..60），`config.example.json` 同步补充。
 - **验证**：`go build ./...`、`go vet`（server / httpauth / websearch / cmd/server）干净；`go test ./... -count=1` **16 包全绿**（`anthropic_test.go` 21 用例、httpauth `VerifyAny` 11 子用例、websearch 5 用例）。端到端在独立沙箱 `:7866`（隔离 `auths/`、全调度与备份禁用）跑完 6 项主矩阵 + 伪调用泄漏路径 6 采样，全部通过（具体数字见 CHANGELOG 1.15.0「验证」节）。
 
-## 4.2 上一轮（1.14.2-panel）
+## 4.3 上一轮（1.14.2-panel）
 
 - **导入格式兼容升级**：`POST /panel/api/import/cockpit` 从严格单形状（`[]cockpitAccount`）升级为**逐文件/逐元素形状嗅探**，直接兼容四类既有产物：嵌套形账号文件（`{"account":{...},"auth":{...}}`，即 auths 落盘口径，**秒**级 `expiresAt`；单对象与数组均支持）、扁平单对象、嵌套形+cockpit 扁平的混合数组、**zip 整包**（内部 `*.json` 自动解包，跳过 `__MACOSX`/`._`/非 json；单坏文件只记 errors 不阻断）；另支持多文件 multipart。实现分层：`parseImportPayload`（首字符 + probe 分派）→ `classifyAccountEntry`（含 `auth`/`accessToken` 键走 `auth.Parse` → `nestedToCockpit` 秒→毫秒映射；否则按 cockpitAccount 反序列化）→ `expandPayloadFile`（zip magic 探测与解包，条目 4MB LimitReader）。错误语义：单负载请求硬错误 400（保留既有文案），多负载降级 `errors` 条目。
 - **前端**：「导入 JSON」页签 `accept=".json,.zip"` + `multiple`，提示文案更新；`d.errors` 前 3 条渲染进 `#importErr`（此前仅 console）。
 - **验证**：新增 `roundtrip_test.go` 六用例（嵌套单对象/嵌套数组混合/数组坏元素/扁平单对象/zip 整包/形状无法识别 400），既有三用例回归全绿；`go vet` 干净、`go test ./... -count=1` 全绿（15 包）。真实浏览器走查（临时实例 :7864 + 独立 auths）：zip 导入成功 3 个 + 坏文件红字明细（祖先链含 `#addTabImport`）、非法 JSON 明确报错（`weird.json: unrecognized format`）、落盘嵌套形无损。注意：本次走查在 ZCode 内置浏览器（IAB）执行，该后端定位器/坐标点击在此页面持续超时（宿主工具限制），点击经页面内真实 handler 触发；其余链路真实执行。
 
-## 4.3 再上一轮（1.14.1-panel）
+## 4.4 再上一轮（1.14.1-panel）
 
 - **导出 → 导入往返完整性修复**：边界账号端到端实测发现三缺口——device_token 往返丢失（导出/导入格式补 `device_token` 键 + `auth.DeviceTokenValue()` 访问器）、显式 realm 被 domain 推断搬家（导出补 `realm`，导入显式优先、空回落推断）、零过期回落 +365d（既有兜底设计，测试锁定）。导入的上游副作用加 `Upstream == nil` 守卫（裸装配不 panic）。
 - **导出/导入字段契约（1.14.1 起完整清单）**：`id / uid / nickname / access_token / refresh_token / token_type / expires_at(毫秒) / domain / tags / realm(显式) / device_token`——往返全字段无损（正常账号）；`roundtrip_test.go` 锁定。
 
-## 4.4 更早一轮（1.14.0-panel）
+## 4.5 更早一轮（1.14.0-panel）
 
 - 账号回收站（软删除）/ 账号标签（tags）/ 余额预警横幅 / 定时备份四件套 + `trash.retention_days`、`backup.enabled/hour/keep` 四配置键（详见 CHANGELOG 1.14.0 条目）。
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 
+- **1.15.2 尚未部署到本机生产网关**（`F:\AI\wb2api-panel-v1.13.0-windows-amd64\` 仍跑 `1.15.1-panel`）：打完 tag 推完 Release 后，按第 1 节的部署惯例更新（停 `WorkBuddy2API` → 备份 exe → 替换 → 起任务，停机约 2–3 秒）；随后在 ZCode 里把该 provider 的 API 格式切回 Anthropic、**新开会话**（旧的失败会话上下文可能已缓存）即可验证。
 - **Anthropic 兼容层可演进项（1.15.0 新增）**：
   - **「模型只吐了伪调用」时正文会是空的**（模型想用未声明的工具）：当前**有意**保持空正文 + `end_turn`（宁缺勿造，且严格好于之前的乱码泄漏）。若要改善 UX，可在「清洗后正文为空 + 检测到被清洗的伪调用」时合成一句网关提示文本——改之前先想清楚语言选择与「助手没说过的话」的语义边界。
   - `count_tokens` 是无 tokenizer 的估算（请求 JSON 字节数 / 3）；要精确可接 tiktoken 类实现，注意依赖与本机无 cgo 的约束。

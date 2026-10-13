@@ -4,6 +4,19 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.15.2-panel] - 2026-10-13
+
+### 修复
+
+- **Anthropic 兼容层拒绝「对话中途 system」，ZCode 接入直接 400**（本机接入实测发现）：客户端会把中途注入的系统提醒作为 `{"role":"system"}` 放进 `messages` 数组（Anthropic Messages API 的 mid-conversation system 形态，ZCode、Claude Code 均会发），而适配层的 role 白名单只放行 `user` / `assistant`，命中即回 `400 messages[n]: unsupported role "system"`——在 ZCode 侧表现为「Provider rejected the model request / invalid_request status=400」。修复：`convertAnthropicMessage` 增加 `system` 分支，透传为 OpenAI `role:"system"` 消息并保持其在消息流中的既有位置（既不合并、也不重排）；`content` 为字符串或文本块数组都归一为纯文本，空 content 直接丢弃（不向上游转发空 system 消息）。
+- 白名单外的 role（`developer` 等）仍照旧拒绝，保持「畸形请求不静默透传」的既有约束。
+
+### 验证
+
+- **单测**：新增 4 条——中途 system（字符串形态 / 文本块数组形态）透传且位置不变、空 content 的中途 system 被丢弃、白名单外 role 仍报错；`go test ./internal/server/ -run Anthropic -v` 共 20 条 Anthropic 用例全过。
+- **端到端复现与上游语义核对**（本机 `:7863` 生产实例）：修复前 `/v1/messages` 带中途 system 返回 `400 unsupported role "system"`；上游侧经 `/v1/chat/completions` 实测接受 messages 中段的 system（单条中途 system、以及「顶层 system + 中途 system + user」组合）均 `200`，故透传方案与上游语义一致（此前 `internal/upstream/payload.go` 注释中「上游对多 system 的行为尚未实测」的空白本次补齐）。
+- `go build ./...` 干净，`go test ./... -count=1` 16 包全绿。
+
 ## [1.15.1-panel] - 2026-10-13
 
 ### 修复

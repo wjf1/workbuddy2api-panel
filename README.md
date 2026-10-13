@@ -9,7 +9,7 @@
   Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（17/18）</b> · 回收站 / 标签 / 余额预警 / 定时备份 · 流式 / 非流式 · <b>OpenAI + Anthropic 双协议</b>（`/v1/chat/completions` + `/v1/messages`，后者含网关自执行的服务端 `web_search`）
 </p>
 
-<p align="center"><b>English</b>: A multi-account gateway that turns Tencent CodeBuddy (WorkBuddy) accounts into an OpenAI-compatible API, with a built-in web panel — account pool rotation, OAuth login, scheduled check-in / keep-alive, one-click growth tasks, soft-delete recycle bin, account tags, balance alerts and daily backups. It also speaks the <b>Anthropic Messages API</b> (<code>/v1/messages</code>) for Claude Code / ZCode, including a gateway-side <code>web_search</code> server tool that returns <code>server_tool_use</code> / <code>web_search_tool_result</code> blocks. See <a href="#核心能力">核心能力</a> below (docs in Chinese).</p>
+<p align="center"><b>English</b>: A multi-account gateway that turns Tencent CodeBuddy (WorkBuddy) accounts into an OpenAI-compatible API, with a built-in web panel — account pool rotation, OAuth login, scheduled check-in / keep-alive, one-click growth tasks, soft-delete recycle bin, account tags, balance alerts and daily backups. It also speaks the <b>Anthropic Messages API</b> (<code>/v1/messages</code>) for Claude Code / ZCode, including a gateway-side <code>web_search</code> server tool that returns <code>server_tool_use</code> / <code>web_search_tool_result</code> blocks, and accepts mid-conversation <code>system</code> messages sent inside the <code>messages</code> array. See <a href="#核心能力">核心能力</a> below (docs in Chinese).</p>
 
 <p align="center">
   <img alt="Go" src="https://img.shields.io/badge/Go-1.22.5-00ADD8?logo=go&logoColor=white&style=flat-square">
@@ -72,7 +72,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 💾 **状态持久化** | 池状态本地原子落盘 + Upstash Redis 异步镜像（可选），重启择新恢复 |
 | ♻️ **回收站与定时备份** | 「移除账号」软删除进 `data/trash/`（默认保留 30 天，可恢复 / 彻底删除 / 过期自动清理）；每日整点自动备份 `auths/` + 池状态为 zip（保留 N 份轮转，**不含 config.json**），面板内可手动备份与下载 |
 | 🏷️ **账号标签与预警** | 账号多标签（落盘随导出/导入往返）+ 列表按标签 / 关键字筛选；积分低于「积分保底线」的账号自动进面板预警横幅（与选号保底共用阈值，零上游请求） |
-| 🤖 **Anthropic 协议兼容** | `POST /v1/messages`（+ `POST /v1/messages/count_tokens`）：Claude Code / ZCode 等 Anthropic 协议客户端直连；流式 SSE 事件序列（`message_start` / `content_block_*` / `message_delta` / `message_stop`）与非流式均支持，错误体同为 Anthropic 形状；`x-api-key` 与 `Authorization: Bearer` 双凭证任一命中 |
+| 🤖 **Anthropic 协议兼容** | `POST /v1/messages`（+ `POST /v1/messages/count_tokens`）：Claude Code / ZCode 等 Anthropic 协议客户端直连；流式 SSE 事件序列（`message_start` / `content_block_*` / `message_delta` / `message_stop`）与非流式均支持，错误体同为 Anthropic 形状；`x-api-key` 与 `Authorization: Bearer` 双凭证任一命中；`messages` 内联的中途 `system` 消息（ZCode / Claude Code 形态）同样接受（1.15.2 起） |
 | 🌐 **服务端 web_search（网关自执行）** | 客户端声明 `web_search_*` 工具时，检索由**网关代替上游执行**（so.com 抓取解析），回吐 `server_tool_use` / `web_search_tool_result` 块并支持一轮内多轮检索（`max_uses` 预算，缺省 8；耗尽自动撤工具 + 限额提示）；正文未引用来源时自动补 `Sources:` 列表；伪工具调用文本（全角竖线 DSML 标记 / `<tool_call>` 伪 XML）在流式与非流式路径一致清洗，不漏进正文 |
 | 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题），账号运维 / cockpit 兼容账号导入导出 / 模型档位查询 / 在线改配置（热生效）/ 运行日志 / 积分任务，见 [Web 管理面板](#-web-管理面板) |
 
@@ -166,7 +166,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | **回收站 / 标签 / 预警 / 备份（1.14.0）** | 「移除账号」软删除进回收站（恢复 / 彻底删除 / 过期清理）；账号多标签落盘并随 cockpit 导出导入往返；低于积分保底线的账号进面板预警横幅；每日定时备份 auths + 池状态为 zip（可下载，不含 config.json） |
 | **导出导入往返完整性（1.14.1）** | cockpit 兼容导出格式补全 `realm` / `device_token` 键：带设备风控头、显式 realm 标注的账号导出 → 导入全字段无损（端到端边界账号实测锁定；旧格式导入行为不变） |
 | **导入格式兼容升级（1.14.2）** | 导入接口原生兼容**嵌套形账号文件**（`{"account":{...},"auth":{...}}`，即本面板 `auths/` 落盘格式）、扁平单对象与混合数组，并支持 **zip 整包上传**（自动解包内部 `*.json`，坏文件只记 errors 不阻断其余）与多文件一次选择；「导入 JSON」页签错误明细直接展示前 3 条 |
-| **Anthropic 协议兼容层（1.15.0）** | `POST /v1/messages` + `POST /v1/messages/count_tokens`：Anthropic 请求 → 内部 OpenAI body → **复用既有 chatCompletions 管线**（挑号 / 轮转 / 超时 / WAF / 记账，不复制一份调度逻辑）→ 响应翻译回 Anthropic 形状（流式 SSE 逐帧改写）；服务端 `web_search` 由**网关自执行检索**（so.com 抓取解析）并回吐 `server_tool_use` / `web_search_tool_result` 块、多轮检索与 `max_uses` 预算、正文来源链接兜底；`x-api-key` 与 Bearer 双凭证（常量时间比较）；伪工具调用文本（全角竖线 DSML 标记 / `<tool_call>` 伪 XML）流式与非流式一致清洗 |
+| **Anthropic 协议兼容层（1.15.0 / 1.15.2）** | `POST /v1/messages` + `POST /v1/messages/count_tokens`：Anthropic 请求 → 内部 OpenAI body → **复用既有 chatCompletions 管线**（挑号 / 轮转 / 超时 / WAF / 记账，不复制一份调度逻辑）→ 响应翻译回 Anthropic 形状（流式 SSE 逐帧改写）；服务端 `web_search` 由**网关自执行检索**（so.com 抓取解析）并回吐 `server_tool_use` / `web_search_tool_result` 块、多轮检索与 `max_uses` 预算、正文来源链接兜底；`x-api-key` 与 Bearer 双凭证（常量时间比较）；伪工具调用文本（全角竖线 DSML 标记 / `<tool_call>` 伪 XML）流式与非流式一致清洗；**1.15.2** 起接受 `messages` 数组内联的中途 `system` 消息（ZCode / Claude Code 形态，原位透传） |
 | **请求指标与脱敏日志** | 面板展示完成成功率 / HTTP 成功率 / 平均耗时 / 最近请求，响应带 `X-Request-Id`；JSONL 只归档请求元数据，不写提示词、响应正文或凭证。请求记录表带**调用来源**（客户端 IP / User-Agent，按 `logging.request_client_info` 可关），支持按 IP / UA / 模型 / 账号 / 请求 ID 与结果筛选 |
 | **浏览器内 OAuth 添加账号** | 面板「添加账号」按钮完成设备授权 → 凭证落盘 → **热加载进池（免重启）**，替代命令行 `login.sh` 流程；同弹窗「导入 JSON」支持 cockpit tools 账号批量导入（1.14.2 起兼容嵌套形 / 单对象 / zip 整包，可多选），顶部「导出」按钮反向导出 cockpit 兼容 JSON（`GET /panel/api/export/cockpit`） |
 | **在线配置编辑（热生效）** | 面板直接改 `config.json`：API 密钥 / `soft_rate` / 脱敏开关 / 池参数 / 任务排程**立即生效**；装配期字段（listen 等）保存后提示需重启。写入采用深合并 + 原子替换，保留未知键 |
@@ -379,6 +379,7 @@ curl -sN http://localhost:7863/v1/messages \
 - **Claude Code**：`ANTHROPIC_BASE_URL=http://127.0.0.1:7863`，`ANTHROPIC_AUTH_TOKEN=<api_key>`（或 `ANTHROPIC_API_KEY`）。
 - **ZCode**：供应商选 Anthropic 协议，base URL 填 `http://127.0.0.1:7863`，密钥填 `api_key`。
 - 模型名用 `/v1/models` 的 id（如 `cn:glm-5.2`、`cn:deepseek-v4-flash`）；`count_tokens` 为无 tokenizer 的估算（按请求 JSON 字节数 / 3 折算），仅用于客户端上下文管理的近似判断。
+- **对话中途的 `system` 消息**（`messages` 数组内出现 `{"role":"system"}`，ZCode / Claude Code 用它承载中途注入的系统提醒）自 1.15.2 起受支持：按其在消息流中的原位置透传，不合并不重排；`content` 支持字符串与文本块数组。
 
 ## 配置说明
 

@@ -192,7 +192,18 @@ func systemText(raw json.RawMessage) string {
 // 保持块出现顺序；assistant 的 tool_use → tool_calls，与文本合并为一条。
 func convertAnthropicMessage(m anthropicMessage) ([]any, error) {
 	role := strings.TrimSpace(m.Role)
-	if role != "user" && role != "assistant" {
+	switch role {
+	case "user", "assistant":
+	case "system":
+		// Anthropic 的「对话中途 system」形态（role=system 而非顶层 system 字段）：
+		// Claude Code / ZCode 等新客户端用它承载中途注入的系统提醒。上游 OpenAI
+		// 协议容忍 messages 中段的 system，透传并保持位置，既不合并也不重排。
+		if sys := systemText(m.Content); sys != "" {
+			return []any{map[string]any{"role": "system", "content": sys}}, nil
+		}
+		// 空 system 不转发：上游对空 content 的 system 可能拒收，且无语义。
+		return nil, nil
+	default:
 		return nil, fmt.Errorf("unsupported role %q", role)
 	}
 	raw := strings.TrimSpace(string(m.Content))
