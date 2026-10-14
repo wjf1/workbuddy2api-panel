@@ -948,6 +948,25 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
+			// 11133「model_param_invalid」：与 11101 / 11135 同为**请求级**错误——上游
+			// 模型提供方拒绝了请求参数，同一 body 换任何账号都被同样拒绝（payload.go 已
+			// 记录「schema 级拒绝换账号无用」）。轮转只会烧健康号配额，末端再落「其余
+			// 保持 503」让客户端对必然失败的请求无限重试（2026-10-14 ZCode + cn:kimi-k3-1
+			// 实案：连续换 3 号全撞 11133 → 末端 503 → ZCode 退避 11 次、单次 28s，表现为
+			// 会话长时间无响应）。立即透传上游原文回 400 终止轮转。
+			if kind == upstream.ErrModelParamInvalid {
+				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+				fail(acct.UID)
+				msg := string(respBody)
+				if strings.TrimSpace(msg) == "" {
+					msg = "chat request parameters were rejected by upstream"
+				}
+				writeOpenAIErrorHint(w, http.StatusBadRequest, "model_param_invalid", msg,
+					h.hintOf(upstream.ErrModelParamInvalid, string(respBody), bareModel, reqHasImage, uerr))
+				st.status = http.StatusBadRequest
+				st.outcome = reqlog.OutcomeHTTPError
+				return
+			}
 			// lastErr 携带完整 body（uerr.Msg 在 upstream 侧截断 200 字符，透传语义
 			// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
@@ -1379,6 +1398,11 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 不罚账号（无冷却/熔断/NoteError，同 ErrContentBlocked 待遇）；chatCompletions
 		// 已 fail-fast 400 透传原文、终止轮转——「换号可能有不同模型权限」属 11102
 		// （ErrModelBlocked）的分类域，与本类无关。
+	case upstream.ErrModelParamInvalid:
+		// 11133「model_param_invalid」：请求参数被上游模型提供方拒绝，属请求级错误
+		// （同一 body 换任何号都被同样拒绝，payload.go 已记录「schema 级拒绝换账号
+		// 无用」）。零动作（不冷却/不熔断/不 NoteError，同 ErrPromptTooLong/ErrImageInvalid
+		// 待遇）——chatCompletions 已 fail-fast 400 透传原文、终止轮转，此处仅为文档完备。
 	case upstream.ErrModelBlocked:
 		// 11102「该后端无此模型」：(账号, 模型) 负缓存避让。复用 modelCooldowns 机制
 		// （与 6004 同域），选号侧 healthyForModel 对该账号自动避开该模型。

@@ -189,6 +189,49 @@ func TestChatBadParams400CarriesUpstreamBody(t *testing.T) {
 	}
 }
 
+// TestChatModelParamInvalidFailsFastWithoutPenalty 上游 400 + code 11133
+// model_param_invalid（模型提供方拒绝参数）→ 请求级错误：**不轮转**（同一 body
+// 换号必被同样拒绝）、直接回 400 透传上游原文、账号完好。
+//
+// 回归背景（2026-10-14 ZCode + cn:kimi-k3-1 实案）：修复前 Classify 把 11133 归
+// ErrClient（default 分支喂连败计数 + 继续轮转），网关连换 3 号全撞 11133 → 末端
+// 「其余保持 503」→ ZCode 判定可重试、退避重试 11 次（单次退避涨到 28s），会话
+// 表现为长时间无响应。修复后应一次上游调用即 400 终止。
+func TestChatModelParamInvalidFailsFastWithoutPenalty(t *testing.T) {
+	calls := map[string]int{}
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls[authz]++
+		return 400, `{"code":11133,"msg":"Invalid request parameters","extError":{"code":"400001","message":"the request parameters were rejected by the model provider"}}`, false
+	})
+	p := testPoolWith(
+		&auth.Auth{UID: "bad", AccessToken: "at-bad", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "good", AccessToken: "at-good", ExpiresAt: 9999999999},
+	)
+	p.SetCredits("bad", 2000, 0) // 确定性源 r=0 → 先选 bad
+	p.SetCredits("good", 1000, 0)
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d body=%s (want 400: request-level error must not be retried on other accounts)", rec.Code, rec.Body)
+	}
+	if calls["Bearer at-bad"] != 1 || calls["Bearer at-good"] != 0 {
+		t.Errorf("calls=%v want bad 1 次、good 0 次（零轮转）", calls)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "11133") || !strings.Contains(body, "Invalid request parameters") {
+		t.Errorf("400 must carry upstream 11133 info: %s", body)
+	}
+	if strings.Contains(body, "no_healthy_account") {
+		t.Errorf("request-level failure must not be reported as account exhaustion: %s", body)
+	}
+	// 账号完好：无冷却、无禁用、无熔断计数、无 errTotal（零动作策略）。
+	st, _ := p.Status("bad")
+	if st.Cooling || st.Disabled || st.ErrTotal != 0 || st.BreakerFails != 0 {
+		t.Errorf("ErrModelParamInvalid must not penalize account: %+v", st)
+	}
+}
+
 
 func TestChatNonStreamAggregates(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {

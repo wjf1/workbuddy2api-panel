@@ -56,8 +56,13 @@ func TestClassify(t *testing.T) {
 		// 11135 业务码须容忍 JSON 空白（5d5223d：字面量 marker 只覆盖紧凑形态）。
 		{400, `{"code": 11135, "msg":"image data invalid"}`, ErrImageInvalid},
 		{400, `{"error":{"code": "11135", "message":"image invalid"}}`, ErrImageInvalid},
-		// 防过宽：11133（模型不支持图片）不进 image_invalid。
-		{400, `{"code": 11133, "msg":"model does not support image"}`, ErrClient},
+		// 防过宽：11133（模型不支持图片 / 参数被模型提供方拒绝）不进 image_invalid；
+		// 归 ErrModelParamInvalid（请求级错误：不罚号、不轮转，末端 400 透传原文）。
+		{400, `{"code": 11133, "msg":"model does not support image"}`, ErrModelParamInvalid},
+		{400, `{"code":11133,"msg":"Invalid request parameters","extError":{"code":"400001","message":"the request parameters were rejected by the model provider"}}`, ErrModelParamInvalid},
+		{400, `{"code": 11133, "msg":"x"}`, ErrModelParamInvalid},
+		// 11133 之外的 status 不误归（错误分类须绑定 400 请求级状态码）。
+		{500, `{"code":11133,"msg":"Invalid request parameters"}`, ErrServer},
 		{200, `quota exceeded`, ErrHardCredit},
 		// session 死亡优先于限流文案（401+12153 需人工重登，短冷却无意义）。
 		{401, `{"code":12153,"msg":"Offline user session not found, rate limit"}`, ErrSessionDead},

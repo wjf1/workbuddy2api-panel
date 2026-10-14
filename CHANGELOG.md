@@ -4,6 +4,23 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.15.4-panel] - 2026-10-14
+
+### 修复
+
+- **上游 `11133 model_param_invalid` 被误判为「只换号不罚」的未知 4xx，导致请求长时间无响应（本机 ZCode + `cn:kimi-k3-1` 实案）**：上游模型提供方拒绝请求参数时返回 `HTTP 400` + 业务码 `11133`（`Invalid request parameters` / `extError.code=400001`，义为「参数不满足该模型要求」，如模型不支持某能力）。`Classify` 此前**没有 11133 分支**，它落进通用 4xx 兜底的 `ErrClient`——按设计 `ErrClient` 只换号不罚、但**继续轮转**并喂连败计数。于是同一个 body 被网关连续换 3 个账号重试，三号全撞同样的 11133（`payload.go` 早已记录「schema 级拒绝换账号无用」），轮转烧满后末端落到「其余保持 503」；客户端（ZCode）判定 503 可重试，按指数退避最多重试 11 次（单次退避涨到约 28s），表现为**会话长时间无响应、长时间转圈**。
+  - **修复**：新增错误分类 `ErrModelParamInvalid`（`model_param_invalid`），与既有的 `ErrBadParams`（11101）/ `ErrImageInvalid`（11135）/ `ErrPromptTooLong`（11115）同属**请求级错误**——`chatCompletions` 命中即**立即透传上游原文回 400、终止轮转**（不换号、不罚号、不喂熔断/连败），客户端得到确定的 400 而非可重试的 503，不再陷入长退避重试。
+  - 分类判定：`HTTP 400` + `isModelParamInvalid(body)`（复用 hint 层既有形态判定：`code 11133` / `extError.code=model_param_invalid` / 精确文案），并绑定 400 状态码收紧（`500` 等非请求级状态码不误归）。
+  - `applyErrorPolicy` 增补 `ErrModelParamInvalid` 分支（零动作，同 `ErrPromptTooLong`/`ErrImageInvalid` 待遇，仅为文档完备）；`/v1/messages`（Anthropic 路径）复用同一 `chatCompletions` 管线，同步受益。
+
+### 验证
+
+- **单测**：`TestClassify` 新增 11133 断言——`{"code": 11133, ...model does not support image}`、真实错误体（`extError.code=400001`）、`{"code": 11133, "msg":"x"}` 均归 `ErrModelParamInvalid`；`{"code":11133}` + `500` 状态码归 `ErrServer`（防过宽）。`internal/server/handler_test.go` 新增端到端用例 `TestChatModelParamInvalidFailsFastWithoutPenalty`：两账号池断言**只打一次上游**（`bad` 1 次、`good` 0 次，**零轮转**）、直接回 400、账号完好（无冷却/禁用/熔断/errTotal）。
+  - **负向验证**：临时把 11133 改回 `ErrClient`，两条用例如期失败——`Classify` 断言报 `=client want model_param_invalid`，handler 用例复现原始故障形态 `code=503 body={"error":{"code":"no_healthy_account",...}}`，证明测试能抓到回归。
+- **真实二进制端到端**（本机沙箱 `:7869` + 指向本地假上游的 `global` 账号，全部调度与备份禁用）：上游返回 11133 → 网关回 **HTTP 400 `model_param_invalid`**（`/v1/chat/completions` 与 `/v1/messages` 两条路径均验证），请求日志显示**仅一次上游调用**（零轮转）。
+- **多分类不串味验证**（同一沙箱，按模型分派不同上游错误）：`11133→model_param_invalid/400`、`11101→bad_params/400`、`11135→image_invalid/400`、`11102→model_unavailable/400`、内容拦截`→content_blocked/400`、限流`→rate_limit_exceeded/429`、`5xx`/通用 4xx 保持原语义（单账号池无号可轮时仍 503），各分类互不影响。
+- `go build ./...`（Go 1.27.0）、`go vet ./internal/upstream/ ./internal/server/` 干净，`go test ./... -count=1` 18 包全绿。
+
 ## [1.15.3-panel] - 2026-10-14
 
 ### 修复

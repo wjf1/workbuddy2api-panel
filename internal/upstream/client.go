@@ -41,6 +41,7 @@ const (
 	ErrWafBlock                      // 403 + 非业务信封体（APISIX WAF 拦截页/空体）→ 账号软冷却 + 抖动退避
 	ErrPromptTooLong                 // 11115「prompt is too long」→ 请求级错误（上下文超限是请求的问题非账号的问题）：不罚号、不轮转，末端透传原文
 	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
+	ErrModelParamInvalid             // 11133「model_param_invalid」→ 请求参数被上游模型提供方拒绝：请求级错误，不罚号、不轮转，末端透传原文 400
 	ErrClient                        // 其他 4xx / 业务错误
 )
 
@@ -68,6 +69,8 @@ func (k ErrKind) String() string {
 		return "prompt_too_long"
 	case ErrImageInvalid:
 		return "image_invalid"
+	case ErrModelParamInvalid:
+		return "model_param_invalid"
 	case ErrAccountFault:
 		return "account_fault"
 	case ErrClient:
@@ -572,6 +575,16 @@ func Classify(status int, body string) ErrKind {
 				return ErrImageInvalid
 			}
 		}
+	}
+	// 11133「model_param_invalid」：上游模型提供方拒绝请求参数。与 11101/11135 同为
+	// **请求级**错误——同一 body 换任何账号都被同样拒绝（payload.go 已记录「schema 级
+	// 拒绝换账号无用」），轮转只会把健康号配额烧一遍再把最终 503 丢给客户端，客户端
+	// 于是对必然失败的请求无限重试（2026-10-14 ZCode + cn:kimi-k3-1 实案：网关侧连续
+	// 换 3 号全撞 11133 → 末端 503 → ZCode 退避重试 11 次、单次退避涨到 28s，表现为
+	// 会话长时间无响应）。判在通用 4xx 兜底之前，形态判定复用 hint 层 isModelParamInvalid
+	// （11133 code / extError.code=model_param_invalid / 精确文案），并绑定 400 状态码收紧。
+	if status == http.StatusBadRequest && isModelParamInvalid(body) {
+		return ErrModelParamInvalid
 	}
 	// 内容策略拦截（HTTP 400 + 审核文案）：判在通用 ErrClient 之前。
 	// 这是误报信号，不罚账号，由网关降级重试处理（见 handler.applyErrorPolicy）。
