@@ -455,9 +455,13 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .uschart-body .tk-peak { fill: var(--ink-2); font: 600 10px var(--mono); }
   .uschart-body rect.usbar { transition: opacity .12s; }
   .uschart-body rect.usbar:hover { opacity: .78; }
+  /* 装饰元素（网格 / 均值线 / 基线 / 刻度与标注文字）不参与命中测试：它们是几何
+     叠加在柱子上的，默认 pointer-events:auto 会把柱子盖住——实测跨天分隔线恰好压在
+     柱心时，悬停落在线上，柱子的 <title> 就不弹（柱子越窄越明显）。 */
+  .uschart-body line, .uschart-body text { pointer-events: none; }
   .uschart-body .us-empty { padding: 30px 0; text-align: center; color: var(--ink-3); font-size: 12.5px; }
 
-  /* 用量表内的 prompt/completion 占比条。用 .us-mix 而不是复用账号池的 .bar：
+  /* 用量表内的输入/输出占比条。用 .us-mix 而不是复用账号池的 .bar：
      全局 .bar 是块级容器（积分条），同优先级下会互相覆盖（v1.9.0 回归）。 */
   .us-mix { display: flex; height: 3px; border-radius: 2px; overflow: hidden;
     background: var(--line); margin-top: 5px; min-width: 60px; }
@@ -838,7 +842,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <span class="note" id="usChartNote">—</span>
               <span class="grow"></span>
               <span class="legend">
-                <i class="sw sw-p"></i>prompt<i class="sw sw-c"></i>completion
+                <i class="sw sw-p"></i>输入<i class="sw sw-c"></i>输出
                 <span class="sep"></span><i class="sw sw-t"></i>均值
               </span>
             </div>

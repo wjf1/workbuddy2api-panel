@@ -2123,14 +2123,14 @@ function usKpi(v, k, cls, sub, bar) {
     '</div>';
 }
 
-/* usMixBar prompt/completion 占比条。宽度按百分比而不是固定像素：表列宽随窗口变化，
+/* usMixBar 输入/输出占比条。宽度按百分比而不是固定像素：表列宽随窗口变化，
    像素宽度在窄屏会溢出、宽屏又显得没信息。 */
 function usMixBar(prompt, completion, total) {
   const t = Number(total || 0);
   if (!t) return '';
   const pp = Math.max(0, Math.min(100, Number(prompt || 0) / t * 100));
   const pc = Math.max(0, Math.min(100, Number(completion || 0) / t * 100));
-  return '<span class="us-mix" title="prompt ' + pp.toFixed(1) + '% · completion ' + pc.toFixed(1) + '%">' +
+  return '<span class="us-mix" title="输入 ' + pp.toFixed(1) + '% · 输出 ' + pc.toFixed(1) + '%">' +
     '<i class="p" style="width:' + pp.toFixed(2) + '%"></i>' +
     '<i class="c" style="width:' + pc.toFixed(2) + '%"></i>' +
     '</span>';
@@ -2189,7 +2189,7 @@ function usDimHead(dim) {
   return '<tr><th class="mark" aria-hidden="true"></th><th>' + esc(m.title) + '</th>' +
     (m.withRealm ? '<th>域</th>' : '') +
     '<th class="num">请求</th><th class="num">失败</th>' +
-    '<th class="num">Prompt</th><th class="num">Completion</th><th class="num">合计</th>' +
+    '<th class="num">输入</th><th class="num">输出</th><th class="num">合计</th>' +
     (m.withPerf ? '<th class="num">均延迟</th><th class="num">均速率</th>' : '') +
     '</tr>';
 }
@@ -2305,11 +2305,11 @@ function renderUsage(d) {
     usKpi(fmtTok(reqs), '请求数', 'c-accent',
       errs ? '其中失败 ' + errs + ' 次' : '全部成功') +
     usKpi(fmtTok(total), '总 token', 'c-accent',
-      'prompt ' + usPct(pt, total) + ' · completion ' + usPct(ct, total),
+      '输入 ' + usPct(pt, total) + ' · 输出 ' + usPct(ct, total),
       '<div class="kbar"><i style="width:' + pctW(pt) + ';background:var(--accent)"></i>' +
       '<i style="width:' + pctW(ct) + ';background:var(--ok)"></i></div>') +
-    usKpi(fmtTok(pt), 'prompt', 'c-soft', '占比 ' + usPct(pt, total)) +
-    usKpi(fmtTok(ct), 'completion', 'c-ok', '占比 ' + usPct(ct, total)) +
+    usKpi(fmtTok(pt), '输入 token', 'c-soft', '占比 ' + usPct(pt, total)) +
+    usKpi(fmtTok(ct), '输出 token', 'c-ok', '占比 ' + usPct(ct, total)) +
     usKpi(String(errs), '失败尝试', errs ? 'c-warn' : 'c-mute',
       okRate == null ? '—' : (errs ? '成功率 ' + okRate.toFixed(1) + '%' : '成功率 100%')) +
     usKpi(fmtMs(t.avg_latency_ms), '平均延迟', 'c-soft',
@@ -2400,6 +2400,19 @@ function fmtTokTimeLabel(p) {
     : String(d.getHours()).padStart(2, '0') + ':00';
 }
 
+/* fmtTokTimeRange 柱状图 tooltip 里的「时间段」描述：说清这根柱子覆盖了哪一段，
+   而不是像轴刻度那样只给一个点。小时桶 = "MM-DD HH:00–HH+1:00"（23 点收尾写
+   24:00，避免回绕成次日 00:00 生歧义）；日桶 = "MM-DD 全天"。
+   与 fmtTokTimeLabel 刻意分开：轴刻度求短，tooltip 求无歧义。 */
+function fmtTokTimeRange(p) {
+  const d = new Date(p.t);
+  const md = (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0');
+  if (p.scope === 'day') return md + ' 全天';
+  const pad = n => String(n).padStart(2, '0');
+  const h = d.getHours();
+  return md + ' ' + pad(h) + ':00–' + pad(h + 1) + ':00';
+}
+
 function renderUsageChart(series) {
   const host = $('usChart');
 
@@ -2480,7 +2493,7 @@ function renderUsageChart(series) {
            '" text-anchor="start">均值 ' + fmtTok(avg) + '</text>';
   }
 
-  // 柱子：每个点用 <g> 包住「prompt 柱 + completion 柱 + <title>」。
+  // 柱子：每个点用 <g> 包住「输入柱 + 输出柱 + <title>」。
   // 关键：<title> 只描述它的**父元素**。此前把它与 <rect> 平级挂在 <svg> 下，
   // 浏览器就把它当成整张图的说明且只取第一个——于是不管悬停哪根柱子，提示都
   // 显示第一个桶的数字（实测：14:00 的 24.29M 峰值柱上悬停显示 09:00 的 4.62M）。
@@ -2500,8 +2513,11 @@ function renderUsageChart(series) {
     if (hC > 0) out += '<rect class="usbar" x="' + x.toFixed(2) + '" y="' + (yBase - hP - hC).toFixed(2) +
       '" width="' + bw.toFixed(2) + '" height="' + hC.toFixed(2) +
       '" fill="url(#usGradC)" rx="1.5"/>';
-    out += '<title>' + esc(p.raw) + '  ' + fmtTok(p.pt) + ' prompt / ' +
-           fmtTok(p.ct) + ' completion / ' + p.req + ' 次</title>' +
+    // tooltip 三段式：时间段 · token 量（输入 + 输出 = 合计）· 请求次数。
+    // 旧文案 "prompt / completion" 是 API 术语，中文界面里靠猜；补「合计」是因为
+    // 柱高就是合计，用户最直观看到的总量反而在提示里没直给（实测 11.00M/22.9k 那条）。
+    out += '<title>' + esc(fmtTokTimeRange(p)) + ' · 输入 ' + fmtTok(p.pt) +
+           ' + 输出 ' + fmtTok(p.ct) + ' = 合计 ' + fmtTok(p.tt) + ' · ' + p.req + ' 次</title>' +
            '</g>';
   }
 

@@ -4,6 +4,20 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.15.3-panel] - 2026-10-14
+
+### 修复
+
+- **用量时序图的悬停提示看不出含义（面板答疑发现）**：提示文案沿用了 OpenAI API 术语与原始 ISO 串，中文界面里靠猜——原文案 `2026-10-14T00  11.00M prompt / 22.9k completion / 47 次`，既没说清「`T00` 是哪一段」（是 00:00 这一小时还是当天？），也没给出用户最直观看到的柱高（总量），还得自己做加法。改为三段式中文明示：**时间段 · 输入 + 输出 = 合计 · N 次**，例如 `10-14 00:00–01:00 · 输入 11.00M + 输出 22.9k = 合计 11.02M · 47 次`。时间段按桶粒度展开（小时桶 `MM-DD HH:00–HH+1:00`，日桶 `MM-DD 全天`；23 点收尾写 `24:00`，避免回绕成次日 00:00 产生歧义）。
+- **柱子悬停时提示偶发不弹出**：网格线 / 均值线 / 基线 / 轴刻度与标注文字都是几何叠加在柱子上的 SVG 元素，默认 `pointer-events: auto` 会截断柱子的命中测试——跨天日期分隔线恰好压在柱子中心时，悬停落在线上、柱子的 `<title>` 不弹（柱子越窄越明显）。修复：`.uschart-body line, .uschart-body text { pointer-events: none; }`，让装饰元素不参与命中测试。
+- **术语统一**：用量区的用户可见标签从 API 术语改为中文——图表图例 `prompt / completion` → `输入 / 输出`，用量明细表头 `Prompt / Completion` → `输入 / 输出`，指标卡 `prompt / completion` → `输入 token / 输出 token`，占比条 tooltip 同步。JSON 字段名（`prompt_tokens` 等）保持不变。
+
+### 验证
+
+- **单测**：`TestAppJSUsageChartBarClass` 的 tooltip 断言从「含原始 ISO 串」升级为「**逐点精确比对完整文案**」，并新增 `noLegacyTerms`（tooltip 内不得再出现 `prompt` / `completion`）；新增 `TestIndexHTMLChartPointerEvents` 断言装饰元素的 `pointer-events: none` 与 `rect.usbar:hover` 仍在。两条断言均做**负向验证**——把术语改回 `prompt` 后前者失败（`noLegacyTerms:false`、`titlesPerPoint:false`），符合预期。
+- **真实浏览器走查**（本地沙箱 `:7867`，载入生产用量数据副本）：真实鼠标点击导航进入「用量」→ 24 根柱逐根 `elementFromPoint` + 祖先链归属断言**全部命中自身 `<g>`（0 处错配）**；修复前被跨天分隔线截断的那根柱子现已正常。截图那条对应的桶读出 `10-14 00:00–01:00 · 输入 11.00M + 输出 22.9k = 合计 11.02M · 47 次`，与截图数字一致。
+- `go build ./...`、`go vet ./internal/panel/` 干净，`go test ./... -count=1` 全绿。
+
 ## [1.15.2-panel] - 2026-10-13
 
 ### 修复

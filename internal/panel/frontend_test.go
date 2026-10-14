@@ -91,6 +91,35 @@ func TestIndexHTMLUniqueIDs(t *testing.T) {
 	}
 }
 
+// TestIndexHTMLChartPointerEvents 用量图内的装饰元素（网格线 / 均值线 / 基线 / 刻度与
+// 标注文字）必须不参与命中测试。它们是几何叠加在柱子上的：默认 pointer-events:auto
+// 会把柱子盖住，跨天分隔线恰好压在窄柱中心时悬停落到线上，柱子的 <title> 不弹
+// （2026-10-14 真实浏览器 elementFromPoint 实测：10px 宽的柱子被 line.gl 截断）。
+func TestIndexHTMLChartPointerEvents(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	// 断言存在针对 .uschart-body 下 line/text 的 pointer-events:none 规则。
+	// 允许分写成多条规则，因此按选择器片段各自查找。
+	for _, need := range []string{".uschart-body line", ".uschart-body text"} {
+		idx := strings.Index(body, need)
+		if idx < 0 {
+			t.Fatalf("index.html missing rule for %q (chart decorations would swallow bar hover)", need)
+		}
+		// 规则体在大括号内，检查其含 pointer-events: none
+		rest := body[idx:]
+		end := strings.Index(rest, "}")
+		if end < 0 || !strings.Contains(rest[:end], "pointer-events: none") {
+			t.Fatalf("rule %q must set pointer-events: none (chart decorations would swallow bar hover)", need)
+		}
+	}
+	if !strings.Contains(body, "rect.usbar:hover") {
+		t.Fatal("index.html missing rect.usbar:hover — bar hover affordance removed?")
+	}
+}
+
 // TestAppJSTopLevelSmoke app.js 顶层求值冒烟（v1.11.3/1.11.4 两连炸后补的运行时闸门）：
 // node + DOM 桩执行 app.js（含按 hash 落到各视图的 go() 顶层调用），抓 TDZ/
 // ReferenceError 类运行时错误——Go 侧 frontend_test 不执行 JS，语法层检查对此全盲。
@@ -453,7 +482,7 @@ const ctx = {
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(start, end) +
-  '\nthis.renderUsageChart=renderUsageChart;', ctx);
+  '\nthis.renderUsageChart=renderUsageChart;this.fmtTok=fmtTok;', ctx);
 const series = [
   { t: '2026-09-30T09', scope: 'hour', prompt_tokens: 35, completion_tokens: 16, total_tokens: 51, requests: 1 },
   { t: '2026-09-30T11', scope: 'hour', prompt_tokens: 978324, completion_tokens: 20621, total_tokens: 998945, requests: 39 },
@@ -470,6 +499,16 @@ for (const m of svg.matchAll(/<g>|<\/g>|<title>/g)) {
   else if (depth <= 0) outsideG++;
 }
 const gBlocks = svg.match(/<g>[\s\S]*?<\/g>/g) || [];
+// 期望的 tooltip 文案：时间段 · 输入 + 输出 = 合计 · N 次（与 renderUsageChart 同口径）。
+const pad = n => String(n).padStart(2, '0');
+const trust = ctx.fmtTok; // 与 renderUsageChart 同源（runInContext 里导出）
+const expectedTitles = series.map(p => {
+  const d = new Date(p.t + ':00:00');
+  const md = (d.getMonth() + 1) + '-' + pad(d.getDate());
+  const range = md + ' ' + pad(d.getHours()) + ':00–' + pad(d.getHours() + 1) + ':00';
+  return range + ' · 输入 ' + trust(p.prompt_tokens) + ' + 输出 ' + trust(p.completion_tokens) +
+    ' = 合计 ' + trust(p.total_tokens) + ' · ' + p.requests + ' 次';
+});
 process.stdout.write(JSON.stringify({
   hasUsbar: svg.includes('class="usbar"'),
   hasBareBar: /class="bar"/.test(svg),
@@ -479,8 +518,12 @@ process.stdout.write(JSON.stringify({
   hasAvg: svg.includes('均值'),
   gBlocks: gBlocks.length,
   titlesOutsideG: outsideG,
+  // 归属 + 文案双重断言：每个 <g> 恰好一个 <title>，且文案与该点数据精确对应。
   titlesPerPoint: gBlocks.length === series.length &&
-    gBlocks.every((b, i) => (b.match(/<title>/g) || []).length === 1 && b.includes(series[i].t)),
+    gBlocks.every((b, i) => (b.match(/<title>/g) || []).length === 1 &&
+      b.includes('<title>' + expectedTitles[i] + '</title>')),
+  // 旧文案（API 术语 prompt/completion）不得再出现在 tooltip 里。
+  noLegacyTerms: !/prompt|completion/.test(gBlocks.join('')),
   emptyState: (function () { ctx.renderUsageChart([]); return host.innerHTML.includes('us-empty'); })(),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "usage-chart-*.cjs")
@@ -495,7 +538,7 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("usage chart node test failed: %v\n%s", err, out)
 	}
-	const want = `{"hasUsbar":true,"hasBareBar":false,"hasGradient":true,"barCount":6,"hasPeak":true,"hasAvg":true,"gBlocks":3,"titlesOutsideG":0,"titlesPerPoint":true,"emptyState":true}`
+	const want = `{"hasUsbar":true,"hasBareBar":false,"hasGradient":true,"barCount":6,"hasPeak":true,"hasAvg":true,"gBlocks":3,"titlesOutsideG":0,"titlesPerPoint":true,"noLegacyTerms":true,"emptyState":true}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("usage chart=%s\nwant %s", out, want)
 	}
