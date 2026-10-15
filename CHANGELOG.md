@@ -4,6 +4,23 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.15.5-panel] - 2026-10-15
+
+### 修复
+
+- **上游免费档排队（`6020 queue.waiting` / `6021 queue.full`）被误判为账号级限流，106 秒内把全池 16/17 个账号烧进冷却（本机实案）**：上游服务端队列积压时返回 `HTTP 429` + 业务码 `6020`（`queue.waiting.title`，带 `queue_position` / `queue_size` / `retry_after`）或 `6021`（`queue.full.title`），响应还带 `client_user_type:"free"`。这是**上游服务端队列水位**，与「哪个账号」「哪个模型」都无关（实测同一时刻换 `cn:kimi-k3-1` 与 `cn:deepseek-v4.1-flash` 回的都是排队码）。`Classify` 此前没有该码，落到 `status==429` 兜底 → 被当成「这个账号被限流了」逐号软冷却。实案时间线：`11:18:46 → 11:20:32` 仅 6 条客户端请求，但每条 `attempts=3`（绕转换号）共 18 次上游调用，**16 个不同账号各吃一次 429、全进 600s/1200s/2400s 阶梯冷却**，面板一片「429 rate limit」，而真凶是上游队列积压。
+  - **修复**：新增错误分类 `ErrUpstreamQueue`（`upstream_queue`），判定 `IsUpstreamQueue`（非 2xx + 业务码 6020/6021，或 `queue.waiting.title` / `queue.full.title` 文案兜底；码位容忍 JSON 空白与字符串形态）。`applyErrorPolicy` 对该类**零动作**——不冷却、不熔断、不 `NoteError`、不喂连败（把队列积压记成账号限流正是全池被烧穿的根因）。
+  - **新增进程级排队门控 `queueGate`（`internal/server/queuegate.go`）**：与 WAF IP 级门控（`wafip.go`）同哲学但**不靠多号取证**——排队码单条响应就已自证是队列水位，故首次命中即激活 fail-fast：命中处（`chatCompletions` 轮转循环内）立即终止轮转，且门控激活期内后续请求**不发上游请求**直接回 429（队列堵着时发出请求只是把一个请求放大 `MaxRotate` 倍再喂给已过载的上游、并把健康号白白推进冷却）。门控时长采信上游 `retry_after`（缺失回落 `estimated_wait`，再回落 60s），钳到 `[15s, 2m]`；**任一请求成功即清除**（上游队列疏通后不被网关自己挡住）。进程内状态、重启清零。
+  - **末端错误映射独立化**：排队回 `429` + 独立 `code=upstream_queue_busy`（此前会与账号限流共用 `rate_limit_exceeded`），`message` 透传上游排队原文（含 `queue_position` / `retry_after`），`gateway_hint` 明说「not an account problem; switching accounts or models will not help」——避免用户/客户端把队列积压读成账号问题而做无谓的换号/换模型。
+  - **面板与 `/status` 可辨**：`/panel/api/overview` 与 `/status` 新增 `upstream_queue` 字段（激活时给 `until` / `code` / `position` / `size` / `retry_after`，未激活为 `null`），面板账号池上方新增「上游队列忙」横幅，明确写出「与账号无关、换号换模型都不绕过、已暂停轮转、无需手动解冻」——把队列积压与账号限流在界面上彻底分开（2026-10-15 的认知根源就是界面上只显示「429 rate limit」）。
+
+### 验证
+
+- **单测**：`internal/upstream/client_test.go` 的 `TestClassify` 新增 9 条排队断言（6021 / 6020 本机实测原文、码位字符串与空白形态、嵌套 `error.data`、文案兜底、`200+排队码` 不误判、`6004` 不被劫持）；新增 `TestParseQueueInfo`（6020 完整 data / 6021 无 data / 数字字符串 / 非排队与非 JSON）与 `TestIsUpstreamQueue`（10 例，含 `200` 与普通 `429` 反例）。`internal/server/handler_test.go` 新增端到端用例 `TestChatUpstreamQueueFailsFastWithoutPenalty`（三账号池断言**只打一次上游**、回 `429 upstream_queue_busy`、透传上游排队原文、**0 处冷却/禁用/熔断/errTotal**）、`TestChatUpstreamQueueGateBlocksRotationWhileActive`（第二次请求**零上游调用**且响应带 `queue_position`）、`TestChatUpstreamQueueGateClearsOnSuccess`、`TestQueueGateActivationAndDuration`（5 子例：时长采信与上下限钳制、`clear` 归零）。
+  - **负向验证**：临时移除 `Classify` 的排队分支 → `TestClassify` 报 `=soft_rate want upstream_queue`（复现全池误冷却的原始分类）；临时移除轮转处的 `noteQueue` → handler 用例复现**请求放大**（`calls=map[at-a1:1 at-a2:1 at-a3:1] want exactly 1`）与门控未激活，证明测试能抓到回归。两处均已恢复。
+- **真实二进制端到端**（沙箱 `:7873`，global 账号指向本地假上游）：假上游回 `429 {"code":6021,"msg":"queue.full.title"}` → 网关回 **`429 upstream_queue_busy`**，`message` 原样带 `6021/queue.full.title/requestId`，**上游只被调用 1 次**；门控激活后第二条请求**零上游调用**直接回 429 且 `message` 带 `queue_position=5399`；`/status` 与 `/panel/api/overview` 均透出 `upstream_queue`，账号 `cooling=false`（零惩罚）；切假上游为成功模式、门控过期后请求回 **200** 且 `upstream_queue` 自动归 `null`。
+- `go build ./...`（Go 1.27.0）、`go vet ./internal/upstream/ ./internal/server/ ./internal/panel/ ./cmd/server/` 干净，`go test ./... -count=1` **18 包全绿**。
+
 ## [1.15.4-panel] - 2026-10-14
 
 ### 修复

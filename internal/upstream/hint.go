@@ -12,6 +12,7 @@ package upstream
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -53,6 +54,15 @@ func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 		return "upstream WAF blocked the gateway; retry after the block window"
 	case ErrSoftRate:
 		return "rate limited by upstream; retry after reset"
+	case ErrUpstreamQueue:
+		// 队列水位是**上游整体**状态：换账号、换模型都不会绕过（实测两个模型回同一
+		// 排队码）。hint 明确点出「不是账号问题」，避免调用方对必然失败的请求做
+		// 无谓的账号/模型切换；带 retry_after 时把上游给的重试间隔一并给出。
+		if info, ok := ParseQueueInfo(msg); ok && info.RetryAfter > 0 {
+			return "upstream free-tier queue is busy (not an account problem); retry after " +
+				strconv.Itoa(int(info.RetryAfter.Seconds())) + "s"
+		}
+		return "upstream free-tier queue is busy (not an account problem); retry after the queue drains"
 	case ErrAccountFault:
 		return "account-level fault at upstream (auth/quota state); the gateway will rotate or disable this account"
 	case ErrSessionDead:

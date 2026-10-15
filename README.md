@@ -9,7 +9,7 @@
   Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（17/18）</b> · 回收站 / 标签 / 余额预警 / 定时备份 · 流式 / 非流式 · <b>OpenAI + Anthropic 双协议</b>（`/v1/chat/completions` + `/v1/messages`，后者含网关自执行的服务端 `web_search`）
 </p>
 
-<p align="center"><b>English</b>: A multi-account gateway that turns Tencent CodeBuddy (WorkBuddy) accounts into an OpenAI-compatible API, with a built-in web panel — account pool rotation, OAuth login, scheduled check-in / keep-alive, one-click growth tasks, soft-delete recycle bin, account tags, balance alerts and daily backups. It also speaks the <b>Anthropic Messages API</b> (<code>/v1/messages</code>) for Claude Code / ZCode, including a gateway-side <code>web_search</code> server tool that returns <code>server_tool_use</code> / <code>web_search_tool_result</code> blocks, and accepts mid-conversation <code>system</code> messages sent inside the <code>messages</code> array. See <a href="#核心能力">核心能力</a> below (docs in Chinese).</p>
+<p align="center"><b>English</b>: A multi-account gateway that turns Tencent CodeBuddy (WorkBuddy) accounts into an OpenAI-compatible API, with a built-in web panel — account pool rotation, OAuth login, scheduled check-in / keep-alive, one-click growth tasks, soft-delete recycle bin, account tags, balance alerts and daily backups. It also speaks the <b>Anthropic Messages API</b> (<code>/v1/messages</code>) for Claude Code / ZCode, including a gateway-side <code>web_search</code> server tool that returns <code>server_tool_use</code> / <code>web_search_tool_result</code> blocks, and accepts mid-conversation <code>system</code> messages sent inside the <code>messages</code> array. Upstream free-tier queueing (error codes <code>6020</code>/<code>6021</code>) is treated as an upstream-wide condition rather than account rate limiting: rotation fails fast, no account is penalized, and the panel shows a dedicated "upstream queue busy" banner. See <a href="#核心能力">核心能力</a> below (docs in Chinese).</p>
 
 <p align="center">
   <img alt="Go" src="https://img.shields.io/badge/Go-1.22.5-00ADD8?logo=go&logoColor=white&style=flat-square">
@@ -62,6 +62,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 🔑 **OAuth 一键登录** | `login.sh` 设备授权流程，自动落盘凭证并重启容器加载新账号 |
 | 🔄 **多账号池** | 快过期积分加权 + 成本分层 + 加权随机选号，Top-5 候选 + 防惊群 |
 | 🛡️ **熔断与冷却** | 429 软冷却 600s 起指数退避（封顶 `soft_rate_max`）、404 固定 60s 短冷却、402 硬冷却至次日 04:00、连续失败熔断、在途租约限流 |
+| 🚦 **上游排队保护（1.15.5）** | 上游免费档排队（业务码 `6020 queue.waiting` / `6021 queue.full`）是**服务端队列水位**，与账号、模型都无关 → 归类为 `ErrUpstreamQueue`：**账号零惩罚、轮转 fail-fast**（命中处即终止轮转），门控激活期内后续请求**不发上游直接回 429 `upstream_queue_busy`**（不放大请求、不烧号），时长采信上游 `retry_after`（钳 15s–2m），任一请求成功即自动解除；面板与 `/status` 透出 `upstream_queue` 并显示「上游队列忙」横幅 |
 | 🧲 **会话粘性** | 同一会话（`conversation_id`）尽量绑定同一账号，TTL 滚动续期，失败自动解绑，可镜像 Redis 防重启丢失 |
 | ⏰ **定时任务** | 签到（09/21 点，末尾自动跑**连登管家**：兑换已解锁档位 + 抽完抽奖次数）+ 活跃上报（10 点，点亮连登 / 解锁领养 + streak 自检）+ 猫猫旅行（09/21 点，独立排程）+ token 保活（22 点），四类独立开关 |
 | ⚡ **流式 + 非流式** | 出站强制 `stream:true`；SSE 帧按规范白名单重建；非流式由本地聚合为单响应 |
@@ -487,12 +488,13 @@ curl -sN http://localhost:7863/v1/messages \
 
 ### 错误分类与账号处置
 
-上游错误由 `Classify` 统一分类（判定优先级：余额耗尽 → session 失效 → 限流文案 → 状态码兜底），账号处置如下：
+上游错误由 `Classify` 统一分类（判定优先级：模型不存在 → 余额耗尽 → session 失效 / 账号级故障 → 账号积分耗尽 → 上游排队 → 限流状态码兜底），账号处置如下：
 
 | 分类 | 触发条件 | 账号处置 | 恢复 |
 |---|---|---|---|
 | 余额不足 | HTTP 402 / body 含余额关键词 | 硬冷却到**次日 04:00**（本地时区） | 签到（09/21 点）余额恢复自动解冻 |
 | 频控 | HTTP 429 / 限流文案（不限状态码） | 软冷却 `soft_rate`（600s 起，连续触发指数退避，封顶 `soft_rate_max`）。**`code 6004`（模型级）带「将在 … 重置」时**冷却到上游重置墙钟并豁免切模型（见[常见问题](#429-code6004模型级限流的冷却语义)） | 到期自动恢复 / 成功清零退避 |
+| 上游排队 | HTTP 429 + code `6020`/`6021`（`queue.waiting` / `queue.full`，或对应文案） | **不罚账号**（服务端队列水位，与账号、模型都无关）；**轮转 fail-fast** 并在门控期内直接回 `429 upstream_queue_busy`、不发上游请求 | 门控到期（采信上游 `retry_after`，钳 15s–2m）或**任一请求成功**立即解除 |
 | Session 失效 | body 含 `Offline user session not found` / `12153` | **连续 3 次**才永久禁用（一次 12153 多为临时抖动：网络 / 闪断 / refresh 竞态）；刷新成功 / 任意成功 / 手工复活清计数 | 人工重新登录（`login.sh`）或 `ReviveDisabled` 复活 |
 | 上游 404 | HTTP 404 | 软冷却固定 60s（不随 `soft_rate`、不单独退避） | 到期自动恢复 |
 | 服务端错误 | HTTP ≥500 | 喂连续失败计数，达阈值熔断 | 熔断到期 / 成功清零 |
@@ -820,6 +822,19 @@ python3 scripts/probe_max_tokens.py   --base http://127.0.0.1:7863/v1 --key sk-x
 - 妥善保管 `auths/`（明文凭证）与网关端口
 
 ## 常见问题
+
+### 面板一片「429 rate limit」、全池账号几乎同时进冷却，是账号被限流了吗？
+
+**大概率不是账号问题，是上游免费档排队**（1.15.5 起的处理，源自 2026-10-15 本机实案）。上游服务端队列积压时返回 `HTTP 429` + 业务码 `6020 queue.waiting` / `6021 queue.full`，响应带 `client_user_type:"free"`——这是**上游服务端队列水位**，与哪个账号、哪个模型都无关（同一时刻换 `cn:kimi-k3-1` 与 `cn:deepseek-v4.1-flash` 回的都是排队码）。
+
+判定与处置：
+
+- **看面板横幅**：`overview.upstream_queue` 激活时账号池上方显示「上游队列忙」横幅（含 `queue_position` / `queue_size` / `retry_after`），并明写「与账号无关、换号换模型都不绕过、无需手动解冻」。`/status` 同名字段亦可程序化判断。
+- **看错误码**：客户端拿到的是 `429` + `code=upstream_queue_busy`（不是账号限流的 `rate_limit_exceeded`），`gateway_hint` 写着 `not an account problem`。
+- **账号不受罚**：排队分类 `ErrUpstreamQueue` 对账号**零动作**（不冷却、不熔断、不喂连败），面板上这些号保持 `cooling=false`。
+- **网关自动止损并自愈**：命中排队即终止轮转（不再换号放大请求），门控期内后续请求直接回 429、**不发上游请求**；门控时长采信上游 `retry_after`（钳 15s–2m），**任一请求成功即自动解除**——上游队列疏通后无需人工干预。
+
+> 1.15.5 之前该码没有分支，落到 `status==429` 兜底被记成账号级限流：实案中 106 秒内 16/17 个账号各吃一次 429 全部进冷却（600s/1200s/2400s 阶梯），而真凶只是上游队列积压。
 
 ### 429 code=6004（模型级限流）的冷却语义？
 

@@ -467,6 +467,7 @@ async function loadOverview(quiet) {
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     refreshTagOptions(d);
+    renderQueueBox(d);
     renderAlertBox(d);
     const raw = d.accounts || [];
     const shown = accApply(raw);
@@ -484,6 +485,35 @@ function refreshTagOptions(d) {
     uniq.map(t => '<option value="' + esc(t) + '">' + esc(t) + '</option>').join('');
   if (cur && uniq.includes(cur)) sel.value = cur;
   else { sel.value = ''; accFilter.tag = ''; }
+}
+
+/* 上游队列忙横幅：overview.upstream_queue（网关排队门控快照，未激活为 null）。
+ * 上游 6020/6021 免费档排队是**服务端队列水位**，与账号无关——换号/换模型都不绕过。
+ * 界面上必须与「账号限流」分开显示，否则会被读成"号全废了"（2026-10-15 实案）。 */
+function renderQueueBox(d) {
+  const box = $('queueBox');
+  const q = d && d.upstream_queue;
+  if (!q || !q.active) { box.hidden = true; return; }
+  const parts = [];
+  if (q.code) parts.push('<span class="tag warn">上游码 ' + esc(q.code) + '</span>');
+  if (q.position) parts.push('队前 ' + q.position + ' 人');
+  if (q.size) parts.push('队列 ' + esc(q.size));
+  if (q.retry_after) parts.push('建议 ' + q.retry_after + 's 后重试');
+  $('queueNote').textContent = q.until ? '预计解除 ' + fmtClock(q.until) : '';
+  $('queueList').innerHTML =
+    '<div style="padding:3px 0;font-size:12.5px">' + parts.join(' · ') + '</div>' +
+    '<div class="hint" style="margin-top:6px">这不是账号问题：上游免费档排队积压，所有账号与模型同样受影响。' +
+    '网关已暂停轮转（不再拿健康号去撞队列），任一请求成功后自动恢复；无需手动解冻账号。</div>';
+  box.hidden = false;
+}
+
+/* fmtClock ISO 串 → 本地 HH:MM:SS（解析失败原样返回，不抛）。 */
+function fmtClock(iso) {
+  const t = Date.parse(iso);
+  if (isNaN(t)) return iso;
+  const dt = new Date(t);
+  return String(dt.getHours()).padStart(2, '0') + ':' +
+    String(dt.getMinutes()).padStart(2, '0') + ':' + String(dt.getSeconds()).padStart(2, '0');
 }
 
 /* 余额预警横幅：overview 现算的 low_credit（credits 低于积分保底线）。 */

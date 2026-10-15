@@ -674,6 +674,15 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="pad"><div id="expList"></div></div>
       </div>
 
+      <div class="box" id="queueBox" hidden>
+        <header>
+          <h3>上游队列忙<span class="hint">上游服务端排队（业务码 6020 排队中 / 6021 队列满），与账号无关——换号、换模型都不会绕过，网关已暂停轮转以避免把健康号烧进冷却</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="queueNote"></span>
+        </header>
+        <div class="pad"><div id="queueList"></div></div>
+      </div>
+
       <div class="box" id="alertBox" hidden>
         <header>
           <h3>余额预警<span class="hint">以下账号积分已低于「积分保底线」（pool.credit_floor），不再参与收费模型选号</span></h3>

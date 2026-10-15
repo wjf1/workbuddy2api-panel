@@ -32,7 +32,7 @@ import (
 )
 
 // appVersion 网关版本（fork 版：面板 + 任务体系），透出到 /panel/api/overview。
-const appVersion = "1.15.4-panel"
+const appVersion = "1.15.5-panel"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
@@ -338,6 +338,9 @@ func main() {
 		SearchMaxResults: cfg.Search.MaxResults,
 		SearchTimeout:    time.Duration(cfg.Search.TimeoutSeconds) * time.Second,
 	})
+	// 上游排队门控快照注入面板：排队（6020/6021）是上游服务端队列水位、与账号无关，
+	// 面板横幅据此区分它与账号限流（handler 已装配完，此处才拿得到 h）。
+	pn.SetUpstreamQueue(h.UpstreamQueueStatus)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

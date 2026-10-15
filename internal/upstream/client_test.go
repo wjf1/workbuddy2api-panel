@@ -114,6 +114,21 @@ func TestClassify(t *testing.T) {
 		// 非 403 的无信封错误体不进 WAF 分类（WAF 判定绑定 403 形态）。
 		{400, `bad request`, ErrClient},
 		{429, ``, ErrSoftRate},
+		// 6020/6021 上游免费档排队（queue.waiting / queue.full）：上游服务端队列
+		// 水位，与账号、模型都无关 → ErrUpstreamQueue（不罚号、不轮转）。
+		// 真实响应形态（2026-10-15 本机实测原文）：
+		{429, `{"code":6021,"msg":"queue.full.title","requestId":"5a779a031ab0d90ae71eba8b19f5dbf1"}`, ErrUpstreamQueue},
+		{429, `{"code":6020,"msg":"queue.waiting.title","requestId":"7342d617f50e393e81632f49f30c9f63","data":{"queue_position":5399,"queue_size":"999+","retry_after":40,"estimated_wait":26995,"client_user_type":"free"}}`, ErrUpstreamQueue},
+		// 业务码容忍 JSON 空白/字符串形态（与 6004/11102 同口径）。
+		{429, `{"code": 6021, "msg":"queue.full.title"}`, ErrUpstreamQueue},
+		{429, `{"error":{"data":{"code":"6020","msg":"queue.waiting.title"}}}`, ErrUpstreamQueue},
+		// 文案兜底：码位改版时短语仍可识别。
+		{429, `{"msg":"queue.full.title"}`, ErrUpstreamQueue},
+		{400, `queue.waiting.title`, ErrUpstreamQueue},
+		// 防过宽：200 + 同文案不当排队（排队判定绑定非 2xx 错误响应；200 走 ErrNone）。
+		{200, `{"code":6020,"msg":"queue.waiting.title"}`, ErrNone},
+		// 防过宽：6004（模型级限流）不得被排队判定劫持，仍走软限流。
+		{429, `{"code":6004,"msg":"模型用量已超限，将在 2026-10-15 12:00:00 重置"}`, ErrSoftRate},
 	}
 	for _, c := range cases {
 		if got := Classify(c.status, c.body); got != c.want {
@@ -180,8 +195,85 @@ func TestParseSoftRateReset(t *testing.T) {
 	}
 }
 
-type rtFunc func(*http.Request) (*http.Response, error)
+// TestParseQueueInfo 6020/6021 排队响应的队列表态解析（真实原文 + 缺字段/畸形兜底）。
+func TestParseQueueInfo(t *testing.T) {
+	t.Run("6020 完整 data", func(t *testing.T) {
+		body := `{"code":6020,"msg":"queue.waiting.title","requestId":"7342d617","data":{"queue_position":5399,"queue_size":"999+","retry_after":40,"estimated_wait":26995,"client_user_type":"free"}}`
+		info, ok := ParseQueueInfo(body)
+		if !ok {
+			t.Fatal("ok=false want true")
+		}
+		if info.Code != "6020" {
+			t.Errorf("Code=%q want 6020", info.Code)
+		}
+		if info.Position != 5399 {
+			t.Errorf("Position=%d want 5399", info.Position)
+		}
+		if info.Size != "999+" {
+			t.Errorf("Size=%q want 999+", info.Size)
+		}
+		if info.RetryAfter != 40*time.Second {
+			t.Errorf("RetryAfter=%v want 40s", info.RetryAfter)
+		}
+		if info.EstimatedWait != 26995*time.Millisecond {
+			t.Errorf("EstimatedWait=%v want 26995ms", info.EstimatedWait)
+		}
+	})
+	t.Run("6021 无 data", func(t *testing.T) {
+		// 实测 6021 只给 code/msg/requestId（无 data）：解析成功但除 Code 外全零值。
+		info, ok := ParseQueueInfo(`{"code":6021,"msg":"queue.full.title","requestId":"5a779a03"}`)
+		if !ok || info.Code != "6021" {
+			t.Fatalf("ok=%v code=%q want true/6021", ok, info.Code)
+		}
+		if info.Position != 0 || info.RetryAfter != 0 || info.Size != "" {
+			t.Errorf("want zero data fields, got %+v", info)
+		}
+	})
+	t.Run("数字字符串形态", func(t *testing.T) {
+		info, ok := ParseQueueInfo(`{"code":"6020","data":{"queue_position":"12","retry_after":"30"}}`)
+		if !ok || info.Position != 12 || info.RetryAfter != 30*time.Second {
+			t.Fatalf("ok=%v info=%+v want 12/30s", ok, info)
+		}
+	})
+	t.Run("非排队 / 非 JSON", func(t *testing.T) {
+		if _, ok := ParseQueueInfo(`{"code":6004,"msg":"limit"} `); ok {
+			t.Error("6004 不应解析为排队")
+		}
+		if _, ok := ParseQueueInfo(`not json`); ok {
+			t.Error("非 JSON 不应解析成功")
+		}
+	})
+}
 
+// TestIsUpstreamQueue 排队判定绑定「非 2xx + 排队码/文案」，避免劫持成功响应与 6004。
+func TestIsUpstreamQueue(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"6021 真实响应", 429, `{"code":6021,"msg":"queue.full.title"}`, true},
+		{"6020 真实响应", 429, `{"code":6020,"msg":"queue.waiting.title","data":{"queue_position":5399}}`, true},
+		{"码位字符串", 429, `{"code":"6021"}`, true},
+		{"嵌套 error.data", 429, `{"error":{"data":{"code":"6020","msg":"queue.waiting.title"}}}`, true},
+		{"仅文案兜底", 429, `{"msg":"queue.full.title"}`, true},
+		{"400 也认（形态绑定错误响应）", 400, `queue.waiting.title`, true},
+		{"200 不认（成功响应无排队语义）", 200, `{"code":6020,"msg":"queue.waiting.title"}`, false},
+		{"6004 不认", 429, `{"code":6004,"msg":"limit"}`, false},
+		{"普通 429 不认", 429, ``, false},
+		{"空体不认", 429, ``, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := IsUpstreamQueue(c.status, c.body); got != c.want {
+				t.Errorf("IsUpstreamQueue(%d,%q)=%v want %v", c.status, c.body, got, c.want)
+			}
+		})
+	}
+}
+
+type rtFunc func(*http.Request) (*http.Response, error)
 func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func jsonResp(status int, body string) *http.Response {

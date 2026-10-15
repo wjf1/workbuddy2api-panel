@@ -127,6 +127,10 @@ type Handler struct {
 	// wafIP WAF IP 级拦截状态机（fail-fast，wafip.go）：短窗多号 WAF 403 →
 	// 激活期轮转遇 WAF 403 直接终止（不放大请求量）。进程内状态、重启清零。
 	wafIP wafIPGate
+	// upstreamQueue 上游排队门控（fail-fast，queuegate.go）：6020/6021 免费档排队
+	// 是上游服务端队列水位（与账号、模型都无关）→ 首次命中即 fail-fast 终止轮转，
+	// 账号侧零惩罚。进程内状态、重启清零；任一请求成功即清除。
+	upstreamQueue queueGate
 }
 
 // NewHandler 构建 handler。
@@ -228,6 +232,12 @@ func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// UpstreamQueueStatus 暴露上游排队门控当前状态（面板/运维观测用）。
+// active=true 表示门控期内请求会被直接回 429 upstream_queue_busy（不发上游请求）。
+func (h *Handler) UpstreamQueueStatus() (active bool, until time.Time, info upstream.QueueInfo) {
+	return h.upstreamQueue.snapshot()
+}
+
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	total, healthy, cooling, disabled, inFlightFull := h.cfg.Pool.CountsDetailed()
 	sticky := 0
@@ -261,12 +271,37 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		// model_costs 对照即可判定「某号为何对某模型不出票」。零值也显式写出
 		// （运维口径：缺失会让人误以为没记录）。
 		"credit_floor": h.cfg.Pool.CreditFloor(),
+		// upstream_queue 上游排队门控快照（激活时给出 until/code/position/size/
+		// retry_after，未激活为 null）。排队与账号无关，独立字段避免与冷却混淆。
+		"upstream_queue": h.upstreamQueueStatusPayload(),
 		// cost_explore 事件与 per-model 时间戳（时间值由 encoding/json 写 RFC3339）。
 		"cost_explore": map[string]any{
 			"events_total": exploreEvents,
 			"per_model":    exploreLast,
 		},
 	})
+}
+
+// upstreamQueueStatusPayload /status 的上游排队门控载荷（未激活为 null）。
+func (h *Handler) upstreamQueueStatusPayload() any {
+	active, until, info := h.upstreamQueue.snapshot()
+	if !active {
+		return nil
+	}
+	out := map[string]any{"active": true, "until": until.Format(time.RFC3339)}
+	if info.Code != "" {
+		out["code"] = info.Code
+	}
+	if info.Position > 0 {
+		out["position"] = info.Position
+	}
+	if info.Size != "" {
+		out["size"] = info.Size
+	}
+	if info.RetryAfter > 0 {
+		out["retry_after"] = int(info.RetryAfter.Seconds())
+	}
+	return out
 }
 
 // countsMapFrom 把 CountsDetailed 五元组打包成 /status 的域分组建模。
@@ -571,6 +606,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// modelBlock 记录本次是否因「模型级冷却」而选不到号（下方 acct==nil 分支填充）。
 	// 默认零值 Blocked=false = 按既有的"没有可用账号"口径报错。
 	var modelBlock pool.ModelBlockStatus
+	// queueBusy 记录本次是否被上游排队门控 fail-fast 挡住（门控激活期内不发上游请求，
+	// 直接回 429 upstream_queue_busy）。零值 = 未被挡。
+	var queueBusy bool
+	var queueInfo upstream.QueueInfo
 
 	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
 	// ExtractKey 与粘性开关解耦（issue #35 侧）：关闭粘性时会话头族的聚合主键仍按
@@ -746,6 +785,19 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
 
 	for i := 0; i < h.cfg.MaxRotate; i++ {
+		// 上游排队门控（queuegate.go）：门控激活期内**不发上游请求**直接回 429——
+		// 队列堵着时任何账号、任何模型都会被上游拒收，发出去只是把一个请求放大
+		// MaxRotate 倍再喂给已过载的上游，并把健康号白白推进冷却。这是「排队期间
+		// 零成本止损」的关键一步（仅在轮转的第一跳检查即可：门控是进程级全局状态，
+		// 同一请求内不会自愈）。
+		if i == 0 {
+			if active, _, info := h.upstreamQueue.snapshot(); active {
+				queueBusy = true
+				queueInfo = info
+				st.status = http.StatusTooManyRequests
+				break
+			}
+		}
 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
 		var acct *auth.Auth
 		if stickyUID != "" {
@@ -972,6 +1024,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
 			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 			fail(acct.UID)
+			// 上游排队 fail-fast（优先于 WAF/rotateBackoff）：6020/6021 是上游服务端
+			// 队列水位，换账号、换模型都不会绕过（实测两模型回同一排队码）——继续轮转
+			// 只会把一个请求放大 MaxRotate 倍打已经堵住的上游。账号侧零惩罚
+			// （applyErrorPolicy 的 ErrUpstreamQueue 分支不冷却/不熔断/不喂连败）。
+			if kind == upstream.ErrUpstreamQueue {
+				info, _ := upstream.ParseQueueInfo(string(respBody))
+				h.upstreamQueue.noteQueue(acct.UID, info)
+				break
+			}
 			// WAF IP 级 fail-fast（优先于 rotateBackoff 退避——IP 级拦截时退避无意义）：
 			// 该次 WAF 403 喂入 IP 级状态机，若激活（短窗多号命中，IP 被拦而非账号）
 			// 则立即终止轮转——继续换号只会把请求放大 MaxRotate 倍打同一出口 IP，
@@ -1034,6 +1095,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			default:
 				// 真成功：这一跳读完且上游没有报错，才记成功并让粘性跟上。
 				st.outcome = reqlog.OutcomeSuccess
+				// 上游能出完整流 → 队列已疏通，清除排队门控（不在恢复后继续拦请求）。
+				h.upstreamQueue.clear()
 				h.cfg.Pool.NoteSuccess(acct.UID)
 				// 11102 负缓存清命：该账号该模型实测成功，立即解除避让（不必等 TTL 到期）。
 				// BlockModelClear 按 "11102" reason 前缀识别，只清 11102 条目、不碰 6004 独立冷却。
@@ -1098,6 +1161,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.outcome = reqlog.OutcomeSuccess
 		st.toks = completionTokens(resp)
 		// 非流式同理：聚合成功（无 error 帧、非空流）才算这一跳成功，事后才记成功/绑粘性。
+		h.upstreamQueue.clear() // 上游已出完整响应 → 队列疏通，清除排队门控
 		h.cfg.Pool.NoteSuccess(acct.UID)
 		h.cfg.Pool.BlockModelClear(acct.UID, bareModel)
 		if sessKey != "" && h.cfg.Session != nil {
@@ -1120,6 +1184,24 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusServiceUnavailable
 	code := "no_healthy_account"
 	msg := "all accounts are temporarily unavailable, please retry later"
+	// 上游排队门控挡下（本次根本没发上游请求）：回 429 + 独立 code，明确「上游队列忙」
+	// 而非「账号全挂了」——面板与客户端据此不做换号/换模型的无谓动作（换了也一样堵）。
+	// 若门控已被其他请求清除（上游已恢复），则不报排队，走下面的常规分支。
+	if queueBusy {
+		if _, _, info := h.upstreamQueue.snapshot(); info.Code == "" {
+			queueBusy = false
+		} else {
+			queueInfo = info
+		}
+	}
+	if queueBusy {
+		writeOpenAIErrorHint(w, http.StatusTooManyRequests, "upstream_queue_busy",
+			queueBusyMessage(queueInfo),
+			upstream.GatewayHint(upstream.ErrUpstreamQueue, "", upstream.HintContext{}))
+		st.status = http.StatusTooManyRequests
+		st.outcome = reqlog.OutcomeHTTPError
+		return
+	}
 	// 上游超时：轮转已在传输层分支止损（见 isUpstreamTimeout），这里给一条**能区分**
 	// 的文案，别混进"没有可用账号"——两者的排查方向完全不同。
 	if errors.Is(lastErr, errUpstreamTimeout) {
@@ -1140,6 +1222,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusTooManyRequests
 			code = "rate_limit_exceeded"
 			msg = "rate limited: all accounts are cooling down, please wait a moment and try again"
+		case upstream.ErrUpstreamQueue:
+			// 6020/6021 免费档排队：与账号无关（换号/换模型都不绕过），轮转已在命中处
+			// fail-fast 终止。回 429（客户端"等一会儿再试"的语义与限流一致），但 code
+			// 与 hint 明确区分「上游队列忙」而非「你的账号被限流」——否则面板与客户端
+			// 都会读成账号问题（2026-10-15 全池误冷却的认知根源）。
+			status = http.StatusTooManyRequests
+			code = "upstream_queue_busy"
 		case upstream.ErrWafBlock:
 			if h.wafIP.active() {
 				// IP 级拦截措辞（fail-fast 终止路径）：网关出口 IP 被 WAF 拦截、
@@ -1220,6 +1309,25 @@ func tokensPerSecond(completionTokens int64, total, ttfb time.Duration) (float64
 		}
 	}
 	return float64(completionTokens) / gen.Seconds(), true
+}
+
+// queueBusyMessage 排队门控的客户端文案：把上游给的队列表态摊开（队前人数 /
+// 队列规模 / 建议重试间隔），并明确「不是账号问题」——用户看到 429 的第一反应是
+// 换号/换模型，而这两者对队列水位都无效（实测两模型回同一排队码）。
+func queueBusyMessage(info upstream.QueueInfo) string {
+	var b strings.Builder
+	b.WriteString("upstream free-tier queue is busy (not an account problem;")
+	b.WriteString(" switching accounts or models will not help)")
+	if info.Position > 0 {
+		fmt.Fprintf(&b, "; queue_position=%d", info.Position)
+	}
+	if info.Size != "" {
+		fmt.Fprintf(&b, "; queue_size=%s", info.Size)
+	}
+	if info.RetryAfter > 0 {
+		fmt.Fprintf(&b, "; retry_after=%ds", int(info.RetryAfter/time.Second))
+	}
+	return b.String()
 }
 
 // promptTooLongMessage 11115 透传 message：上游 body 原文（含真实 token 数/
@@ -1403,6 +1511,12 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// （同一 body 换任何号都被同样拒绝，payload.go 已记录「schema 级拒绝换账号
 		// 无用」）。零动作（不冷却/不熔断/不 NoteError，同 ErrPromptTooLong/ErrImageInvalid
 		// 待遇）——chatCompletions 已 fail-fast 400 透传原文、终止轮转，此处仅为文档完备。
+	case upstream.ErrUpstreamQueue:
+		// 6020/6021 免费档排队：**上游服务端队列水位**，与账号、模型都无关（实测同一
+		// 时刻换 cn:kimi-k3-1 / cn:deepseek-v4.1-flash 回同一排队码，响应带
+		// client_user_type:"free"）。零动作（不冷却/不熔断/不 NoteError/不喂连败）：
+		// 把队列积压记成账号限流正是 2026-10-15「106 秒内 16/17 号全进冷却」的根因。
+		// 轮转侧由 h.upstreamQueue.noteQueue 门控 fail-fast 终止（见 chatCompletions）。
 	case upstream.ErrModelBlocked:
 		// 11102「该后端无此模型」：(账号, 模型) 负缓存避让。复用 modelCooldowns 机制
 		// （与 6004 同域），选号侧 healthyForModel 对该账号自动避开该模型。

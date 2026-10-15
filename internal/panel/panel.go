@@ -106,6 +106,36 @@ type Panel struct {
 	// SetTrashRetention 配置页热改）。<=0 = 永久保留。
 	trashMu            sync.Mutex
 	trashRetentionDays int
+
+	// upstreamQueue 上游排队门控快照（SetUpstreamQueue 注入；nil = overview 不带
+	// upstream_queue 字段）。仅供面板展示「上游队列忙」横幅——排队是上游服务端
+	// 队列水位、与账号无关，面板必须能区分它与账号限流（2026-10-15 全池误冷却的
+	// 认知根源就是界面上只显示「429 rate limit」）。
+	queueMu       sync.RWMutex
+	upstreamQueue func() (active bool, until time.Time, info upstream.QueueInfo)
+}
+
+// SetUpstreamQueue 注入上游排队门控快照函数（main 在 handler 装配后调用：
+// 面板先于 handler 构造，无法经 Config 一次性注入）。nil = 关闭该展示。
+func (p *Panel) SetUpstreamQueue(fn func() (active bool, until time.Time, info upstream.QueueInfo)) {
+	p.queueMu.Lock()
+	defer p.queueMu.Unlock()
+	p.upstreamQueue = fn
+}
+
+// upstreamQueueState 取排队门控当前状态（未注入/未激活时返回 ok=false）。
+func (p *Panel) upstreamQueueState() (until time.Time, info upstream.QueueInfo, ok bool) {
+	p.queueMu.RLock()
+	fn := p.upstreamQueue
+	p.queueMu.RUnlock()
+	if fn == nil {
+		return time.Time{}, upstream.QueueInfo{}, false
+	}
+	active, until, info := fn()
+	if !active {
+		return time.Time{}, upstream.QueueInfo{}, false
+	}
+	return until, info, true
 }
 
 // SetTrashRetention 热更新回收站保留天数（saveConfig 调用）。
@@ -289,7 +319,36 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"tags":            p.tagsByUID(),
 		"credit_floor":    p.creditFloor(),
 		"low_credit":      p.lowCreditAccounts(accounts),
+		"upstream_queue":  p.upstreamQueuePayload(),
 	})
+}
+
+// upstreamQueuePayload 上游排队门控的展示载荷（未激活/未注入时为 null）。
+// 字段与 /status 的 local 口径一致：active/until/code/position/size/retry_after。
+// 面板横幅据此显示「上游队列忙（非账号问题）」——把队列积压与账号限流在界面上
+// 彻底分开，避免下次再从面板上看不出根因。
+func (p *Panel) upstreamQueuePayload() any {
+	until, info, ok := p.upstreamQueueState()
+	if !ok {
+		return nil
+	}
+	out := map[string]any{
+		"active": true,
+		"until":  until.Format(time.RFC3339),
+	}
+	if info.Code != "" {
+		out["code"] = info.Code
+	}
+	if info.Position > 0 {
+		out["position"] = info.Position
+	}
+	if info.Size != "" {
+		out["size"] = info.Size
+	}
+	if info.RetryAfter > 0 {
+		out["retry_after"] = int(info.RetryAfter.Seconds())
+	}
+	return out
 }
 
 // creditFloor 生效的积分保底线（0 = 关闭/未配置）。预警横幅据此现算。

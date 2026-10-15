@@ -233,6 +233,182 @@ func TestChatModelParamInvalidFailsFastWithoutPenalty(t *testing.T) {
 }
 
 
+// TestChatUpstreamQueueFailsFastWithoutPenalty 上游 429 + 6021 queue.full（免费档排队）
+// → 上游服务端队列水位，与账号无关：账号零惩罚、零轮转、直接回 429 upstream_queue_busy，
+// 且响应必须带上游排队原文（用户/面板据此确认"不是号的问题"）。
+// 这是 2026-10-15「106 秒内 16/17 号全进冷却」的回归守卫。
+func TestChatUpstreamQueueFailsFastWithoutPenalty(t *testing.T) {
+	calls := map[string]int{}
+	queueBody := `{"code":6021,"msg":"queue.full.title","requestId":"5a779a031ab0d90ae71eba8b19f5dbf1"}`
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls[authz]++
+		return 429, queueBody, false
+	})
+	p := testPoolWith(
+		&auth.Auth{UID: "a1", AccessToken: "at-a1", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "a2", AccessToken: "at-a2", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "a3", AccessToken: "at-a3", ExpiresAt: 9999999999},
+	)
+	p.SetCredits("a1", 3000, 0) // 确定性源 r=0 → 先选 a1
+	p.SetCredits("a2", 2000, 0)
+	p.SetCredits("a3", 1000, 0)
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("code=%d body=%s (want 429 upstream_queue_busy)", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "upstream_queue_busy") {
+		t.Errorf("must use distinct code upstream_queue_busy (not rate_limit_exceeded): %s", body)
+	}
+	if !strings.Contains(body, "queue.full.title") {
+		t.Errorf("must pass through upstream queue body untouched: %s", body)
+	}
+	if strings.Contains(body, "rate_limit_exceeded") {
+		t.Errorf("queue must not be reported as account rate limit: %s", body)
+	}
+	// 零轮转：只打一次上游（队列堵塞时换号无用，且放大请求量）。
+	total := 0
+	for _, n := range calls {
+		total += n
+	}
+	if total != 1 {
+		t.Errorf("upstream calls=%v want exactly 1 (no rotation on queue)", calls)
+	}
+	// 账号零惩罚：所有号无冷却/无禁用/无熔断/无 errTotal（与 WAF 的软冷却也不同）。
+	for _, uid := range []string{"a1", "a2", "a3"} {
+		st, _ := p.Status(uid)
+		if st.Cooling || st.Disabled || st.ErrTotal != 0 || st.BreakerFails != 0 {
+			t.Errorf("%s must not be penalized by upstream queue: %+v", uid, st)
+		}
+	}
+}
+
+// TestChatUpstreamQueueGateBlocksRotationWhileActive 排队门控激活后，后续请求
+// **不再打上游**直接回 429（零成本止损：队列堵着时发出请求只是白白放大并烧号）。
+func TestChatUpstreamQueueGateBlocksRotationWhileActive(t *testing.T) {
+	var calls int
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls++
+		return 429, `{"code":6020,"msg":"queue.waiting.title","data":{"queue_position":5399,"queue_size":"999+","retry_after":40}}`, false
+	})
+	p := testPoolWith(&auth.Auth{UID: "a1", AccessToken: "at-a1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+
+	// 第一次：真打上游，撞排队 → 门控激活。
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("first call code=%d body=%s", rec.Code, rec.Body)
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d want 1 after first call", calls)
+	}
+	if active, _, _ := h.UpstreamQueueStatus(); !active {
+		t.Fatal("queue gate must be active after 6020")
+	}
+
+	// 第二次：门控激活期内，直接回 429，**零上游调用**。
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second call code=%d body=%s", rec2.Code, rec2.Body)
+	}
+	if calls != 1 {
+		t.Errorf("calls=%d want 1 (gate must block upstream call entirely)", calls)
+	}
+	b2 := rec2.Body.String()
+	if !strings.Contains(b2, "upstream_queue_busy") {
+		t.Errorf("gated response must use upstream_queue_busy: %s", b2)
+	}
+	if !strings.Contains(b2, "5399") {
+		t.Errorf("gated response should surface queue position for the operator: %s", b2)
+	}
+}
+
+// TestChatUpstreamQueueGateClearsOnSuccess clear 后门控归零，且随后的成功请求
+// 不会重新激活（守住「恢复后不被网关自己挡住」）。
+func TestChatUpstreamQueueGateClearsOnSuccess(t *testing.T) {
+	var ok bool
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		if !ok {
+			return 429, `{"code":6021,"msg":"queue.full.title"}`, false
+		}
+		return 200, sseOK, true
+	})
+	p := testPoolWith(&auth.Auth{UID: "a1", AccessToken: "at-a1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if active, _, _ := h.UpstreamQueueStatus(); !active {
+		t.Fatal("gate must be active after 6021")
+	}
+
+	// 手动清除门控条件（模拟上游队列疏通 + 过期）后打一次成功请求。
+	h.upstreamQueue.clear()
+	ok = true
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("recovered call code=%d body=%s", rec2.Code, rec2.Body)
+	}
+	if active, _, _ := h.UpstreamQueueStatus(); active {
+		t.Error("gate must stay clear after a successful request")
+	}
+}
+
+// TestQueueGateActivationAndDuration 门控状态机单测：首次命中即激活、
+// 时长采信 retry_after 并钳到 [15s,2m]、clear 后归零。
+func TestQueueGateActivationAndDuration(t *testing.T) {
+	t.Run("retry_after 采信", func(t *testing.T) {
+		var g queueGate
+		if !g.noteQueue("u1", upstream.QueueInfo{Code: "6020", RetryAfter: 40 * time.Second}) {
+			t.Fatal("first hit must activate")
+		}
+		_, until, info := g.snapshot()
+		if d := time.Until(until); d < 35*time.Second || d > 41*time.Second {
+			t.Errorf("duration=%v want ~40s", d)
+		}
+		if info.Code != "6020" {
+			t.Errorf("info.Code=%q want 6020", info.Code)
+		}
+	})
+	t.Run("retry_after 过小抬到下限", func(t *testing.T) {
+		var g queueGate
+		g.noteQueue("u1", upstream.QueueInfo{Code: "6020", RetryAfter: time.Second})
+		_, until, _ := g.snapshot()
+		if d := time.Until(until); d < 14*time.Second {
+			t.Errorf("duration=%v want >=15s (clamped up)", d)
+		}
+	})
+	t.Run("retry_after 过大钳到上限", func(t *testing.T) {
+		var g queueGate
+		g.noteQueue("u1", upstream.QueueInfo{Code: "6020", RetryAfter: time.Hour})
+		_, until, _ := g.snapshot()
+		if d := time.Until(until); d > 2*time.Minute+time.Second {
+			t.Errorf("duration=%v want <=2m (clamped down)", d)
+		}
+	})
+	t.Run("无 retry_after 回落 estimated_wait", func(t *testing.T) {
+		var g queueGate
+		g.noteQueue("u1", upstream.QueueInfo{Code: "6020", EstimatedWait: 30 * time.Second})
+		_, until, _ := g.snapshot()
+		if d := time.Until(until); d < 29*time.Second || d > 31*time.Second {
+			t.Errorf("duration=%v want ~30s", d)
+		}
+	})
+	t.Run("clear 归零", func(t *testing.T) {
+		var g queueGate
+		g.noteQueue("u1", upstream.QueueInfo{Code: "6021"})
+		g.clear()
+		if active, _, info := g.snapshot(); active || info.Code != "" {
+			t.Errorf("after clear: active=%v info=%+v", active, info)
+		}
+	})
+}
+
 func TestChatNonStreamAggregates(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		if authz != "Bearer at1" {

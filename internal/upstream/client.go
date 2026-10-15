@@ -42,6 +42,7 @@ const (
 	ErrPromptTooLong                 // 11115「prompt is too long」→ 请求级错误（上下文超限是请求的问题非账号的问题）：不罚号、不轮转，末端透传原文
 	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
 	ErrModelParamInvalid             // 11133「model_param_invalid」→ 请求参数被上游模型提供方拒绝：请求级错误，不罚号、不轮转，末端透传原文 400
+	ErrUpstreamQueue                 // 6020/6021 上游免费档排队（queue.waiting / queue.full）→ 上游整体过载，与账号/模型都无关：不罚号、不轮转，末端透传原文 429
 	ErrClient                        // 其他 4xx / 业务错误
 )
 
@@ -71,6 +72,8 @@ func (k ErrKind) String() string {
 		return "image_invalid"
 	case ErrModelParamInvalid:
 		return "model_param_invalid"
+	case ErrUpstreamQueue:
+		return "upstream_queue"
 	case ErrAccountFault:
 		return "account_fault"
 	case ErrClient:
@@ -240,9 +243,113 @@ func IsModelRateLimit(body string) bool {
 	return reModelRateLimit.MatchString(body)
 }
 
+// queueWaitingCode / queueFullCode 上游**免费档排队**的业务 code：
+// 6020 "queue.waiting.title"（已入队等待）/ 6021 "queue.full.title"（队列已满）。
+// 两者都随 HTTP 429 返回，但语义与 6004（模型级限流）/ 账号级软限流**完全不同**：
+// 它们描述的是上游服务端队列的整体水位，与「哪个账号」「哪个模型」都无关——
+// 实测同一时刻换模型（cn:kimi-k3-1 / cn:deepseek-v4.1-flash）回的都是排队码，
+// 且响应里带 client_user_type:"free"。误判成账号级限流的代价是全池被逐个软冷却
+// （2026-10-15 实案：106 秒内 16/17 个账号全进冷却），而真凶是上游队列积压。
+const (
+	queueWaitingCode = "6020"
+	queueFullCode    = "6021"
+)
+
+// queueMsgMarkers 排队码的确定性文案（body 里 msg 字段的固定短语）。
+// code 与文案任一命中即判排队——code 为主判据（结构化、不受文案改版影响），
+// 文案作二次兜底（上游若改码位，短语仍可识别）。
+var queueMsgMarkers = []string{"queue.waiting.title", "queue.full.title"}
+
+// IsUpstreamQueue 报告响应是否为上游排队（6020 排队中 / 6021 队列满）。
+//
+// 只认「非 2xx + 排队码/排队文案」：成功响应永远不会带这两个 code，而错误响应
+// 带它们就是队列表态——判定窄而确定，不做任何泛化文案匹配（"too many requests"
+// 之类留给 softRateMarkers 走既有限流语义）。
+func IsUpstreamQueue(status int, body string) bool {
+	if status < 400 || body == "" {
+		return false
+	}
+	if hasBusinessCode(body, queueWaitingCode) || hasBusinessCode(body, queueFullCode) {
+		return true
+	}
+	for _, m := range queueMsgMarkers {
+		if strings.Contains(body, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// QueueInfo 上游排队响应携带的队列表态（data 对象，字段均为可选）。
+// 全部零值也合法：6021 只给 code/msg，没有 data。
+type QueueInfo struct {
+	Code          string        // 命中的业务码（6020 / 6021）
+	Position      int           // data.queue_position 队前人数
+	Size          string        // data.queue_size 队列规模（上游给的是字符串，如 "999+"）
+	RetryAfter    time.Duration // data.retry_after（秒）：上游建议的重试间隔
+	EstimatedWait time.Duration // data.estimated_wait（毫秒）：上游估算的等待时长
+}
+
+// ParseQueueInfo 从排队响应 body 解析 data 对象（宽松解析：数字可能是 JSON number
+// 也可能是字符串，缺字段即零值）。返回 ok=false 表示既不是排队响应、或 body 不是
+// 可解析的 JSON——调用方据此只把「确实解析到排队信息」用于展示与门控时长。
+func ParseQueueInfo(body string) (QueueInfo, bool) {
+	var root map[string]any
+	if err := json.Unmarshal([]byte(body), &root); err != nil {
+		return QueueInfo{}, false
+	}
+	info := QueueInfo{}
+	if code := jsonString(root["code"]); code == queueWaitingCode || code == queueFullCode {
+		info.Code = code
+	}
+	data, _ := root["data"].(map[string]any)
+	if data == nil {
+		if info.Code == "" {
+			return QueueInfo{}, false
+		}
+		return info, true
+	}
+	info.Position = jsonInt(data["queue_position"])
+	info.Size = jsonString(data["queue_size"])
+	info.RetryAfter = time.Duration(jsonInt(data["retry_after"])) * time.Second
+	info.EstimatedWait = time.Duration(jsonInt(data["estimated_wait"])) * time.Millisecond
+	if info.Code == "" {
+		// 无 code 但有 data 队列表态：仍算排队（文案兜底命中路径）。
+		info.Code = queueWaitingCode
+	}
+	return info, true
+}
+
+// jsonInt 宽松取整数：JSON number 与数字字符串都接受，其余返回 0。
+func jsonInt(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return 0
+		}
+		return i
+	default:
+		return 0
+	}
+}
+
+// jsonString 宽松取字符串：字符串原样返回，数字转十进制文本，其余返回空串。
+func jsonString(v any) string {
+	switch s := v.(type) {
+	case string:
+		return strings.TrimSpace(s)
+	case float64:
+		return strconv.FormatInt(int64(s), 10)
+	default:
+		return ""
+	}
+}
+
 // modelBlockCode 明确指向「该后端无此模型」的业务 code。
 const modelBlockCode = "11102"
-
 // modelBlockMsgMarker 11102 答复的确定性文案（官方 error message 固定短语）。
 // 只收这个窄短语，不收 "model ... not found" 宽正则——后者会误伤其他业务的
 // not found 措辞。
@@ -474,21 +581,24 @@ func ParseRateReset(body string) (time.Time, bool) {
 //     不受影响。
 //  4. 429 + code 14018 —— 明确的账号积分耗尽，归 ErrHardCredit（issue #175）。
 //     只认结构化业务码，不靠可能跨计费/限流两界的文案猜测。
-//  5. status==429 —— 限流状态码兜底（先于 hardMarkers）：429 body 高频携带
+//  5. 6020/6021 —— 上游免费档排队（queue.waiting / queue.full），归 ErrUpstreamQueue。
+//     这是**上游服务端队列水位**，与账号、模型都无关，必须先于 status==429 兜底：
+//     否则每个被轮到的账号各吃一次 429、各软冷却一轮，全池被队列积压烧穿。
+//  6. status==429 —— 限流状态码兜底（先于 hardMarkers）：429 body 高频携带
 //     "quota exceeded"/"额度不足" 等跨计费/限流两界的措辞，hardMarkers 先判会把
 //     限流误归 ErrHardCredit 硬冷却到次日 04:00，白扔号约 12h。状态码是比关键词
 //     更权威的信号；真正的余额耗尽由 402（第 1 层）或 14018（第 4 层）捕获，
-//     非 429 状态码的 quota 措辞仍走下方 hardMarkers（第 6 层）。
-//  6. hardMarkers —— 非 429 响应携带计费关键词（200 业务信封 / 403 信封等）。
-//  7. softRateMarkers —— 非 429 状态码携带限流文案（issue #28 修复点）。
+//     非 429 状态码的 quota 措辞仍走下方 hardMarkers（第 7 层）。
+//  7. hardMarkers —— 非 429 响应携带计费关键词（200 业务信封 / 403 信封等）。
+//  8. softRateMarkers —— 非 429 状态码携带限流文案（issue #28 修复点）。
 //     位于此处可覆盖 200/400/403/5xx 各状态码。
-//  8. 11115 —— 「prompt is too long」请求级语义：判在 404/5xx 与通用 4xx 兜底
+//  9. 11115 —— 「prompt is too long」请求级语义：判在 404/5xx 与通用 4xx 兜底
 //     之前（404 上打 11115 若落 ErrNotFound 会误冷却账号——上下文超限与账号无关）。
-//  9. 404 / 5xx —— 与限流无关的常规分类。
-//  10. IsWafBlocked —— 403 且无业务信封（HTML 拦截页/空体/纯文本）：APISIX WAF
+//  10. 404 / 5xx —— 与限流无关的常规分类。
+//  11. IsWafBlocked —— 403 且无业务信封（HTML 拦截页/空体/纯文本）：APISIX WAF
 //     拦截形态。判在通用 4xx 兜底**之前**：此前该形态落 ErrClient → 只换号不罚 →
 //     连环 403。带业务信封的 403 已被上方各层捕获，走不到本层。
-//  11. 内容策略/参数错误/其他 4xx —— 通用兜底。
+//  12. 内容策略/参数错误/其他 4xx —— 通用兜底。
 func Classify(status int, body string) ErrKind {
 	// 11102「该后端无此模型」须最先判：它是「模型在后端不存在」的确定性答复，语义比
 	// 计费/限流都更具体——若不先判，msg 里的 "service info not found" 会被更宽的
@@ -520,6 +630,14 @@ func Classify(status int, body string) ErrKind {
 	// 判定；无该 code 的 "credits exhausted" 文案仍保持普通 429 的软限流语义。
 	if status == http.StatusTooManyRequests && hasBusinessCode(body, "14018") {
 		return ErrHardCredit
+	}
+	// 6020/6021 免费档排队（queue.waiting / queue.full）必须先于 status==429 兜底：
+	// 它表达的是**上游服务端队列水位**，与账号、模型都无关（实测同一时刻换模型仍是
+	// 排队码，响应带 client_user_type:"free"）。落到 429 兜底就会被记成「这个账号被
+	// 限流了」并逐号软冷却——2026-10-15 实案：106 秒内 16/17 个账号全部进冷却，
+	// 真凶却是上游队列积压（issue: 全池被队列码烧穿）。
+	if IsUpstreamQueue(status, body) {
+		return ErrUpstreamQueue
 	}
 	// status==429 先于 hardMarkers：限流响应 body 高频携带 "quota exceeded"/
 	// "额度不足" 等跨计费/限流两界的措辞，hardMarkers 先判会把限流误归
