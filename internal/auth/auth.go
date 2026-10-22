@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
 // Auth 是归一化后的账号凭证（来源可以是插件 OAuth 嵌套形或手写扁平形）。
@@ -422,11 +422,12 @@ func (a *Auth) SaveAtomic() error {
 	if err != nil {
 		return err
 	}
-	tmp := a.FilePath + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	// 落盘走 safefile：tmp fsync 后才 rename（掉电不会留下长度正确、内容全 0 的
+	// 凭证文件），并把上一份有效内容留成 <file>.bak —— LoadDir 读到坏文件时用它。
+	if err := safefile.WriteKeep(a.FilePath, raw, 0o600); err != nil {
 		// Docker bind-mount 权限问题的典型现场：容器内 app 用户（uid 10001）
 		// 对宿主机挂载目录无写权限。给出可操作指引而不是裸 syscall 错误。
-		msg := fmt.Sprintf("写入 %s 失败: %v", tmp, err)
+		msg := fmt.Sprintf("写入 %s 失败: %v", a.FilePath, err)
 		if errors.Is(err, fs.ErrPermission) {
 			msg += "\n（Docker 部署：容器内用户对宿主机挂载目录无写权限。解法任选：" +
 				"1) 以本机 uid 运行容器：PUID=$(id -u) PGID=$(id -g) docker compose up -d；" +
@@ -435,10 +436,12 @@ func (a *Auth) SaveAtomic() error {
 		}
 		return errors.New(msg)
 	}
-	return os.Rename(tmp, a.FilePath)
+	return nil
 }
 
-// LoadDir 扫描并解析 dir 下 workbuddy*.json；解析失败的文件静默跳过（启动日志由调用方统计）。
+// LoadDir 扫描并解析 dir 下 workbuddy*.json。单个文件读不通时：正文损坏先用
+// <file>.bak 兜底（掉电留下全 0 文件的救回路径，safefile.Read），两边都坏才跳过，
+// 并打 ERROR 点名到文件——「账号凭空少了一个」比多打一行日志难查得多。
 // 顺带做 realm 标识存量迁移：对空 realm 的 auth 自动 backfill（原始 domain 推断）并 SaveAtomic
 // 落盘，一次性把旧文件补上 realm 键。单个文件写失败不阻断启动（log WARN 继续），
 // 避免历史 auth 目录个别文件不可写时整个服务起不来。
@@ -452,12 +455,20 @@ func LoadDir(dir string) ([]*Auth, error) {
 	seenUID := make(map[string]string, len(files))
 	var out []*Auth
 	for _, f := range files {
-		raw, err := os.ReadFile(f)
+		// 坏文件不再静默跳过：safefile.Read 在正文损坏时回退到 .bak（掉电留下的
+		// 全 0 文件因此还能救回账号），两边都坏才放弃，并且说清是哪个文件、坏在哪
+		// ——「账号凭空少了一个」比多打一行 ERROR 难查得多。
+		raw, err := safefile.Read(f, func(b []byte) bool {
+			_, perr := Parse(b)
+			return perr == nil
+		})
 		if err != nil {
+			log.Printf("ERROR: auth 文件 %s 无法读取: %v —— 该账号本次不在池里，修好文件或重新登录", f, err)
 			continue
 		}
 		a, err := Parse(raw)
 		if err != nil {
+			log.Printf("ERROR: auth 文件 %s 解析失败: %v —— 该账号本次不在池里", f, err)
 			continue
 		}
 		a.FilePath = f

@@ -23,6 +23,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/server"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
@@ -439,6 +440,26 @@ func panelListenPath(listen string) string {
 	return listen
 }
 
+// writeConfigInPlace 原地重写配置文件（O_TRUNC + Write + fsync + Close）。
+//
+// 只用于原子替换不可用的两种 Docker 部署形态：目录不可写（fs.ErrPermission，
+// 建不出临时文件）与单文件 bind mount（rename 返回 EBUSY）。代价是丢掉了原子性
+// 与 .bak：写一半失败时配置文件会处于半截状态，故只在确实无法原子替换时才走这里。
+func writeConfigInPlace(path string, out []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(out)
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	return werr
+}
+
 // saveConfig 面板保存配置：校验 → 落盘 → 热应用 → 返回需重启的字段列表。
 //
 // 热生效范围（设计取舍）：
@@ -479,36 +500,28 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	if err != nil {
 		return nil, fmt.Errorf("marshal config: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return nil, fmt.Errorf("write config: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		// A single-file Docker bind mount cannot be renamed over its mount
-		// target (Linux returns EBUSY / "device or resource busy"). Keep the
-		// atomic path for regular files, but update the mounted file in place
-		// for this specific deployment shape.
-		if !errors.Is(err, syscall.EBUSY) {
-			return nil, fmt.Errorf("replace config: %w", err)
-		}
-		f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
-		if openErr != nil {
-			_ = os.Remove(tmp)
-			return nil, fmt.Errorf("replace config (bind mount fallback): %w", openErr)
-		}
-		_, writeErr := f.Write(out)
-		if writeErr == nil {
-			writeErr = f.Sync()
-		}
-		closeErr := f.Close()
-		// 写失败时保留 tmp（挂载文件已被 O_TRUNC 破坏，tmp 里是完整新内容，
-		// 可手工恢复）；写成功才清理。
-		if writeErr != nil {
-			return nil, fmt.Errorf("replace config (bind mount fallback, 完整新内容保留在 %s): %w", tmp, writeErr)
-		}
-		_ = os.Remove(tmp)
-		if closeErr != nil {
-			return nil, fmt.Errorf("replace config (bind mount fallback): %w", closeErr)
+	// safefile：tmp fsync 后才 rename，并把上一份有效配置留成 config.json.bak
+	// —— 掉电把 config.json 留成半截时，下次启动能捡回上一份。
+	if err := safefile.WriteKeep(path, out, 0o600); err != nil {
+		switch {
+		case errors.Is(err, fs.ErrPermission):
+			// 配置所在目录不可写：Docker 里 /app 属主是镜像内的 app(10001)，而 compose 让
+			// 容器以 PUID(如 1000) 运行 —— 挂载进去的 config.json 可写、目录不行，于是原子
+			// 替换连临时文件都建不出来（issue #134：write config: open /app/config.json.tmp:
+			// permission denied）。文件本身可写就退回原地重写，不再要求目录可写。
+			if inPlaceErr := writeConfigInPlace(path, out); inPlaceErr != nil {
+				return nil, fmt.Errorf("write config (目录不可写，原地重写也失败): %w", inPlaceErr)
+			}
+		case errors.Is(err, syscall.EBUSY):
+			// A single-file Docker bind mount cannot be renamed over its mount
+			// target (Linux returns EBUSY / "device or resource busy"). Keep the
+			// atomic path for regular files, but update the mounted file in place
+			// for this specific deployment shape.
+			if inPlaceErr := writeConfigInPlace(path, out); inPlaceErr != nil {
+				return nil, fmt.Errorf("replace config (bind mount fallback): %w", inPlaceErr)
+			}
+		default:
+			return nil, fmt.Errorf("write config: %w", err)
 		}
 	}
 
