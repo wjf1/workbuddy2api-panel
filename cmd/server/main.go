@@ -160,6 +160,8 @@ func main() {
 	up.ClientName = cfg.Upstream.ClientName
 	up.DeviceToken = cfg.Upstream.DeviceToken
 	up.DeviceTokenFile = cfg.Upstream.DeviceTokenFile
+	up.DumpDir = cfg.Upstream.DumpDir
+	up.DumpRequestMax = cfg.Upstream.DumpMaxBytes
 	up.PassthroughIP = cfg.Upstream.PassthroughIP
 	// global realm 路由（config global 段）：上游侧开关（第一道闸）+ base 覆盖；
 	// auth 侧开关（auth.SetGlobalEnabled）是第二道闸，两者同 config global.enabled。
