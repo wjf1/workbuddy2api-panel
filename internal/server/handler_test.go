@@ -16,6 +16,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
@@ -1824,5 +1825,239 @@ func TestApplyErrorPolicy14003ModelBusyShortWindow(t *testing.T) {
 	st2, _ := p.Status("u1")
 	if !st2.Cooling {
 		t.Errorf("空模型名的 14003 应退回账号级软冷却: %+v", st2)
+	}
+}
+
+// ── models.hidden 黑名单（列表过滤 + 点名拒绝） ─────────────────────────────
+//
+// 语义：黑名单 = 「这个模型对本网关不存在」。_v1/models 不列（否则客户端会选到
+// 一个必然 400 的模型）、点名调用直接 400（只藏列表不够，知道名字仍可硬调）。
+// 裸名条目隐藏两域；"cn:"/"global:" 前缀条目只隐藏该域。
+
+// hiddenChatPost 发一次非流式 chat 请求，返回响应记录器。
+func hiddenChatPost(t *testing.T, h *Handler, model string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	body := []byte(`{"model":"` + model + `","messages":[]}`)
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body)))
+	return rec
+}
+
+// TestChatHiddenModelRejected models.hidden 黑名单：点名调用直接 400 拒绝，
+// 不打上游、不占选号；未隐藏的模型照常放行。
+func TestChatHiddenModelRejected(t *testing.T) {
+	var calls int
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls++
+		return 200, sseOK, true
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up, ModelsHidden: []string{"glm-5.2", "global:secret-model"}})
+
+	// 裸名隐藏 → 裸名 / cn: / global: 三种写法都拒绝（换前缀不能绕过）
+	for _, model := range []string{"glm-5.2", "cn:glm-5.2", "global:glm-5.2"} {
+		rec := hiddenChatPost(t, h, model)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("model %q: code=%d, want 400", model, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "model_unavailable") {
+			t.Errorf("model %q: body=%s, want model_unavailable", model, rec.Body.String())
+		}
+	}
+	// 前缀精确隐藏：只藏 global 域
+	if rec := hiddenChatPost(t, h, "global:secret-model"); rec.Code != http.StatusBadRequest {
+		t.Errorf("global:secret-model: code=%d, want 400", rec.Code)
+	}
+	if calls != 0 {
+		t.Errorf("hidden models must not reach upstream: calls=%d", calls)
+	}
+
+	// cn:secret-model 不在黑名单 → 放行并打到上游
+	rec := hiddenChatPost(t, h, "cn:secret-model")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cn:secret-model: code=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Errorf("allowed model: upstream calls=%d, want 1", calls)
+	}
+}
+
+// TestChatHiddenEmptyConfigZeroChange 空黑名单 = 零改动：所有模型照常放行。
+func TestChatHiddenEmptyConfigZeroChange(t *testing.T) {
+	var calls int
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls++
+		return 200, sseOK, true
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	if rec := hiddenChatPost(t, h, "glm-5.2"); rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Errorf("upstream calls=%d, want 1", calls)
+	}
+}
+
+// presetDynamicModelsCache 预置 CN 模型目录缓存（避免联网拉取），返回恢复函数。
+func presetDynamicModelsCache(infos []upstream.ModelInfo) func() {
+	dynamicModelsCache.Lock()
+	dynamicModelsCache.ids = infos
+	dynamicModelsCache.fetched = time.Now()
+	dynamicModelsCache.Unlock()
+	return func() {
+		dynamicModelsCache.Lock()
+		dynamicModelsCache.ids = nil
+		dynamicModelsCache.fetched = time.Time{}
+		dynamicModelsCache.lastFail = time.Time{}
+		dynamicModelsCache.Unlock()
+	}
+}
+
+// collectModelIDs 请求 /v1/models 并返回 id 集合。
+func collectModelIDs(t *testing.T, h *Handler) map[string]bool {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode /v1/models: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, m := range resp.Data {
+		ids[m.ID] = true
+	}
+	return ids
+}
+
+// TestModelsHiddenFiltered models.hidden 黑名单：/v1/models 列表里过滤掉隐藏模型（CN 域）。
+func TestModelsHiddenFiltered(t *testing.T) {
+	restore := presetDynamicModelsCache([]upstream.ModelInfo{{ID: "glm-5.2"}, {ID: "deepseek-v3"}})
+	defer restore()
+
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, `{"data":[]}`, false
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up, ModelsHidden: []string{"deepseek-v3"}})
+
+	ids := collectModelIDs(t, h)
+	if !ids["cn:glm-5.2"] {
+		t.Errorf("visible model missing from list: ids=%v", ids)
+	}
+	if ids["cn:deepseek-v3"] {
+		t.Errorf("hidden model leaked into /v1/models: ids=%v", ids)
+	}
+}
+
+// TestModelsHiddenScopedCNOnly 带前缀条目只隐藏该域：cn:legacy 在 CN 列表消失，
+// 但裸名模型仍两域可见（global 侧同一条 id 不受 cn: 前缀条目影响）。
+func TestModelsHiddenScopedCNOnly(t *testing.T) {
+	restore := presetDynamicModelsCache([]upstream.ModelInfo{{ID: "legacy-model"}, {ID: "glm-5.2"}})
+	defer restore()
+
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, `{"data":[]}`, false
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up, ModelsHidden: []string{"cn:legacy-model"}})
+
+	ids := collectModelIDs(t, h)
+	if ids["cn:legacy-model"] {
+		t.Errorf("cn: 前缀条目应隐藏 CN 域条目: ids=%v", ids)
+	}
+	if !ids["cn:glm-5.2"] {
+		t.Errorf("非黑名单模型不应受影响: ids=%v", ids)
+	}
+	// 同一 id 在 global 域不受 cn: 前缀条目约束（判据按 realm 前缀精确匹配）。
+	if h.hiddenModel("global", "legacy-model") {
+		t.Error("cn: 前缀条目不得隐藏 global 域")
+	}
+	if !h.hiddenModel("cn", "legacy-model") {
+		t.Error("cn: 前缀条目应隐藏 cn 域")
+	}
+}
+
+// globalModelsFakeClient 构造一个 global 域可达的 fake 上游：/v3/config 下发固定
+// 模型目录，其余路径 404（企业端点家族探测失败但被容忍，不影响并集结果）。
+func globalModelsFakeClient(t *testing.T, ids []string) *upstream.Client {
+	t.Helper()
+	models := make([]string, 0, len(ids))
+	for _, id := range ids {
+		models = append(models, `{"id":"`+id+`"}`)
+	}
+	payload := `{"code":0,"data":{"models":[` + strings.Join(models, ",") + `]}}`
+	return &upstream.Client{
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/v3/config") {
+				return &http.Response{
+					StatusCode: 200,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(payload)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 404,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"code":404,"msg":"not found"}`)),
+			}, nil
+		})},
+		ChatBaseCN:     "https://fake.example",
+		BillingBaseCN:  "https://fake.example",
+		ChatBaseGlobal: "https://fake-global.example",
+		GlobalEnabled:  true,
+	}
+}
+
+// TestModelsHiddenFilteredGlobal global 域同样过滤：裸名条目（两域）与
+// "global:" 前缀条目都要从 global 名单里消失，未隐藏的照常列出。
+func TestModelsHiddenFilteredGlobal(t *testing.T) {
+	auth.SetGlobalEnabled(true)
+	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
+	restore := presetDynamicModelsCache([]upstream.ModelInfo{{ID: "glm-5.2"}})
+	defer restore()
+
+	up := globalModelsFakeClient(t, []string{"gpt-5.4", "glm-5.2", "hide-me"})
+	p := testPoolWith(&auth.Auth{UID: "g1", Domain: "www.workbuddy.ai", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{
+		Pool:          p,
+		Upstream:      up,
+		GlobalEnabled: true,
+		ModelsHidden:  []string{"glm-5.2", "global:hide-me"},
+	})
+
+	ids := collectModelIDs(t, h)
+	if ids["global:glm-5.2"] {
+		t.Errorf("裸名条目应同时隐藏 global 域: ids=%v", ids)
+	}
+	if ids["global:hide-me"] {
+		t.Errorf("global: 前缀条目应隐藏 global 域: ids=%v", ids)
+	}
+	if !ids["global:gpt-5.4"] {
+		t.Errorf("未隐藏的 global 模型应照常列出: ids=%v", ids)
+	}
+}
+
+// TestHiddenModelHotReload 快照整体替换（面板保存）后黑名单立即生效/失效。
+func TestHiddenModelHotReload(t *testing.T) {
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) { return 200, sseOK, true })
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	live := livecfg.New(livecfg.Snapshot{HiddenModels: livecfg.NormalizeHiddenModels([]string{"glm-5.2"})})
+	h := NewHandler(Config{Pool: p, Upstream: up, Live: live})
+
+	if rec := hiddenChatPost(t, h, "glm-5.2"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("配置后应拒绝: code=%d", rec.Code)
+	}
+	// 面板清空黑名单 → 无需重启即放行
+	live.Store(livecfg.Snapshot{HiddenModels: livecfg.NormalizeHiddenModels(nil)})
+	if rec := hiddenChatPost(t, h, "glm-5.2"); rec.Code != http.StatusOK {
+		t.Fatalf("清空黑名单后应放行: code=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

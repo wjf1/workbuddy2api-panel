@@ -191,6 +191,21 @@ type Config struct {
 		SanitizeBlacklistFingerprints bool `json:"sanitize_blacklist_fingerprints"`
 	} `json:"features"`
 
+	Models struct {
+		// Hidden 不对外暴露的模型黑名单。裸名=两域都藏；"cn:xxx"/"global:xxx"=只藏该域。
+		// 生效点：GET /v1/models 列表过滤 + POST /v1/chat/completions 点名拒绝
+		// （只藏列表不够——知道名字仍可硬调）。面板保存后经 livecfg 热生效，无需重启。
+		Hidden []string `json:"hidden"`
+		// Aliases 模型映射表："客户端名=真实模型名" 条目数组，与 Hidden 同存储形态
+		// （数组整体覆盖，面板删条目无需重启）。键：裸名=两域生效，"cn:x"/"global:x"
+		// =只在该域生效；键大小写不敏感。值可带 realm 前缀实现跨域指向
+		// （"my-glm": "global:glm-5.2"）。生效点：chat 请求解析 realm/裸名之后、
+		// 隐藏检查/选号/出站 body 之前整体替换；被映射到的目标仍受 Hidden 约束
+		// （别名不能绕过黑名单）。响应回显客户端原发名，选号/账本按实际生效模型名。
+		// 面板保存后经 livecfg 热生效，无需重启。
+		Aliases []string `json:"aliases"`
+	} `json:"models"`
+
 	Prompt struct {
 		// Mode passthrough（默认）= 透传客户端原始 system（降级重试仍会切到 Degraded）；
 		// custom = 网关用自有系统提示词替换客户端 system/developer；

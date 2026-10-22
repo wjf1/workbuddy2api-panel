@@ -63,6 +63,14 @@ type Config struct {
 	// （modelList 不列 global 名单）。
 	GlobalEnabled bool
 
+	// ModelsHidden 模型黑名单原始条目（config models.hidden；Live 为 nil 的
+	// 裸用/测试路径经 loadLive() 归一化后使用）。
+	ModelsHidden []string
+
+	// ModelsAliases 模型映射原始条目（config models.aliases，"客户端名=真实名"；
+	// Live 为 nil 的裸用/测试路径经 loadLive() 归一化后使用）。
+	ModelsAliases []string
+
 	// Usage 逐请求用量记录器（可选；nil = 不记录）。
 	// 在 recordAttempt 这一唯一汇聚点调用，因此流式/非流式、成功/失败都会计入，
 	// 且与 pool 的每账号累计器同源，两条口径不会漂移。
@@ -94,7 +102,34 @@ func (h *Handler) loadLive() livecfg.Snapshot {
 		APIKey:           h.cfg.APIKey,
 		SoftCooldown:     h.cfg.SoftCooldown,
 		RecordClientInfo: h.cfg.RecordClientInfo,
+		HiddenModels:     livecfg.NormalizeHiddenModels(h.cfg.ModelsHidden),
+		ModelAliases:     livecfg.NormalizeModelAliases(h.cfg.ModelsAliases),
 	}
+}
+
+// hiddenModel 报告 (realm, 裸模型名) 是否被 config models.hidden 隐藏。
+//
+// 黑名单语义是「这个模型对本网关不存在」：列表不列、点名调用直接拒绝。生效点
+// （cn 对话列表 / global 对话列表 / chat 点名）共用本判据，避免各写一份 map 查表
+// 而漏掉某一处——漏一处就等于黑名单可被绕过（只藏列表不够，知道名字仍可硬调）。
+func (h *Handler) hiddenModel(realm, bare string) bool {
+	if bare == "" {
+		return false
+	}
+	_, hide := h.loadLive().HiddenModels[realm+":"+bare]
+	return hide
+}
+
+// modelAlias 查 aliases 映射：客户端名（剥 realm 前缀后的裸名，大小写不敏感）
+// 命中映射 → 返回真实模型名（原样，可再带 realm 前缀跨域指向）；
+// 未命中 → ("", false)。查找键与 livecfg.NormalizeModelAliases 的归一化口径配对：
+// realm+":"+小写裸名。
+func (h *Handler) modelAlias(realm, bare string) (string, bool) {
+	if bare == "" {
+		return "", false
+	}
+	target, ok := h.loadLive().ModelAliases[strings.ToLower(realm)+":"+strings.ToLower(bare)]
+	return target, ok
 }
 
 // softCooldown 返回当前生效的软冷却基数（热改优先，<=0 回退默认）。
@@ -417,6 +452,10 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 func (h *Handler) modelList() []map[string]any {
 	out := make([]map[string]any, 0)
 	for _, mi := range h.fetchDynamicModels() {
+		// models.hidden 黑名单：不对外暴露的模型不出现在列表里（判据见 hiddenModel）。
+		if h.hiddenModel("cn", mi.ID) {
+			continue
+		}
 		entry := map[string]any{
 			"id":       "cn:" + mi.ID,
 			"object":   "model",
@@ -460,6 +499,10 @@ func (h *Handler) modelList() []map[string]any {
 		}
 		globalEfforts, globalDefaults := h.cfg.Upstream.GlobalEffortSnapshot()
 		for _, id := range globalIDs {
+			// 同一条黑名单判定：裸名条目会把 global 域也藏掉。
+			if h.hiddenModel("global", id) {
+				continue
+			}
 			entry := map[string]any{
 				"id":       "global:" + id,
 				"object":   "model",
@@ -589,12 +632,41 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
 	realm, bareModel := resolveModel(peek.Model)
+
+	// models.aliases 映射：客户端名命中映射 → 出站/选号/effort 全部改用目标名，
+	// realm 也按目标重解析（别名值可带前缀跨域指向）。
+	// 放在 hidden 检查**之前**：被映射到的目标仍受黑名单约束，别名不能绕过隐藏。
+	// 出站 body 同步重写顶层 model（下方的 rewriteModel 只剥前缀，不认识别名——
+	// 名字必须在这里就换掉）。未命中 → body 一个字节不动（现状零回归）。
+	// modelEcho 非空 = 本请求走了映射，响应侧（SSE 帧 / 聚合体）把 model 覆写回
+	// 客户端原发名——严格校验「响应 model == 请求 model」的客户端不会当场报错。
+	// routeModel = 选号/粘性/账本使用的模型名（映射后为真实名，可带 realm 前缀）。
+	modelEcho := ""
+	routeModel := peek.Model
+	if aliasTarget, aliased := h.modelAlias(realm, bareModel); aliased && aliasTarget != "" {
+		var obj map[string]any
+		if json.Unmarshal(body, &obj) == nil {
+			if cur, isStr := obj["model"].(string); isStr && cur == peek.Model {
+				obj["model"] = aliasTarget
+				if nb, merr := json.Marshal(obj); merr == nil {
+					body = nb
+					realm, bareModel = resolveModel(aliasTarget)
+					modelEcho = peek.Model
+					routeModel = aliasTarget
+					log.Printf("INFO: [server] model alias applied: %s -> %s", peek.Model, aliasTarget)
+				}
+			}
+		}
+	}
+
 	modelRate := ""
 	if h.cfg.Upstream != nil {
 		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
 	}
 
 	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
+	// 模型名从（已映射的）body 取：映射请求的流水行显示真实路由名，与账本/上游
+	// 口径一致（别名 INFO 行记录 客户端名 -> 真实名，两行合看即全链路）。
 	st := newChatStat(time.Now(), body, peek.Stream)
 	if tr := requestTraceFrom(r); tr != nil {
 		tr.stat = st
@@ -603,6 +675,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.clientIP, st.userAgent = tr.clientIP, tr.userAgent
 	}
 	defer st.done()
+
+	// models.hidden 黑名单：点名调用直接拒绝，不打上游、不占选号。
+	// 与 /v1/models 的列表过滤对称（只藏列表不够，知道名字仍可硬调）。
+	// realm/bareModel 此处已是**映射后**的真实名——别名不能绕过黑名单。
+	if h.hiddenModel(realm, bareModel) {
+		writeOpenAIErrorHint(w, http.StatusBadRequest, "model_unavailable",
+			"model is hidden by gateway configuration, try another model", "")
+		st.status = http.StatusBadRequest
+		st.outcome = reqlog.OutcomeHTTPError
+		return
+	}
 
 	tried := map[string]bool{}
 	var lastErr error
@@ -622,7 +705,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.Session != nil && sessKey != "" {
 		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
 		// 而不是钉在限额号上反复失败（"限额后换不动号"的正解）。
-		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, peek.Model); ok {
+		// 用 routeModel 而非 peek.Model：映射后必须按真实模型的可用性口径判绑定，
+		// 别名名不在任何账本里。
+		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, routeModel); ok {
 			stickyUID = uid
 		}
 	}
@@ -1063,7 +1148,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			var errFrame string
 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
 				return h.hintContext(bareModel, reqHasImage)
-			}), upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }))
+			}), upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }),
+				// 模型名回显（models.aliases）：映射请求的帧内 model 覆写回客户端
+				// 原发名；modelEcho 为空（未映射）时 StreamHint 侧零改动。
+				upstream.WithModelEcho(modelEcho))
 			switch {
 			case upstream.IsEmptyStreamError(sErr):
 				// 上游 200 但空流（0 有效帧）：StreamHint 已写 error 帧 + [DONE]
@@ -1167,6 +1255,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		recordAttempt(acct.UID, usageDeltaFromResponse(resp), credit, hasCredit, attemptStarted, 0)
 		if st.hasCache {
 			cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
+		}
+		// 模型名回显（与流式 WithModelEcho 同语义）：聚合体的 model 覆写回客户端
+		// 原发名，严格校验「响应 model == 请求 model」的客户端不当场报错。
+		if modelEcho != "" {
+			resp["model"] = modelEcho
 		}
 		writeJSON(w, http.StatusOK, resp)
 		st.status = http.StatusOK

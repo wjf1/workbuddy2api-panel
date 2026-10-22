@@ -71,6 +71,11 @@
   "features": {
     "sanitize_blacklist_fingerprints": true
   },
+  "models": {
+    "_comment": "hidden: 不对外暴露的模型黑名单。裸名=两域都藏；\"cn:xxx\"/\"global:xxx\"=只藏该域。/v1/models 列表过滤 + chat 点名拒绝，面板保存后热生效。aliases: 模型映射，条目 \"客户端名=真实模型名\"，键裸名=两域生效、带 cn:/global: 前缀只该域生效，值可带前缀跨域指向；目标仍受 hidden 约束，响应回显客户端原发名。",
+    "hidden": [],
+    "aliases": []
+  },
   "prompt": {
     "mode": "passthrough",
     "file": ""

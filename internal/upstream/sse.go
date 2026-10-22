@@ -482,6 +482,16 @@ type StreamOption func(*streamOptions)
 
 type streamOptions struct {
 	onErrorFrame func(payload string)
+	echoModel    string
+}
+
+// WithModelEcho 强制所有出站帧的顶层 model 字段为 name（模型映射 models.aliases）。
+//
+// 客户端经别名点名时，上游帧里回显的是真实模型名；严格校验「响应 model == 请求
+// model」的客户端会当场报错。挂上后逐帧覆写，客户端看到的永远是它自己发出去的名字。
+// name 为空 = 不挂（零改动）。
+func WithModelEcho(name string) StreamOption {
+	return func(o *streamOptions) { o.echoModel = name }
 }
 
 // WithErrorFrameObserver 注册"上游以 error 帧报错"的观察者：透传该帧之前先用
@@ -557,6 +567,13 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 					return 0, werr
 				}
 				return 1, nil
+			}
+			// 模型名回显覆写（models.aliases）：别名请求时把帧的 model 换回客户端
+			// 原发名，严格校验「响应 model == 请求 model」的客户端不会当场报错。
+			// echoModel 空 = 零改动（未映射请求的常态路径）。错误帧走上方的 writeRaw
+			// 原样透传，不经过这里，故不会被本次覆写碰到。
+			if o.echoModel != "" {
+				obj["model"] = o.echoModel
 			}
 			// 先按 index 收敛 tool_calls name（每 index 仅首片保留，后续分片删 name 键），再规范化透传。
 			stripToolCallNames(obj, toolCallSeen)
