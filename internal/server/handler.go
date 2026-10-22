@@ -579,6 +579,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var peek struct {
 		Stream bool   `json:"stream"`
 		Model  string `json:"model"`
+		// Tools 只用来数「客户端声明了几个工具」（issue #44 静默回合判据之一），
+		// 条目内容本身不用，声明了才解析、随请求结束即回收。
+		Tools []json.RawMessage `json:"tools"`
 	}
 	_ = json.Unmarshal(body, &peek)
 
@@ -1106,6 +1109,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				if sessKey != "" && h.cfg.Session != nil {
 					h.cfg.Session.Bind(sessKey, acct.UID)
 				}
+			}
+			// issue #44：声明了 tools 却拿到 finish_reason=stop 且全流零 tool_calls——
+			// 上游把这个形态当正常收尾，客户端据此认为回合完成、工具一次没跑，用户只能
+			// 手动催一句。此前网关侧完全无痕（这是 #149 / #44 定位困难的主因），这里
+			// **只记日志、不改流**：模型「判断不需要工具、直接回答」是合法行为，强行
+			// 改写成可重试错误会让这类正常回合反复重试，每次都真实计费。
+			if isSilentToolStop(len(peek.Tools), stats.SawToolCalls(), stats.FinishReason()) {
+				log.Printf("WARN: [server] stream acct=%s model=%s: finish_reason=stop with zero tool_calls despite %d declared tool(s) (silent stop; client may treat the turn as complete)",
+					logfmt.Label(acct.UID, acct.Nickname), bareModel, len(peek.Tools))
 			}
 			credit, hasCredit := stats.Credit()
 			if hit, miss, ok := stats.CacheTokens(); ok {

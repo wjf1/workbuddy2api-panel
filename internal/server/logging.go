@@ -116,6 +116,11 @@ type chatStatsReader struct {
 	cacheHit     int
 	cacheMiss    int
 	hasCacheMiss bool
+	// issue #44 观测：本流是否出现过非空 delta.tool_calls、最后一个非空 finish_reason。
+	// 两者与「请求是否声明过 tools」组合，用于识别「声明了 tools 却拿到 stop + 零
+	// tool_calls」的静默回合（判据见 isSilentToolStop）。
+	sawToolCalls bool
+	finishReason string
 	pend         []byte // 已读未返回的行缓存
 }
 
@@ -129,6 +134,25 @@ func (s *chatStatsReader) TTFB() time.Duration { return s.ttfb }
 
 // Tokens 返回末帧 usage.completion_tokens 与是否缺失；无 usage 时 ok=false。
 func (s *chatStatsReader) Tokens() (int, bool) { return s.completionTokens, s.hasCompletionTokens }
+
+// SawToolCalls 报告本流是否出现过非空 delta.tool_calls（issue #44 观测）。
+func (s *chatStatsReader) SawToolCalls() bool { return s.sawToolCalls }
+
+// FinishReason 返回本流最后一个非空 finish_reason；上游一帧都没给过时为空串。
+func (s *chatStatsReader) FinishReason() string { return s.finishReason }
+
+// isSilentToolStop 判定 issue #44 的「静默回合」：三条同时成立才为真——
+// 本请求声明过 tools、全流零 tool_calls、finish_reason=stop。
+//
+// 零调用必须由调用点按**数组长度**得出（见 parseSSELine 里的 len(ToolCalls)>0），
+// 不能按「字段是否存在」判：上游每帧都带 "tool_calls":[]，按存在判会把静默回合
+// 误判成有调用，这条 WARN 就永远不触发。
+//
+// 单拎成函数而不是内联在 handler 里，是为了让三条判据（尤其两个反向用例）能被
+// toolstop_stats_test.go 直接钉住，不必起完整 HTTP 管线。
+func isSilentToolStop(declaredTools int, sawToolCalls bool, finishReason string) bool {
+	return declaredTools > 0 && !sawToolCalls && finishReason == "stop"
+}
 
 // Credit 返回末帧 usage.credit（本次真实扣费积分）与是否缺失。
 func (s *chatStatsReader) Credit() (float64, bool) { return s.credit, s.hasCredit }
@@ -164,6 +188,14 @@ func (s *chatStatsReader) parseSSELine(line string) {
 	}
 	var chunk struct {
 		Error json.RawMessage `json:"error"`
+		// issue #44：只取 delta.tool_calls 与 finish_reason 两个字段。encoding/json
+		// 会跳过未声明的键（含 delta.content），不为正文分配内存。
+		Choices []struct {
+			Delta struct {
+				ToolCalls []json.RawMessage `json:"tool_calls"`
+			} `json:"delta"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
 		Usage *struct {
 			PromptTokens         *int     `json:"prompt_tokens"`
 			CompletionTokens     *int     `json:"completion_tokens"`
@@ -173,14 +205,23 @@ func (s *chatStatsReader) parseSSELine(line string) {
 			PromptCacheMissTok   *int     `json:"prompt_cache_miss_tokens"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
-		if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Error) > 0 {
-			s.errorFrame = true
-		}
+	if json.Unmarshal([]byte(payload), &chunk) != nil {
 		return
 	}
 	if len(chunk.Error) > 0 {
 		s.errorFrame = true
+	}
+	for _, c := range chunk.Choices {
+		// 上游每帧都带 "tool_calls":[]（空数组），所以判据是长度而不是字段存在。
+		if len(c.Delta.ToolCalls) > 0 {
+			s.sawToolCalls = true
+		}
+		if c.FinishReason != "" {
+			s.finishReason = c.FinishReason
+		}
+	}
+	if chunk.Usage == nil {
+		return
 	}
 	if chunk.Usage.PromptTokens != nil {
 		s.hasPromptTokens = true
