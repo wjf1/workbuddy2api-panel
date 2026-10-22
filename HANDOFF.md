@@ -75,7 +75,7 @@ data/backups/          备份输出（同上）
 - **CST 固定时区**（上游 `025cc10`）：新增 `internal/cst`，收敛内联 `FixedZone`，签到日键 / 次日 04:00 / `nextFire` / 补签"昨天" / 夜间窗口 / 促销时段统一按 UTC+8。**`usage`（分桶）与 `reqlog`（切天）故意保留宿主本地时区**（操作者视角），迁移到 UTC 主机时需知悉这一点。
 - **出站头族与标识对齐**（上游 `8f7366f` `d030e0f` `5605781` `edd0dba`）：补 `b3`/`traceparent`/`X-B3-ParentSpanId`/`x-stainless-*`/`acp-connection-id`；`X-Trace-ID` 不再回落 `conversationRequestId`；`X-Product` 恒 `SaaS`；`cache_key` 改 **UUID v4(36)** 且不含 uid 明文与项目缩写（`purpose==""` 时与旧 key 逐字节一致）；上报体清掉 `wb2api-*` 自证前缀；`conv_fields.go` 只给当前轮最后一条 user 消息补 `conversationRequestId`。本地 `sanitize.go` 与 `X-IDE-*` 头族**未被覆盖**；本地本就零注入 `X-Auth-Method`/`X-Userinfo`/`X-Id-Source`（上游对应补丁无净改动）。
 - **本版额外修复（上游同源缺陷，独立 QA 用例抓到）**：`traceparent` 的 trace-id 只允许 32 hex，而 `X-B3-TraceId` 允许 16 位。客户端传 16 位 `X-Trace-ID` 时旧实现产出 `00-<16hex>-…` 非法头——比"头族不全"更明显的非官方指纹。修复 = 16 位左补零扩展到 128 位（链路关系不变），全零回落 `messageID`；`X-B3-TraceId` 保留原值。回归用例 `internal/upstream/headers_test.go`。
-- **验证**：`go build ./...`、`go vet ./...` 干净；`go test ./... -count=1` **20 包全绿**（基线 18 包 + 新增 `cst`/`safefile`）。沙箱实例（`:7871`，独立目录 `F:\AI\wb2api-e2e-p0`，17 账号副本、全调度关闭）实测：healthz 17/17、models 56、非流式/流式/`/v1/messages`（含对话中途 `system`）/工具调用全通、`state.json` 与 `.bak` 均可解析。
+- **验证**：`go build ./...`、`go vet ./...` 干净；`go test ./... -count=1` **18 个包全绿**（基线 16 包 + 新增 `cst`/`safefile` 2 个）。沙箱实例（`:7871`，独立目录 `F:\AI\wb2api-e2e-p0`，17 账号副本、全调度关闭）实测：healthz 17/17、models 56、非流式/流式/`/v1/messages`（含对话中途 `system`）/工具调用全通、`state.json` 与 `.bak` 均可解析。
 - **部署**：2026-10-22 15:11 切到生产，验收与回滚见 §5 首条。
 
 ## 4.1 上一轮（1.15.5-panel）
