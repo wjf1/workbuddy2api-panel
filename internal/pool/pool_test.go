@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
 // withNoPickGap 临时关闭防并发撞号窗口（minPickGap=0），让纯加权分布测试不受影响。
@@ -613,13 +614,16 @@ func TestCooldownUntilTomorrow4AM(t *testing.T) {
 	if st.Reason != "余额不足" {
 		t.Errorf("reason=%q", st.Reason)
 	}
-	// 冷却截止必须是"此刻之后的最近一个 04:00"：晚于 now、距今不超过 24h
-	//（凌晨 00:00~04:00 触发时落在当天 04:00，其余时段落在次日 04:00，跨度恒 < 24h）。
+	// 冷却截止必须是"此刻之后的最近一个 04:00"（CST 口径）：晚于 now、距今不超过 24h
+	//（北京时间 00:00~04:00 触发时落在当天 04:00，其余时段落在次日 04:00，跨度恒 < 24h）。
+	// 断言必须换算到 cst.Loc 再取 Hour()：Until 带 cst 时区，直接取 Hour() 在 UTC
+	// 宿主（CI runner）上会得到 20，与被测逻辑无关。
 	if st.Until.Before(after) {
 		t.Errorf("until %v is in the past (call span %v..%v)", st.Until, before, after)
 	}
-	if st.Until.Hour() != 4 {
-		t.Errorf("until hour=%d want 4", st.Until.Hour())
+	cstUntil := st.Until.In(cst.Loc)
+	if cstUntil.Hour() != 4 || cstUntil.Minute() != 0 || cstUntil.Second() != 0 {
+		t.Errorf("until(CST)=%s want 04:00:00 (raw=%v)", cstUntil, st.Until)
 	}
 	if d := st.Until.Sub(after); d > 24*time.Hour {
 		t.Errorf("until %v is more than 24h out: %v", st.Until, d)
@@ -640,7 +644,8 @@ func TestCooldownUntilTomorrow4AMPersists(t *testing.T) {
 	p2 := New(fp)
 	p2.Add(&auth.Auth{UID: "u1"})
 	st, ok := p2.Status("u1")
-	if !ok || st.Until.Hour() != 4 || st.Reason != "余额不足" {
+	// 落盘再加载后时区会退化为固定偏移，仍须换算到 cst.Loc 校验 04:00 语义。
+	if !ok || st.Until.In(cst.Loc).Hour() != 4 || st.Reason != "余额不足" {
 		t.Errorf("status after reload=%+v ok=%v", st, ok)
 	}
 }
