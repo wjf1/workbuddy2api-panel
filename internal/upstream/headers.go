@@ -330,7 +330,19 @@ func (c *Client) injectConversationHeaders(req *http.Request, uid string, meta C
 	// traceparent = 00-trace-span-flags）。缺这两个头时只有 X-B3-* 三件套，
 	// 而客户端从不只发三件套。
 	req.Header.Set("b3", b3Trace+"-"+spanID+"-1-"+parentSpanID)
-	req.Header.Set("traceparent", "00-"+b3Trace+"-"+spanID+"-01")
+	// W3C traceparent 的 trace-id **恒 32 hex**（B3 允许 16 或 32，两者规则不同）：
+	// 入站只给 16 位时直接拼进 traceparent 会得到非法头（trace-id 只有 16 位），
+	// 而这是官方客户端绝不会发出的形态——恰好泄露「非官方客户端」。此处左补零扩展到
+	// 128 位（OpenTelemetry 对 64 位 trace id 的等价处理），链路关系不变；
+	// 补零后若为全零（W3C 明令非法）则回落恒 32 hex 的 messageID。
+	w3cTrace := b3Trace
+	if len(w3cTrace) == 16 {
+		w3cTrace = "0000000000000000" + w3cTrace
+	}
+	if isAllZeroHex(w3cTrace) {
+		w3cTrace = messageID
+	}
+	req.Header.Set("traceparent", "00-"+w3cTrace+"-"+spanID+"-01")
 	// acp-connection-id：官方把它列进**标准出站头族**（asar applyGatewayHeaders 与
 	// X-Conversation-ID / X-Conversation-Request-ID 同一批设置），值来自会话注册表的
 	// acpConnectionId —— 每个 session 生成一次、同会话多轮复用、跨会话不同
@@ -391,6 +403,16 @@ func validTraceID(s string) bool {
 		}
 	}
 	return true
+}
+
+// isAllZeroHex 判断 hex 串是否全为 0（W3C traceparent 明令禁止全零 trace-id）。
+func isAllZeroHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '0' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // attributionClientName 生效的用量归属名：ClientName 非空取之；
