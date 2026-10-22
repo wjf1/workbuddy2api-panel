@@ -3,6 +3,8 @@ package server
 import (
 	"sync"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
 // degradeGate 降级状态机：passthrough 模式下请求被上游内容策略拦截时，
@@ -42,12 +44,13 @@ func (g *degradeGate) Trigger() {
 //   - 23:59 → 次日 00:00（几秒后）
 //   - 00:00 → 次日 00:00（刚过 00:00，下个零点是次日）
 //
-// 用固定 +08:00 偏移计算，避免依赖系统时区配置（容器/宿主机时区不确定）。
+// 用固定 +08:00 偏移计算，避免依赖系统时区配置（容器/宿主机时区不确定）；
+// 时区定义统一在 internal/cst。
 func nextMidnightCST(now time.Time) time.Time {
-	cst := time.FixedZone("CST", 8*60*60)
+	loc := cst.Loc
 	// 把 now 转到 CST 视角取当天 00:00，再加一天；若该 00:00 <= now 则再加一天。
-	y, m, d := now.In(cst).Date()
-	midnight := time.Date(y, m, d, 0, 0, 0, 0, cst)
+	y, m, d := now.In(loc).Date()
+	midnight := time.Date(y, m, d, 0, 0, 0, 0, loc)
 	for !midnight.After(now) {
 		midnight = midnight.Add(24 * time.Hour)
 	}

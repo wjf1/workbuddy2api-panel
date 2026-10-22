@@ -1981,3 +1981,36 @@ func TestResumeIdempotent(t *testing.T) {
 		t.Errorf("Paused 应仍为 false: %+v", st)
 	}
 }
+
+// TestNextDay4AMIsCST 硬冷却的「次日 04:00」必须按北京时间算，不随宿主时区漂移
+// （移植上游 025cc10）：UTC 主机上若按宿主 04:00 算，实际落在 CST 12:00——签到
+// （09:00）早已结束，账号白等一整天。
+func TestNextDay4AMIsCST(t *testing.T) {
+	cases := []struct {
+		name string
+		now  string // RFC3339（UTC 表示，模拟宿主机时区为 UTC）
+		want string
+	}{
+		// CST 2026-08-28 17:00（UTC 09:00）→ 次日 CST 04:00 = UTC 2026-08-28T20:00Z。
+		{"CST 傍晚", "2026-08-28T09:00:00Z", "2026-08-28T20:00:00Z"},
+		// CST 2026-08-29 01:00（UTC 17:00，即宿主 UTC 日的前一天）→ 当天 CST 04:00。
+		{"CST 凌晨", "2026-08-28T17:00:00Z", "2026-08-28T20:00:00Z"},
+		// 陷阱：宿主（UTC）正好 04:00 时，CST 已是 12:00 → 必须给**次日** CST 04:00。
+		{"宿主UTC 04:00", "2026-08-28T04:00:00Z", "2026-08-28T20:00:00Z"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			now, err := time.Parse(time.RFC3339, c.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := time.Parse(time.RFC3339, c.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := nextDay4AM(now); !got.Equal(want) {
+				t.Errorf("nextDay4AM(%s)=%s want %s", c.now, got.UTC().Format(time.RFC3339), c.want)
+			}
+		})
+	}
+}

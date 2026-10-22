@@ -695,3 +695,19 @@ func TestPausedStillTravels(t *testing.T) {
 		t.Errorf("travel status calls=%d want 2（u1 + 暂停号 u2 照常旅行）", got)
 	}
 }
+
+// TestNextFireIsCST 排程钟点按北京时间解释，不随宿主时区漂移（移植上游 025cc10）：
+// UTC 容器里配 activity_hours=[9] 应跑在 CST 09:00（= UTC 01:00），而不是 UTC 09:00。
+func TestNextFireIsCST(t *testing.T) {
+	// 模拟 UTC 宿主机：now 取 UTC 2026-07-27 00:00Z = CST 08:00。
+	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	next := nextFire(now, []int{9})
+	want := time.Date(2026, 7, 27, 1, 0, 0, 0, time.UTC) // CST 09:00
+	if !next.Equal(want) {
+		t.Fatalf("nextFire(%s,[9])=%s want %s（CST 09:00）",
+			now.Format(time.RFC3339), next.UTC().Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+	if h := next.Hour(); h != 9 {
+		t.Errorf("next.Hour()=%d want 9（CST 钟点）", h)
+	}
+}
