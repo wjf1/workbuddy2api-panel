@@ -4,6 +4,29 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.15.6-panel] - 2026-10-22
+
+本版为**上游同步版**：从同源上游 [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel) 选择性移植 4 项 P0 修复（不合并分支，逐补丁移植，未引入上游的 `/v1/responses`、`/v1/search`、API Key、预算双闸等大功能）。
+
+### 新增
+
+- **`14003` 模型繁忙改用独立短窗口**（移植上游 `f728859`）：上游模型提供方繁忙返回 `14003` 时，此前落到 `status==429` 兜底走 `ErrSoftRate` 的**账号级**阶梯冷却（600s 起、封顶 2h），一个模型的繁忙会连坐整个账号、健康号被无谓停用。本版新增 `pool.CooldownModelBusy`（窗口 `10s` 起、封顶 `1m`，只写 `modelCooldowns[model]`、不碰账号级 `until`；窗口内重复命中不延长、已有更晚冷却不缩短）与 `upstream.IsModelBusy`（`code=14003`，容忍 JSON 空白与字符串形态）。`handler` 侧仅当上游**未给出**恢复时刻（无重置文案 / 无 `Retry-After`）时才走短窗口，给出明确时刻则维持既有口径；`model` 为空时退回账号级路径（避免写 `modelCooldowns[""]` 等于不罚）。**`6004` 的判定与冷却参数逐字节未动**（`IsModelRateLimit` 仍只认 6004）。
+- **CST 固定时区**（移植上游 `025cc10`）：新增 `internal/cst`（`Loc`/`Now`/`Day`，固定 UTC+8），收敛此前散落的内联 `FixedZone`，并把**上游自然日语义**的位置统一到 CST：签到日键、次日 04:00 重置、调度 `nextFire` 的 `hours` 解释、连登补签的「昨天」、夜间窗口与促销时段。此前这些点取宿主本地时区，进程一旦跑在非 UTC+8 主机上，日界会整体漂移 8 小时且无任何报错。**`internal/usage`（用时分桶）与 `internal/reqlog`（日志切天）保留宿主本地时区**——那是给操作者看的统计口径，不随本改动变化。
+
+### 修复
+
+- **状态文件写入非原子，掉电会留下全 0/半截文件并冲掉整个账号池**（移植上游 `4356a34`）：新增 `internal/safefile`（`tmp → fsync → rename`；`WriteKeep` 把上一份有效内容保留为 `.bak`，坏文件另存 `.bad-<时间>` 而不污染 `.bak`；`Read` 正文损坏时回退 `.bak` 并打 WARN，两边都坏才报错，文件不存在不复活 `.bak`）。接入 `pool/persist.go`（`state.json`）、`auth/auth.go`（`SaveAtomic`/`LoadDir`，账号文件损坏从「静默跳过」改为 **ERROR 点名**）、`cmd/server/config.go`、`cmd/server/main.go`、`internal/usage`、`upstream/model_catalog.go`。**落盘路径与 JSON 结构一字未改**，只换写法；`auth.LoadDir` 的 glob 仍是 `workbuddy*.json`，`.bak` / `.bad-*` 不会被当成账号加载。
+- **出站 `traceparent` 在入站 trace 只有 16 位 hex 时非法**（本版实测发现，上游同源缺陷）：`X-B3-TraceId` 允许 16 或 32 位，而 W3C `traceparent` 的 trace-id **只允许 32 位**。客户端传 16 位 `X-Trace-ID`（Zipkin 式 64 位 trace id）时，旧实现把 16 位原样拼进 `traceparent`，产出官方客户端绝不会发送的非法头——这是比"头族不全"更明显的非官方指纹。修复：16 位入站值**左补零扩展**到 128 位（OpenTelemetry 对 64 位 trace id 的等价做法，链路关系不变），全零（W3C 明令非法）回落恒 32 hex 的 `messageID`；`X-B3-TraceId` 仍保留入站 16 位原值。
+- **出站头族与标识对齐官方两版真机**（移植上游 `8f7366f` `d030e0f` `5605781` `edd0dba`）：`headers.go` 补齐 `b3` 单头、`traceparent`、`X-B3-ParentSpanId`、`x-stainless-*` 九项、`x-agent-type`/`x-agent-intent`、`acp-connection-id`（同 `(账号, 会话)` 稳定派生）；`X-Trace-ID` 不再回落 `conversationRequestId`、`SpanId` 独立随机；`X-Product` 恒 `SaaS`（去掉重复的 `X-Product=<name>`）。`cache_key` 从 `wb2a-<uid8>-<hex>`(48) 改为 **UUID v4 形态**(36)，键里不再含 uid 明文与项目缩写（`purpose==""` 时与旧 key 逐字节一致，缓存槽零漂移）。`desktop.go` 的专家对话不再手搓头，统一走 `ChatHeaders`。上报体里的 `wb2api-mp-*` / `wb2api-<ms>` / `wb2api-adopt-*` / `wb2api-night-*` 等自证前缀一律换成 `session.NewConversationID()`/`NewMessageID()`。`conv_fields.go` 给**当前轮最后一条 user 消息**补 `conversationRequestId`/`startsNewUserRequest`/`agent:"cli"`（历史轮次不补、客户端自带值优先、坏 body 原样返回）。`internal/session/ids.go` 的 `NewTraceID`/`NewSpanID`/`NewConversationID` 对齐官方形态。
+  - 未采用：上游同批把默认版本抬到 CN 5.8.3 / global 5.8.4 + CLI 2.161.0。版本段是运维可配项（`upstream.client_version` / `cli_version`），需要时在 config 里覆盖，不改代码默认值。
+  - 未改动：本地 `sanitize.go` 与 `X-IDE-*` 头族原样保留；`X-Auth-Method`/`X-Userinfo`/`X-Id-Source` 本地本就零注入（上游对应补丁无净改动）。
+
+### 验证
+
+- **单测**：`internal/upstream/headers_test.go` 新增 `TestChatHeadersTraceparentAlways32Hex`（4 子例：32 位原样 / 16 位左补零且保留原值 / 空值现造 / 非法值回落）与 `TestChatHeadersTraceparentRejectsAllZero`；`cache_key_test.go` 断言升级为 UUID v4 形态 + 不含 `wb2a`/`wb2api`/`workbuddy2api` 与 uid 明文；`pool` 新增 14003 短窗口阶梯/不缩短更晚冷却、`safefile` 撕裂文件回退、`cst` 的 UTC 主机回归。全量 `go test ./... -count=1` **20 包全绿**（基线 18 包 + 新增 `cst`/`safefile`）。
+- **独立 QA 用例**（临时文件，验证后删除）：16 条对抗性用例覆盖「config 缺失仍返回 `fs.ErrNotExist` 让 main 走自动生成」「`.bak`/`.bad-*`/`.tmp` 不被当账号加载」「`TZ=UTC` 下 `cst.Now()` 仍 +8」「连续 3 次 14003 不越过 1m 且账号 `cooling=false`」「`6004` 语义未变」「撕裂文件回退 `.bak`」——其中 **1 条抓到真实缺陷**（即上文 `traceparent`），其余 15 条通过。
+- **未做**：本版未在真机上游联调即发布前验证；`go build ./...` / `go vet ./...` 干净。
+
 ## [1.15.5-panel] - 2026-10-15
 
 ### 修复
