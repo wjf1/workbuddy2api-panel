@@ -133,12 +133,53 @@ jobs:
         run: |
           PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
           echo "prev=${PREV}" >> "$GITHUB_OUTPUT"
+      # Release 标题/正文不再用硬编码模板：标题取 tag 注解首行（本仓习惯就是
+      # 「v1.15.6: 一句话概括」，与历史 Release 标题同款），正文取 CHANGELOG 里
+      # 该版本的段落。此前每次发版都要手工 `gh release edit` 一次，漏了就与历史
+      # 版本风格不一致（v1.15.6 首版即如此）。两处缺失都只告警不失败——发布线不能
+      # 因为文档没写全而卡住。
+      - name: 生成 Release 标题与正文
+        id: notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+
+          TITLE=$(git tag -l --format='%(contents:subject)' "$TAG" | head -1)
+          if [ -z "$TITLE" ]; then
+            TITLE="$TAG"
+            echo "::warning::tag $TAG 无注解信息，Release 标题回落为 tag 名"
+          fi
+
+          # 用 index() 定位而非正则：版本号里的方括号/[.] 在 awk 正则里都要转义，
+          # ENVIRON 传值可完全避开转义问题。段落 = 版本标题行之后、下一个 "## " 之前。
+          BODY=$(VER="$VER" awk '
+            !on && index($0, "## [" ENVIRON["VER"]) == 1 { on = 1; next }
+            on && index($0, "## ") == 1 { exit }
+            on { print }
+          ' CHANGELOG.md)
+          # 版本标题行后紧跟空行，去掉以免正文以空行开头（Release 渲染无影响，纯粹是好看）。
+          BODY=$(printf '%s\n' "$BODY" | sed '/./,$!d')
+
+          if [ -z "$BODY" ]; then
+            echo "::warning::CHANGELOG 缺少 [$VER] 段落，Release 正文回落为通用模板"
+            BODY="CI 自动构建发布（五平台二进制 + checksums）。"
+          fi
+
+          {
+            printf '%s\n' "$BODY"
+            if [ -n "${{ steps.prev.outputs.prev }}" ]; then
+              printf '\n**完整变更**：https://github.com/%s/compare/%s...%s\n' \
+                "${{ github.repository }}" "${{ steps.prev.outputs.prev }}" "$TAG"
+            fi
+          } > release-notes.md
+
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          echo "---- release-notes.md 前 5 行 ----"
+          head -5 release-notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
-          name: ${{ github.ref_name }}-panel
+          name: ${{ steps.notes.outputs.title }}
           prerelease: ${{ contains(github.ref_name, '-') }}
-          body: |
-            CI 自动构建发布（五平台二进制 + checksums）。
-
-            完整变更：https://github.com/${{ github.repository }}/compare/${{ steps.prev.outputs.prev }}...${{ github.ref_name }}
+          body_path: release-notes.md
           files: dist/*

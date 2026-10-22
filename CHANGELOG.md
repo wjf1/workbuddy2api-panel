@@ -25,7 +25,7 @@
 
 - **单测**：`internal/upstream/headers_test.go` 新增 `TestChatHeadersTraceparentAlways32Hex`（4 子例：32 位原样 / 16 位左补零且保留原值 / 空值现造 / 非法值回落）与 `TestChatHeadersTraceparentRejectsAllZero`；`cache_key_test.go` 断言升级为 UUID v4 形态 + 不含 `wb2a`/`wb2api`/`workbuddy2api` 与 uid 明文；`pool` 新增 14003 短窗口阶梯/不缩短更晚冷却、`safefile` 撕裂文件回退、`cst` 的 UTC 主机回归。全量 `go test ./... -count=1` **18 个包全绿**（基线 16 包 + 新增 `cst`/`safefile` 2 个）。
 - **独立 QA 用例**（临时文件，验证后删除）：16 条对抗性用例覆盖「config 缺失仍返回 `fs.ErrNotExist` 让 main 走自动生成」「`.bak`/`.bad-*`/`.tmp` 不被当账号加载」「`TZ=UTC` 下 `cst.Now()` 仍 +8」「连续 3 次 14003 不越过 1m 且账号 `cooling=false`」「`6004` 语义未变」「撕裂文件回退 `.bak`」——其中 **1 条抓到真实缺陷**（即上文 `traceparent`），其余 15 条通过。
-- **未做**：本版未在真机上游联调即发布前验证；`go build ./...` / `go vet ./...` 干净。
+- **发布前验证**：本版在沙箱 `:7871`（17 个账号副本、全部调度关闭）对**真实上游**做了端到端验证（healthz 17/17、`/v1/models` 56 个模型、非流式 / 流式 / `/v1/messages` / 工具调用均 200），并于 2026-10-22 15:11 完成生产切换（`1.15.4-panel` → `1.15.6-panel`，停机 5–8 秒）后由真实客户端流量验证；`go build ./...` / `go vet ./...` 干净。
 
 ## [1.15.5-panel] - 2026-10-15
 
