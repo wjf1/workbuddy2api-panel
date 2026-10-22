@@ -243,6 +243,27 @@ func IsModelRateLimit(body string) bool {
 	return reModelRateLimit.MatchString(body)
 }
 
+// modelBusyCode 「当前模型请求繁忙」的业务 code。
+//
+// 与 6004 的区别在于**有没有恢复时刻**：6004 是「该模型额度/用量节流」，文案常带
+// 「将在 … 重置」；14003（RateLimitError）是瞬时繁忙，官方文案「当前模型请求繁忙，
+// 请切换模型或稍后重试」——body 里没有任何时间，只能靠网关自定一个短窗口。
+// 两者都不是账号问题，实测同号换模型立刻可用。
+const modelBusyCode = "14003"
+
+// reModelBusy 14003 判定正则（预编译理由同 reModelRateLimit）。
+var reModelBusy = regexp.MustCompile(`"code"\s*:\s*"?` + modelBusyCode + `"?`)
+
+// IsModelBusy 报告 body 是否是「模型繁忙」(code 14003)。
+//
+// 调用方（handler.applyErrorPolicy）据此把 14003 停成 (账号, 模型) 的**独立短窗口**
+// （见 pool.CooldownModelBusy，10s 起、封顶 1m），而不是走 soft_rate 的 600s→2h 阶梯：
+// 一次请求轮转几个号、每个号都中 14003，几十秒内整池就会被冷却 10 分钟（issue #46）。
+func IsModelBusy(body string) bool {
+	// `"code":14003` / `"code": 14003` / `"code":"14003"` 均可命中（JSON 空格容差）。
+	return reModelBusy.MatchString(body)
+}
+
 // queueWaitingCode / queueFullCode 上游**免费档排队**的业务 code：
 // 6020 "queue.waiting.title"（已入队等待）/ 6021 "queue.full.title"（队列已满）。
 // 两者都随 HTTP 429 返回，但语义与 6004（模型级限流）/ 账号级软限流**完全不同**：

@@ -1787,3 +1787,37 @@ func TestCustomModeFingerprintSanitizePreserved(t *testing.T) {
 		t.Errorf("want exactly 1 system message, got %d (all=%v)", systemCount, msgs)
 	}
 }
+
+// TestApplyErrorPolicy14003ModelBusyShortWindow 14003「模型繁忙」不走 soft_rate 阶梯
+// （issue #46，上游 f728859）：只停 (账号, 模型) 的 10s 短窗口，账号级 until 不写、
+// 账号不进 cooling，避免多号叠加后把 10 秒抖动放大成整分钟断流。
+func TestApplyErrorPolicy14003ModelBusyShortWindow(t *testing.T) {
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1"})
+	h := NewHandler(Config{Pool: p, SoftCooldown: 600 * time.Second})
+	body := `{"code":14003,"msg":"当前模型请求繁忙，请切换模型或稍后重试"}`
+
+	h.applyErrorPolicy("u1", upstream.ErrSoftRate, body, "glm-5.2", nil)
+
+	st, _ := p.Status("u1")
+	if st.Cooling {
+		t.Fatalf("14003 不得让账号进入冷却: %+v", st)
+	}
+	if st.SoftStreak != 0 {
+		t.Errorf("14003 不得推进 soft_streak, got %d", st.SoftStreak)
+	}
+	if len(st.RateLimitedModels) != 1 || st.RateLimitedModels[0].Model != "glm-5.2" {
+		t.Fatalf("rate_limited_models=%+v want 一条 glm-5.2", st.RateLimitedModels)
+	}
+	// 窗口必须落在 10s 量级（而非 600s soft_rate 基数）。
+	if rem := time.Until(st.RateLimitedModels[0].Until); rem <= 0 || rem > 12*time.Second {
+		t.Errorf("模型繁忙窗口 remaining=%v want in (0,12s]", rem)
+	}
+
+	// 空模型名无从「只停某个模型」：退回账号级既有路径（不得静默不罚）。
+	h.applyErrorPolicy("u1", upstream.ErrSoftRate, body, "", nil)
+	st2, _ := p.Status("u1")
+	if !st2.Cooling {
+		t.Errorf("空模型名的 14003 应退回账号级软冷却: %+v", st2)
+	}
+}

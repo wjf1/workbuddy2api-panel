@@ -1399,8 +1399,10 @@ func isUpstreamTimeout(err error, clientGone bool) bool {
 // 十条路径，各司其职：
 //   - ErrHardCredit → CooldownUntilTomorrow4AM：即时硬冷却到次日 04:00（等签到恢复）。
 //   - ErrSoftRate → 优先对齐上游重置墙钟（带「将在 … 重置」时 6004 走模型级豁免、
-//     非 6004 走账号级，均不指数堆加）；无重置时间才走有界退避。冷却时长优先采信
-//     Retry-After 头（uerr.RetryAfter，body 文案墙钟之外的头形态来源）。
+//     非 6004 走账号级，均不指数堆加）；无重置时间才走有界退避。14003「模型繁忙」
+//     （无恢复时刻）例外：走 CooldownModelBusy 的独立短窗口（10s 起、封顶 1m），
+//     不套 soft_rate 阶梯。冷却时长优先采信 Retry-After 头（uerr.RetryAfter，body
+//     文案墙钟之外的头形态来源）。
 //   - ErrWafBlock → 账号级软冷却：**不 Disable**——WAF 403 是 IP/指纹维频控信号，
 //     罚过即走、到期自愈。时长优先 Retry-After 头；缺失按 wafCooldownBase(60s)
 //     起 · softStreak 指数、封顶 soft_rate_max 的既有 CooldownSoftRate 有界退避。
@@ -1431,6 +1433,19 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 不需要异步核查（冗余）。立即换号。
 		h.cfg.Pool.CooldownUntilTomorrow4AM(uid, "余额不足")
 	case upstream.ErrSoftRate:
+		// 14003「模型繁忙」是**间歇**的上游抖动（issue #46，上游 f728859）：同一分钟内
+		// 既有 14003 也有成功。按账号级 soft_rate 阶梯（600s 起、翻倍、封顶 2h）停车会把
+		// 10 秒的抖动放大成整段客户端可见的断流，故给 (账号, 模型) 独立短窗口
+		// （pool.CooldownModelBusy：10s 起、封顶 1m）。上游若给了明确恢复时刻（body 重置
+		// 文案 / Retry-After 头）仍按既有口径对齐，不走短窗口；空模型名时无从「只停某个
+		// 模型」，退回下面既有的账号级路径（不能写成 modelCooldowns[""] 等于不罚）。
+		if model != "" && upstream.IsModelBusy(body) {
+			if _, hasReset := upstream.ParseRateReset(body); !hasReset &&
+				(uerr == nil || uerr.RetryAfter <= 0) {
+				h.cfg.Pool.CooldownModelBusy(uid, model, "14003 model busy")
+				return
+			}
+		}
 		// 统一对齐上游重置时间：只要 body 带「将在 … 重置」，无论业务 code 是
 		// 6004 还是 11140 rate-limiting 等形态，都精确冷却到该墙钟、绝不指数堆加。
 		//   - 模型级（6004）→ CooldownSoftForModel：写 modelCooldowns[model]，切模型豁免。

@@ -157,6 +157,29 @@ func TestIsModelRateLimit(t *testing.T) {
 	}
 }
 
+// TestIsModelBusy 14003「模型繁忙」判定（issue #46）：与 6004 共用「模型级」语义，
+// 但 14003 没有恢复时刻，走独立短窗口，故需要单独判定入口。
+func TestIsModelBusy(t *testing.T) {
+	cases := []struct {
+		body string
+		want bool
+	}{
+		// 14003：模型繁忙（官方文案「当前模型请求繁忙，请切换模型或稍后重试」）。
+		{`{"code":14003,"msg":"当前模型请求繁忙，请切换模型或稍后重试"}`, true},
+		{`{"code": 14003,"msg":"x"}`, true},
+		{`{"code":"14003"}`, true},
+		// 其他 code（含 6004 模型级限流）→ 不是「模型繁忙」。
+		{`{"code":6004,"msg":"将在 2026-09-11 18:33:27 UTC+8 重置"}`, false},
+		{`{"code":14001,"msg":"今日已签到"}`, false},
+		{``, false},
+	}
+	for _, c := range cases {
+		if got := IsModelBusy(c.body); got != c.want {
+			t.Errorf("IsModelBusy(%q)=%v want %v", c.body, got, c.want)
+		}
+	}
+}
+
 // TestParseSoftRateReset 解析上游 429 6004 msg 里的「将在 … 重置」时间（## UTC+8）。
 func TestParseSoftRateReset(t *testing.T) {
 	future := time.Now().Add(35 * time.Minute)
