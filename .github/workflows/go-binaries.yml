@@ -108,7 +108,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # 取历史 tag 算 compare 链接
+          fetch-depth: 0      # 取历史 tag 算 compare 链接
+          fetch-tags: true    # 显式拉取 tag 对象：Release 标题取自 tag 注解，缺对象会退化成 commit subject
       - name: tag 与源码版本一致性断言
         run: |
           SRC=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)
@@ -144,10 +145,23 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           VER="${TAG#v}"
 
-          TITLE=$(git tag -l --format='%(contents:subject)' "$TAG" | head -1)
-          if [ -z "$TITLE" ]; then
+          # 发布纪律：Release 标题 = tag 注解首行，且必须形如「vX.Y.Z: 中文摘要」。
+          # 坑：runner 侧 `%(contents:subject)` 有时拿到的是 commit subject（v1.15.6 /
+          # v1.15.7 均踩过，发出去的标题就是 commit message，须手工 gh release edit 修）。
+          # 先判对象类型、再做前缀断言，任一不满足都回落为 tag 名并告警——宁可标题
+          # 退化成裸 tag，也不能把 commit message 当标题发布。
+          if [ "$(git cat-file -t "$TAG" 2>/dev/null)" != "tag" ]; then
+            echo "::warning::tag $TAG 在 runner 侧未解析为注解对象，Release 标题回落为 tag 名"
             TITLE="$TAG"
-            echo "::warning::tag $TAG 无注解信息，Release 标题回落为 tag 名"
+          else
+            TITLE=$(git tag -l --format='%(contents:subject)' "$TAG" | head -1)
+            case "$TITLE" in
+              "$TAG:"*|"$TAG："*) : ;;
+              *)
+                echo "::warning::Release 标题不合规（应为「$TAG: 中文摘要」，实得「$TITLE」），回落为 tag 名"
+                TITLE="$TAG"
+                ;;
+            esac
           fi
 
           # 用 index() 定位而非正则：版本号里的方括号/[.] 在 awk 正则里都要转义，
