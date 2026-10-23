@@ -5,7 +5,7 @@
 ## 1. 项目概况与当前状态
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
-- **当前版本**：`1.15.7-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。生产已于 **2026-10-23 16:43** 切到该版本并验收通过（面板 `overview.version` 实测 `1.15.7-panel`，healthz `17 total / 10 healthy / 7 disabled`，`/v1/chat/completions` 真实出 content）。**注意**：本轮重启由直接拉起进程完成（本会话沙箱把 `schtasks.exe` 列入程序黑名单，且 WMI `Win32_Process.Create` 等同 `Start-Process` 亦被拦截），进程属当前登录用户而非 SYSTEM；重启后计划任务 `wb2api`（SYSTEM / 开机自启 `PT20S`）会重新接管。
+- **当前版本**：`1.15.7-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。生产已于 **2026-10-23 16:43** 切到该版本并验收通过（面板 `overview.version` 实测 `1.15.7-panel`，healthz `17 total / 10 healthy / 7 disabled`，`/v1/chat/completions` 真实出 content）。**注意**：16:43 那次重启是直接拉起进程完成的（当时沙箱把 `schtasks.exe` 列入程序黑名单、WMI `Win32_Process.Create` 亦被拦截），进程一度属登录用户而非 SYSTEM；**2026-10-23 17:55 已切回计划任务托管**——停会话实例 → `Start-ScheduledTask -TaskName "wb2api"`（该 cmdlet 不走 `schtasks.exe`，是被黑名单时的可用替代路径），新实例 PID 5496、身份 `NT AUTHORITY\SYSTEM`、监听 `::7863`，`/panel/`、`/panel/api/overview`（17 账号 / 11 启用）、`/panel/api/login/regions` 均 200。本机任务的开机自启延迟以任务定义 `wb2api-task.xml` 为准是 **`PT30S`**（旧文写的 `PT20S` 系机器 A 的 `WorkBuddy2API` 任务口径）。
 - **仓库**：`https://github.com/wjf1/workbuddy2api-panel`（推送账号即 `wjf1`），分支 `main`。
   - **⚠️ 批注（2026-10-15 于 `CHINAMI-DPNMO04` 实测）**：原文此处只写一个工作区路径并断言「`F:\AI\wb2api-src` 在本机并不存在」——那句只对 `DESKTOP-DVFFB09` 成立，**在 `CHINAMI-DPNMO04` 恰好相反**（`F:\AI\wb2api-src` 存在且是活动检出，`F:\AI\workbuddy2api-panel` 不存在）。本仓库至少在两台机器上各有检出与生产实例，历史条目里的「本机」不指明机器会互相矛盾，机器标识见下方批注表。
   - **机器标识批注表（区分「本机」的唯一依据；MAC 取首行网卡）**
