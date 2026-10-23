@@ -9,7 +9,7 @@
   Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（17/18）</b> · 回收站 / 标签 / 余额预警 / 定时备份 · 流式 / 非流式 · <b>OpenAI + Anthropic 双协议</b>（`/v1/chat/completions` + `/v1/messages`，后者含网关自执行的服务端 `web_search`）
 </p>
 
-<p align="center"><b>English</b>: A multi-account gateway that turns Tencent CodeBuddy (WorkBuddy) accounts into an OpenAI-compatible API, with a built-in web panel — account pool rotation, OAuth login, scheduled check-in / keep-alive, one-click growth tasks, soft-delete recycle bin, account tags, balance alerts and daily backups. It also speaks the <b>Anthropic Messages API</b> (<code>/v1/messages</code>) for Claude Code / ZCode, including a gateway-side <code>web_search</code> server tool that returns <code>server_tool_use</code> / <code>web_search_tool_result</code> blocks, and accepts mid-conversation <code>system</code> messages sent inside the <code>messages</code> array. Upstream free-tier queueing (error codes <code>6020</code>/<code>6021</code>) is treated as an upstream-wide condition rather than account rate limiting: rotation fails fast, no account is penalized, and the panel shows a dedicated "upstream queue busy" banner. See <a href="#核心能力">核心能力</a> below (docs in Chinese).</p>
+<p align="center"><b>English</b>: A multi-account gateway that turns Tencent CodeBuddy (WorkBuddy) accounts into an OpenAI-compatible API, with a built-in web panel — account pool rotation, OAuth login, scheduled check-in / keep-alive, one-click growth tasks, soft-delete recycle bin, account tags, balance alerts and daily backups. It also speaks the <b>Anthropic Messages API</b> (<code>/v1/messages</code>) for Claude Code / ZCode, including a gateway-side <code>web_search</code> server tool that returns <code>server_tool_use</code> / <code>web_search_tool_result</code> blocks, and accepts mid-conversation <code>system</code> messages sent inside the <code>messages</code> array. Upstream free-tier queueing (error codes <code>6020</code>/<code>6021</code>) is treated as an upstream-wide condition rather than account rate limiting: rotation fails fast, no account is penalized, and the panel shows a dedicated "upstream queue busy" banner. Since <b>v1.16.0</b>, session-dead accounts are grouped with a one-click re-login flow (reusing the device OAuth flow), mass session-kill events trigger a banner + webhook alert, every RT rotation is audited with out-of-process double-spend detection, the <code>auths/</code> directory is guarded by a cross-host lease lock, scheduled keep-alive tasks are jittered to avoid burst fingerprints, and a smart keep-alive mode only refreshes tokens nearing expiry. See <a href="#核心能力">核心能力</a> below (docs in Chinese).</p>
 
 <p align="center">
   <img alt="Go" src="https://img.shields.io/badge/Go-1.22.5-00ADD8?logo=go&logoColor=white&style=flat-square">
@@ -65,6 +65,8 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 🚦 **上游排队保护（1.15.5）** | 上游免费档排队（业务码 `6020 queue.waiting` / `6021 queue.full`）是**服务端队列水位**，与账号、模型都无关 → 归类为 `ErrUpstreamQueue`：**账号零惩罚、轮转 fail-fast**（命中处即终止轮转），门控激活期内后续请求**不发上游直接回 429 `upstream_queue_busy`**（不放大请求、不烧号），时长采信上游 `retry_after`（钳 15s–2m），任一请求成功即自动解除；面板与 `/status` 透出 `upstream_queue` 并显示「上游队列忙」横幅 |
 | 🧲 **会话粘性** | 同一会话（`conversation_id`）尽量绑定同一账号，TTL 滚动续期，失败自动解绑，可镜像 Redis 防重启丢失 |
 | ⏰ **定时任务** | 签到（09/21 点，末尾自动跑**连登管家**：兑换已解锁档位 + 抽完抽奖次数）+ 活跃上报（10 点，点亮连登 / 解锁领养 + streak 自检）+ 猫猫旅行（09/21 点，独立排程）+ token 保活（22 点），四类独立开关 |
+| 🔁 **会话失效恢复（1.16.0）** | 会话失效（12153 / 网关裸 401）的禁用号自动分类为「待重登」（`dead_kind`），行内一键**重登**（复用设备授权流，覆盖同 uid 凭证并复活）；10 分钟窗口内 ≥3 个号被判死 → 面板横幅 + webhook 告警；亚健康号显示 `session n/3` 连续判死计数；`probe_dead_hours` 可选定时探测死号、上游误吊销解除即自动复活 |
+| 🕵️ **RT 轮换审计与双活防护（1.16.0）** | 每次令牌刷新按 sha256 指纹落 JSONL 审计（来源/主机/PID 自证，保留 7 天）；启动播种基准后，任何**进程外**的 RT 消费（另一台机器的部署副本 / 独立脚本）即触发「凭证双活」告警——这正是上游连坐吊销整条令牌链的最可疑成因；`auths/` 目录租约锁（异机新鲜租约默认拒绝启动）；定时保号任务按 `hash(uid+日期)` 抖动打散（默认 20 分钟窗口），消除整点齐射风控特征；`keepalive_mode=smart` 只刷临期账号（RT 恒 60 天滚动，全量日刷 ≈97% 冗余） |
 | ⚡ **流式 + 非流式** | 出站强制 `stream:true`；SSE 帧按规范白名单重建；非流式由本地聚合为单响应 |
 | 🧠 **推理模型兼容** | DeepSeek 思维链注入（`thinking.type=enabled` + 默认档）、`reasoning_content` 多轮回填、effort 档位自动降级 |
 | 💬 **系统提示词体系** | 网关自有提示词替换客户端 system（默认 `custom`），从源头消灭 system 来源的内容误报；`passthrough` 遇拦截自动降级重试 |
@@ -164,6 +166,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 能力 | 说明 |
 |---|---|
 | **Web 管理面板** | `internal/panel`，前端 go:embed 单文件进二进制，零外部依赖。账号池可视化（健康色条 / 积分量条 / 冷却倒计时）、积分到期分布、单号运维、批量任务、日志查看、明暗主题 |
+| **会话失效治理（1.16.0）** | 死号分组与一键重登（复用 OAuth 设备流）、批量判死告警（禁用 hook 单一收口 + `internal/alert` 横幅/webhook）、RT 轮换审计与外部双花检测（`internal/rotaudit`，指纹 JSONL + 进程外消费即告警）、auths 租约锁（`internal/authlease`，防同目录双实例）、定时任务抖动（消齐射特征）、smart 智能保活（按 ExpiresAt 按需轮换 + 失败退避）、死号探活（误吊销自动复活）。设计文档 `docs/DESIGN-v1.16.0.md` |
 | **回收站 / 标签 / 预警 / 备份（1.14.0）** | 「移除账号」软删除进回收站（恢复 / 彻底删除 / 过期清理）；账号多标签落盘并随 cockpit 导出导入往返；低于积分保底线的账号进面板预警横幅；每日定时备份 auths + 池状态为 zip（可下载，不含 config.json） |
 | **导出导入往返完整性（1.14.1）** | cockpit 兼容导出格式补全 `realm` / `device_token` 键：带设备风控头、显式 realm 标注的账号导出 → 导入全字段无损（端到端边界账号实测锁定；旧格式导入行为不变） |
 | **导入格式兼容升级（1.14.2）** | 导入接口原生兼容**嵌套形账号文件**（`{"account":{...},"auth":{...}}`，即本面板 `auths/` 落盘格式）、扁平单对象与混合数组，并支持 **zip 整包上传**（自动解包内部 `*.json`，坏文件只记 errors 不阻断其余）与多文件一次选择；「导入 JSON」页签错误明细直接展示前 3 条 |
@@ -413,6 +416,13 @@ curl -sN http://localhost:7863/v1/messages \
 | `schedule.keepalive_enabled` | `true` | token 保活总开关 |
 | `schedule.blackcat_enabled` | `true` | 夜猫子总开关 |
 | `schedule.include_disabled_in_tasks` | `false` | 让**保号类**四任务（签到 / 活跃上报 / token 保活 / 余额刷新）对**已禁用**账号也执行——「禁用」只关选号，不停保号。`false`（默认）保持「禁用的跳过」 |
+| `schedule.jitter_minutes` | `20` | 定时保号任务时点抖动窗口（分钟，1.16.0）：每号按 `hash(uid+日期)` 分散到 `[0, N)` 执行，消除整点齐射风控特征；`0` = 关闭。**热生效**；手动按钮不受影响 |
+| `schedule.keepalive_mode` | `daily` | token 保活模式（1.16.0）：`daily` 每日全量强刷（现状语义）；`smart` 只刷 `ExpiresAt` 距今 < `smart_keepalive_days` 的号（RT 恒 60 天滚动，推荐生产开启）。**热生效** |
+| `schedule.smart_keepalive_days` | `14` | smart 保活阈值（天）；手动「全部保活」不受影响 |
+| `schedule.probe_dead_hours` | `[]` | 死号探活时点（1.16.0，CST 小时；空 = 默认关闭）：对「待重登」类禁用号 refresh 探测，上游误吊销解除即自动复活 + webhook。需余额刷新循环开启驱动；探测请求本身有上游可见特征，自行权衡 |
+| `notify.webhook_url` | 空 | 批量判死 / 外部轮换 / 死号复活事件的 webhook（1.16.0，通用 JSON POST，可接飞书 / Bark / 企微）；空 = 仅面板横幅不外发。**热生效** |
+| `notify.mass_kill_accounts` / `mass_kill_window_minutes` / `cooldown_minutes` | `3` / `10` / `30` | 判死告警阈值 / 窗口 / webhook 冷却（分钟） |
+| `auths.strict_lease` | `true` | auths 目录租约锁（1.16.0）：检测到异机新鲜租约时 `true` 拒绝启动（防 RT 双花连坐吊销），`false` 降级 WARN 放行；同机残留只 WARN（保护计划任务重启路径）。改动需重启 |
 | `upstream.timeout_seconds` | `120` | 短 RPC（刷新 / 签到 / 余额 / 模型列表）总时长上限 |
 | `upstream.header_timeout_seconds` | 回落 `timeout_seconds` | 聊天首字节前（响应头）上限 |
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中空闲上限（活跃续命，静默断流） |

@@ -4,6 +4,34 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.16.0-panel] - 2026-10-24
+
+本版为**会话失效恢复与防复发**：针对 1.15.7 实案（2026-10-23 六账号 RT 链被上游批量吊销、只能人工重登、死号混在普通禁用里不可辨识、无任何告警）的系统性治理，按「可见 → 恢复 → 防复发」三层布防（设计文档 `docs/DESIGN-v1.16.0.md`）。
+
+**触发背景**：2026-10-24 会话复查——生产 `state.json` 中 7 个禁用号（6 个 `12153 session dead` + 1 个 `11140 banned`）在面板「积分到期提醒」上持续显示「查询失败：upstream session_dead (http 401)」，用户每天点「刷签」保活却无效。根因复核：①「签到」按钮只领积分不刷 token；②禁用号被所有保号任务跳过；③RT 链已被上游吊销（refresh 端点回 `code=12153 invalid_grant`），任何刷新/保活/重导 JSON 都救不回来；④批量吊销的最可疑诱因是「整点齐射刷新 + 同批凭证外部执行体双花」。
+
+### 新增
+
+- **死号分组与一键重登（M1）**：`pool.Status` 新增 `dead_kind` 派生字段（`session_dead` / `banned`，分类收口 `deadKindOf`，前端不猜 reason 字符串）；导出 `pool.IsSessionDeadReason` / `IsBannedReason` 供告警与探活复用。账号池新增状态筛选（待重登/封号 vs 可用正常）；死号行显示醒目「待重登」（session_dead）/「上游封号」（banned）标签，session_dead 行内挂「重登」按钮 → `#reloginVeil` 弹窗**复用现有设备授权流**（loginPoll 成功后 SaveAtomic 覆盖同 uid 凭证 + `Pool.Add` upsert + `Pool.Revive` 全清复活，后端零新增端点）；处理「登成另一个账号」边界提示与 15 分钟授权会话过期重试。
+- **批量判死实时告警（M2，`internal/alert`）**：`pool.SetOnDisabled` 禁用 hook（`disableLocked` 末尾锁外 goroutine 触发，全部禁用路径单一收口）→ `alert.Manager`：窗口内（默认 10 分钟）distinct uid 判死数达阈值（默认 3）即 ① 面板 `#killBox` 横幅（`overview.mass_kill`，**无冷却**——事件老化自然消失）② webhook 外发（`event=mass_session_dead`，默认冷却 30 分钟，失败重试 1 次静默，不影响横幅）。只统计会话失效类禁用（banned / 人工禁用不计入）。配置 `notify` 段（webhook_url / mass_kill_accounts / mass_kill_window_minutes / cooldown_minutes）热生效。
+- **亚健康可视化（M3）**：`session_dead_fails` API 此前已透出但前端未渲染——账号池状态列补 `session n/3` 橙色角标（连续判死进度，满 3 自动禁用；保活/请求成功即清零），赶在满阈前人工干预。
+- **RT 轮换审计与外部双花检测（M6，`internal/rotaudit`）**：`upstream.Client` 的 `RefreshToken`/`RefreshTokenIfNeeded` 加 `source` 参数（keepalive/chat/balance/signin 五调用点），新增 `RotationObserver`——**仅 leader 记录**（等待者/60s 宽限复用不重复），RT 以 sha256 前 8 位指纹落 JSONL（按天切、保留 7 天、host/pid 自证，不落明文）。启动以池内当前 RT 播种基准；此后任何一次刷新的旧指纹 ≠ 基准 = **本进程之外有执行体在消费该账号的 RT**（另一台机器的部署副本 / 独立 signin.sh 进程）——ERROR 日志 + webhook（`event=external_token_rotation`，独立冷却）+ 横幅「凭证双活」行（`overview.external_rotations`，**任意数量即显示**，不凑阈值）。重登成功经 `OnLoginRotate` 回调重置基准，不误报。
+- **auths 目录租约锁（M4，`internal/authlease`）**：`auths/.lease.json` 租约（30s 心跳 / 90s 新鲜阈值），防「同一 auths 目录被两个执行体同时挂载」。异机新鲜租约 + `auths.strict_lease=true`（默认）→ ERROR 拒绝启动；false 降级 WARN 放行（逃生门）。同机租约（崩溃残留/双进程）只 WARN 接管——保护计划任务重启路径，同机双进程由 M6 轮换审计兜底。文件名不匹配 `auth.LoadDir` 的 `workbuddy*.json` glob，零回归。
+- **死号探活（M8）**：`schedule.probe_dead_hours`（默认空 = 关闭）定时 + `POST /panel/api/probe_dead_all` 手动触发，对 session_dead 类禁用号 refresh 探测（**banned 不探**；号间随机 5–11s）：成功即 `ReviveDisabled` + 落盘 + WARN + webhook（`event=dead_recovered`）——捕捉上游误吊销解除的恢复窗口；失败静默不计数。默认关闭（探死请求本身是上游可观测特征），手动按钮仅在存在死号时显示。
+
+### 变更
+
+- **保号任务时点抖动（M5）**：定时五类任务（签到/旅行/活跃/保活/夜猫子）每号按 `fnv32(uid|CST日期)` 分散到 `[0, jitter_minutes)`（默认 20 分钟，0 = 关闭回到齐射）执行，消除「17 号 22:00:00 同一秒齐射 refresh」的批量风控特征；偏移同号同日稳定、跨号分散、跨日轮换；等待可被 ctx 取消（优雅停机）；**面板手动按钮不受影响**（运维语义是"现在就做"）。签到/保活/旅行/夜猫子的单号逻辑抽为 `checkinOne`/`keepaliveOne`/`blackcatOne`（旅行沿用既有 `travelOne`），手动与定时两路共用，无逻辑复制。
+- **智能保活（M7）**：`schedule.keepalive_mode=smart`（默认 `daily` 兼容）时定时保活只刷 `ExpiresAt` 距今 < `smart_keepalive_days`（默认 14 天）的账号——RT 实测恒 60 天滚动（`expiresIn=5184000`），每日全量强刷 ≈97% 是冗余上游调用且构成齐射特征；smart 下 17 号日均刷新量降至 ~0.4 次且各号天然错峰。**手动「全部保活」始终全量**。刷新失败（非 session dead）进退避 30m→2h→6h→24h 封顶，由余额刷新循环驱动重试（修「一轮失败要等 24h」断档）；12153 判死不进退避（死号重试无意义，走连续计数）。
+- **配置项**：`schedule` 段新增 `jitter_minutes` / `keepalive_mode` / `smart_keepalive_days` / `probe_dead_hours`；`notify` 段与 `auths.strict_lease` 见上；`config.example.json` 同步；全部热生效（`auths.strict_lease` 除外，进重启清单）。
+
+### 验证
+
+- **单测**：`go test ./... -count=1` 全绿（25 包）。新增 `internal/pool/deadkind_test`（分类契约/状态流转/判定函数 3 例）、`internal/alert/alert_test`（reason 过滤/distinct uid 达标/窗口老化/webhook 载荷与冷却/失败静默/硬上限裁剪 6 例）、`internal/rotaudit/rotaudit_test`（播种后正常轮换/外部检测/Reset 免误报/审计形状（不含明文 RT）/清理过期/指纹稳定性 6 例）、`internal/authlease/authlease_test`（新鲜获取/stale 接管/同机不阻断/异机 strict 拒绝与放行/Release/空目录 6 例）、`internal/scheduler/jitter_test`（偏移稳定性/范围/跨日轮换/17 号分散度/退避序列/退避驱动/smart 过滤/探活复活/探活失败静默 9 例）；既有 refresh 测试随签名适配。
+- **沙箱端到端**（`:7871`，生产 17 账号副本、调度全关）：`overview` 透出 `version=1.16.0-panel`、`dead_kind`（6×session_dead + 1×banned）、`mass_kill=null`、`external_rotations=null`；启动日志确认租约获取（`.lease.json` 落盘）、审计播种 17 号、告警配置；`POST /probe_dead_all` 全链路（死号 refresh 回 12153 静默处理）；`GET /panel/api/config` 新字段回显正确。
+- **UI 真实点击走查**（chrome-devtools 真实输入事件）：死号「待重登/上游封号」标签渲染；状态筛选 dead=7 行 / ok=10 行；「重登」→ `#reloginVeil` 打开（目标昵称/realm 预选）→「获取授权链接」→ 真实上游授权 URL（`copilot.tencent.com/login?platform=CLI&state=…`）+ 复制/打开按钮；「探测死号」toast「死号探活已开始」；配置页新表单回填（jitter=20 / mode=daily / days=14 / probe 空）；`TestIndexHTMLUniqueIDs` / CSP / `node --check` 断言通过。
+- **发布前**：`go build ./...` / `go vet ./...` 干净；版本常量 `1.16.0-panel`。
+
 ## [1.15.7-panel] - 2026-10-23
 
 本版为**会话失效治理**：从同源上游 [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel) 逐补丁移植三项（网关 401 分类 / 余额 401 求证 / RT 单飞），另针对 chat 路径补一处本分支加固（裸 401 不再单发致命）。
