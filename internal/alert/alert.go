@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -65,9 +66,13 @@ type Manager struct {
 	cfg      Config
 	events   []evt     // 保留窗口内（按最大窗口裁剪）的会话失效事件
 	lastSent time.Time // 最近一次外发尝试（成功失败都算——失败也节流，防重试风暴）
-	host     string    // webhook 载荷自证来源（os.Hostname）
-	version  string    // 面板版本（同载荷）
-	hc       *http.Client
+	// ext 外部 RT 轮换事件（M6 rotaudit 检测 → NoteExternalRotation）：uid → 最近时间。
+	// 与 mass_kill 不同：**任意数量即告警**（哪怕 1 个也意味着凭证双活，无需凑阈值）。
+	ext       map[string]time.Time
+	lastExtSent time.Time // 外部轮换 webhook 的独立冷却键
+	host      string    // webhook 载荷自证来源（os.Hostname）
+	version   string    // 面板版本（同载荷）
+	hc        *http.Client
 }
 
 // New 构造告警器。host/version 为 webhook 载荷的自证字段（缺省自动取 hostname）。
@@ -78,6 +83,7 @@ func New(cfg Config, host, version string) *Manager {
 		}
 	}
 	m := &Manager{
+		ext:     map[string]time.Time{},
 		host:    host,
 		version: version,
 		// webhook 外发是旁路：5s 超时 + 不跟随代理环境变量由调用方 env 决定，
@@ -188,6 +194,80 @@ func (m *Manager) Payload() any {
 	}
 }
 
+// ExternalRotations 外部 RT 轮换横幅载荷（M6）：窗口内被检测到「进程外执行体
+// 消费 RT」的账号汇总。无冷却约束——横幅只要事件未老化就显示。
+type ExternalRotations struct {
+	Count  int       `json:"count"`
+	UIDs   []string  `json:"uids"`
+	LastAt time.Time `json:"last_at"`
+}
+
+// NoteExternalRotation 记录一次外部 RT 轮换（M6 rotaudit 检测回调）：
+// 计入横幅（任意数量即显示）+ 立即评估 webhook 外发（独立冷却键）。
+func (m *Manager) NoteExternalRotation(uid, source string) {
+	m.mu.Lock()
+	if m.ext == nil {
+		m.ext = map[string]time.Time{}
+	}
+	m.ext[uid] = time.Now()
+	m.trimExtLocked()
+	cfg := m.cfg
+	url := cfg.WebhookURL
+	cool := time.Duration(cfg.CooldownMin) * time.Minute
+	shouldSend := url != "" && time.Since(m.lastExtSent) >= cool
+	if shouldSend {
+		m.lastExtSent = time.Now()
+	}
+	lastAt := m.ext[uid]
+	m.mu.Unlock()
+
+	if shouldSend {
+		m.sendWebhook2("external_token_rotation", url, map[string]any{
+			"event":   "external_token_rotation",
+			"host":    m.host,
+			"version": m.version,
+			"accounts": []map[string]string{
+				{"uid": uid, "source": source, "at": lastAt.Format(time.RFC3339)},
+			},
+		})
+	}
+}
+
+// trimExtLocked 裁剪 1 小时前的外部轮换事件（硬上限，同 mass_kill 口径）。
+// 调用方必须持有 m.mu。
+func (m *Manager) trimExtLocked() {
+	cutoff := time.Now().Add(-time.Hour)
+	for uid, at := range m.ext {
+		if at.Before(cutoff) {
+			delete(m.ext, uid)
+		}
+	}
+}
+
+// ExternalPayload overview.external_rotations 载荷：无事件 nil；有事件（任意数量）
+// 即返回汇总——1 个外部轮换也意味着凭证双活，不设阈值。
+func (m *Manager) ExternalPayload() any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.trimExtLocked()
+	if len(m.ext) == 0 {
+		return nil
+	}
+	out := &ExternalRotations{Count: len(m.ext)}
+	uids := make([]string, 0, len(m.ext))
+	var last time.Time
+	for uid, at := range m.ext {
+		uids = append(uids, uid)
+		if at.After(last) {
+			last = at
+		}
+	}
+	sort.Strings(uids)
+	out.UIDs = uids
+	out.LastAt = last
+	return out
+}
+
 // maybeNotify 窗口内 distinct uid 达阈值且距上次外发 ≥ cooldown → 外发 webhook。
 // 外发在调用方 goroutine 同步执行（pool hook 已是独立 goroutine，5s 超时兜底）。
 func (m *Manager) maybeNotify() {
@@ -265,6 +345,31 @@ func (m *Manager) sendWebhook(url string, evts []evt, count, windowMin int) {
 		}
 	}
 	log.Printf("[alert] ERROR: webhook 外发失败（已重试 1 次，%dm 内不再重试）: %v", int(DefaultCooldown.Minutes()), lastErr)
+}
+
+// sendWebhook2 通用载荷外发（外部轮换等非常规事件；与 sendWebhook 共用重试与日志口径）。
+func (m *Manager) sendWebhook2(event, url string, payload any) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[alert] webhook marshal(%s): %v", event, err)
+		return
+	}
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err := m.hc.Post(url, "application/json", bytes.NewReader(body))
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				log.Printf("[alert] webhook 已外发：%s → %s", event, url)
+				return
+			}
+			lastErr = &statusError{Code: resp.StatusCode}
+		} else {
+			lastErr = err
+		}
+	}
+	log.Printf("[alert] ERROR: webhook 外发失败（%s，已重试 1 次，%dm 内不再重试）: %v",
+		event, int(DefaultCooldown.Minutes()), lastErr)
 }
 
 type statusError struct{ Code int }

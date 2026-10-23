@@ -104,7 +104,7 @@ func TestUserAgentOverrideAllOutbound(t *testing.T) {
 		}
 		return jsonResp(200, `{"code":0,"data":{"accessToken":"nat","refreshToken":"nrt"}}`), nil
 	})
-	if err := c.RefreshToken(a); err != nil {
+	if err := c.RefreshToken(a, "test"); err != nil {
 		t.Errorf("refresh: %v", err)
 	}
 }
@@ -221,7 +221,7 @@ func TestUserAgentExplicitOverride(t *testing.T) {
 	if got := c.chatLastUA(); got != explicitString {
 		t.Errorf("chat UA = %q want %q", got, explicitString)
 	}
-	if err := c.RefreshToken(a); err != nil {
+	if err := c.RefreshToken(a, "test"); err != nil {
 		t.Errorf("refresh: %v", err)
 	}
 }

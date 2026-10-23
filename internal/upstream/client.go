@@ -5,6 +5,8 @@ package upstream
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -787,6 +789,9 @@ type Client struct {
 	refreshMu  sync.Mutex
 	refreshing map[string]*refreshCall
 	renewed    map[string]*refreshResult
+	// rotationObs RT 轮换观察者（SetRotationObserver 注入，M6 审计；nil = 不观察）。
+	// 在 refreshMu 下读写：refresh() 的 leader 路径调用时天然持有该锁序。
+	rotationObs RotationObserver
 
 	// ChatHTTP 聊天 SSE 专用 client：无总时长上限（Timeout=0），首字节由
 	// Transport.ResponseHeaderTimeout 约束，流中空闲由 IdleTimeout 约束。
@@ -1122,19 +1127,39 @@ func refreshKey(a *auth.Auth, rt string) string {
 	return id + "\n" + rt
 }
 
+// RotationObserver RT 轮换观察者（v1.16.0 M6 审计）：每次 leader 刷新完成
+// （成功或失败）回调一次；等待者 / 60s 宽限复用不回调（同一次 RT 消费只记一条）。
+// oldRT8/newRT8 是 refresh token 的 sha256 前 8 位指纹（不落明文）；newRT8 仅成功
+// 且上游返回新 RT 时非空；err 非 nil 表示本次刷新失败（RT 未被消费成功）。
+type RotationObserver func(uid, oldRT8, newRT8, source string, err error)
+
+// SetRotationObserver 注入轮换观察者（main 装配 internal/rotaudit；nil = 不观察）。
+func (c *Client) SetRotationObserver(fn RotationObserver) {
+	c.refreshMu.Lock()
+	c.rotationObs = fn
+	c.refreshMu.Unlock()
+}
+
+// rtFingerprint RT 指纹：sha256 前 8 位 hex。审计日志只落指纹不落明文。
+func rtFingerprint(rt string) string {
+	sum := sha256.Sum256([]byte(rt))
+	return hex.EncodeToString(sum[:4])
+}
+
 // RefreshToken 强制刷新（keepalive 用）：不检查是否临近过期，但同一个
 // refresh token 的在途刷新/60s 结果会被复用，避免与请求路径并发时双花 RT。
-func (c *Client) RefreshToken(a *auth.Auth) error {
-	return c.refresh(a, 0, true)
+// source 标记调用来源（keepalive/chat/balance/signin/probe），进轮换审计日志。
+func (c *Client) RefreshToken(a *auth.Auth, source string) error {
+	return c.refresh(a, 0, true, source)
 }
 
 // RefreshTokenIfNeeded 按需刷新（请求路径 / signin 用）：先快速判断是否临近
 // 过期；进入刷新事务后再双检一次，等锁期间别人已刷好就直接复用。
-func (c *Client) RefreshTokenIfNeeded(a *auth.Auth, within time.Duration) error {
+func (c *Client) RefreshTokenIfNeeded(a *auth.Auth, within time.Duration, source string) error {
 	if !a.NeedsRefresh(within) {
 		return nil
 	}
-	return c.refresh(a, within, false)
+	return c.refresh(a, within, false, source)
 }
 
 // refresh 刷新事务编排：
@@ -1146,7 +1171,7 @@ func (c *Client) RefreshTokenIfNeeded(a *auth.Auth, within time.Duration) error 
 //     「并发落败」误判成 12153 session dead。
 //
 // 锁序：refreshMu → a.mu；网络 I/O 不持任何锁。
-func (c *Client) refresh(a *auth.Auth, within time.Duration, force bool) error {
+func (c *Client) refresh(a *auth.Auth, within time.Duration, force bool, source string) error {
 	// 第 1 段（锁内）：读快照。
 	a.Lock()
 	rtSnapshot := a.RefreshToken
@@ -1212,7 +1237,19 @@ func (c *Client) refresh(a *auth.Auth, within time.Duration, force bool) error {
 
 	res := c.doRefresh(a, rtSnapshot)
 	finish(res)
-	return c.applyRefresh(a, res, atBefore, rtSnapshot)
+	err := c.applyRefresh(a, res, atBefore, rtSnapshot)
+	// M6 审计：只有 leader 记录（等待者/宽限复用共享同一次 RT 消费）。
+	if c.rotationObs != nil {
+		switch {
+		case res == nil:
+			c.rotationObs(a.UID, rtFingerprint(rtSnapshot), "", source, fmt.Errorf("refresh: no result"))
+		case res.err != nil:
+			c.rotationObs(a.UID, rtFingerprint(rtSnapshot), "", source, res.err)
+		default:
+			c.rotationObs(a.UID, rtFingerprint(rtSnapshot), rtFingerprint(res.refreshToken), source, nil)
+		}
+	}
+	return err
 }
 
 // doRefresh 只做网络刷新，不写回。调用方已保证同一 RT 只有它一个 leader。

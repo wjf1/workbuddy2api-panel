@@ -124,5 +124,8 @@
     "mass_kill_accounts": 3,
     "mass_kill_window_minutes": 10,
     "cooldown_minutes": 30
+  },
+  "auths": {
+    "strict_lease": true
   }
 }

@@ -39,7 +39,7 @@ func (s *Scheduler) noteBalanceAuthFailure(a *auth.Auth, uid string, probeErr er
 		log.Printf("balance %s: 401（%s 内已求证过登录态，本轮跳过 refresh）", label, authHealBackoff)
 		return
 	}
-	rerr := s.cfg.Upstream.RefreshToken(a)
+	rerr := s.cfg.Upstream.RefreshToken(a, "balance")
 	if rerr == nil {
 		// 刻意偏离上游（上游此处为 SaveAtomic）：与 chat / keepalive / signin 三处
 		// 统一走 SaveAtomicRetry——本路径同样是「上游已轮换 RT，本地必须落盘」，

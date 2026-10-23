@@ -361,7 +361,7 @@ func TestRefreshSuccess(t *testing.T) {
 		return jsonResp(200, `{"code":0,"msg":"ok","data":{"accessToken":"newat","refreshToken":"newrt","expiresIn":3600}}`), nil
 	})
 	a := &auth.Auth{AccessToken: "at", RefreshToken: "oldrt", ExpiresAt: 1}
-	if err := c.RefreshToken(a); err != nil {
+	if err := c.RefreshToken(a, "test"); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
 	if a.AccessToken != "newat" || a.RefreshToken != "newrt" {
@@ -377,7 +377,7 @@ func TestRefreshPreservesExpiryWhenOmitted(t *testing.T) {
 		return jsonResp(200, `{"code":0,"data":{"accessToken":"newat"}}`), nil
 	})
 	a := &auth.Auth{AccessToken: "at", RefreshToken: "rt", ExpiresAt: 1753600000}
-	if err := c.RefreshToken(a); err != nil {
+	if err := c.RefreshToken(a, "test"); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
 	if a.ExpiresAt != 1753600000 {
@@ -397,7 +397,7 @@ func TestRefreshSessionDead(t *testing.T) {
 		}, nil
 	})
 	a := &auth.Auth{AccessToken: "at", RefreshToken: "rt", ExpiresAt: 1}
-	err := c.RefreshToken(a)
+	err := c.RefreshToken(a, "test")
 	if err == nil {
 		t.Fatal("want error")
 	}

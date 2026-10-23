@@ -19,11 +19,13 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/alert"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/authlease"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/panel"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/rotaudit"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/server"
@@ -74,6 +76,14 @@ func main() {
 			log.Fatalf("load config: %v", err)
 		}
 	}
+
+	// M4 租约锁：同一 auths 目录不允许两个执行体同时挂（异机新鲜租约 + strict
+	// 拒绝启动）。Acquire 在 LoadDir 前调用；Release 随进程退出删租约文件。
+	lease, err := authlease.Acquire(cfg.AuthDir, cfg.Auths.StrictLease)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	defer lease.Release()
 
 	auths, err := auth.LoadDir(cfg.AuthDir)
 	if err != nil {
@@ -282,12 +292,27 @@ func main() {
 		cfg.Notify.MassKillAccounts, cfg.Notify.MassKillWindowMin,
 		map[bool]string{true: "，webhook 已配置", false: "（仅面板横幅，未配 webhook）"}[cfg.Notify.WebhookURL != ""])
 
+	// M6 RT 轮换审计：指纹 JSONL（保留 7 天）+ 外部轮换检测（进程外执行体消费 RT
+	// → ERROR + webhook）。外部轮换命中即告警（不凑阈值——1 个也意味着凭证双活）。
+	rotRec := rotaudit.New(stateSibling(cfg.StateFile, "refresh-audit"), "", func(uid, old8, cur8, source string) {
+		alertMgr.NoteExternalRotation(uid, source)
+	})
+	up.SetRotationObserver(rotRec.Observe)
+	seed := map[string]string{}
+	for _, a := range auths {
+		seed[a.UID] = a.RefreshTokenValue()
+	}
+	rotRec.Seed(seed)
+	log.Printf("[rotaudit] RT 轮换审计已启用：%s（外部轮换检测：本进程之外的任何 RT 消费都会告警）",
+		stateSibling(cfg.StateFile, "refresh-audit"))
+
 	// pn 先声明再赋值：SaveConfig 闭包需引用 pn 本身（配置页热改备份/回收站设置），
 	// 闭包执行时 pn 已完成装配（首次保存必然发生在面板可用之后）。
 	var pn *panel.Panel
 	pn = panel.New(panel.Config{
 		Pool:        p,
 		Alert:       alertMgr,
+		OnLoginRotate: rotRec.Reset,
 		Usage:       rec,
 		RequestLog:  requestLog,
 		Upstream:    up,
@@ -620,6 +645,8 @@ func restartRequiredFields(c *Config) []string {
 	out = append(out, "session_sticky.ttl", "session_sticky.gc_interval")
 	out = append(out, "logging.request_archive_enabled", "logging.request_retention_days", "logging.request_archive_max_mb")
 	out = append(out, "server.read_timeout")
+	// auths.strict_lease 只在启动 Acquire 时读一次，热改无意义。
+	out = append(out, "auths.strict_lease")
 	return out
 }
 

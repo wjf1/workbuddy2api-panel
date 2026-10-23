@@ -238,6 +238,11 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "save auth: "+err.Error())
 		return
 	}
+	// M6 审计基准重置：新凭证的 RT 与旧链无关，先重置再热加载，
+	// 避免重登后的第一次刷新被 rotaudit 误报为「外部轮换」。
+	if p.cfg.OnLoginRotate != nil {
+		p.cfg.OnLoginRotate(acct.UID, a.RefreshTokenValue())
+	}
 	p.cfg.Pool.Add(a)
 	p.cfg.Pool.Revive(acct.UID) // 全新登录 = 人工恢复口径：清掉旧号遗留的禁用/冷却/熔断
 

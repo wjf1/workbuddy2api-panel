@@ -52,7 +52,7 @@ func TestRefreshTokenIfNeededSingleFlight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- c.RefreshTokenIfNeeded(a, 10*time.Minute)
+			errs <- c.RefreshTokenIfNeeded(a, 10*time.Minute, "test")
 		}()
 	}
 	<-started
@@ -95,11 +95,11 @@ func TestRefreshForcedAndNeededShareCall(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		errs <- c.RefreshToken(a)
+		errs <- c.RefreshToken(a, "test")
 	}()
 	go func() {
 		defer wg.Done()
-		errs <- c.RefreshTokenIfNeeded(a, 10*time.Minute)
+		errs <- c.RefreshTokenIfNeeded(a, 10*time.Minute, "test")
 	}()
 	<-started
 	time.Sleep(50 * time.Millisecond)
@@ -128,11 +128,11 @@ func TestRefreshGraceReusesResult(t *testing.T) {
 	})
 
 	a := refreshAuth("u1", "r1", time.Minute)
-	if err := c.RefreshToken(a); err != nil {
+	if err := c.RefreshToken(a, "test"); err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
 	old := refreshAuth("u1", "r1", time.Minute)
-	if err := c.RefreshTokenIfNeeded(old, 10*time.Minute); err != nil {
+	if err := c.RefreshTokenIfNeeded(old, 10*time.Minute, "test"); err != nil {
 		t.Fatalf("grace refresh: %v", err)
 	}
 	if got := calls.Load(); got != 1 {
@@ -155,11 +155,11 @@ func TestRefreshGraceExpires(t *testing.T) {
 	})
 
 	a := refreshAuth("u1", "r1", time.Minute)
-	if err := c.RefreshToken(a); err != nil {
+	if err := c.RefreshToken(a, "test"); err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
 	old := refreshAuth("u1", "r1", time.Minute)
-	if err := c.RefreshTokenIfNeeded(old, 10*time.Minute); err != nil {
+	if err := c.RefreshTokenIfNeeded(old, 10*time.Minute, "test"); err != nil {
 		t.Fatalf("second refresh: %v", err)
 	}
 	if got := calls.Load(); got != 2 {
@@ -180,11 +180,11 @@ func TestRefreshForcedBypassesGrace(t *testing.T) {
 	})
 
 	a := refreshAuth("u1", "r1", time.Minute)
-	if err := c.RefreshTokenIfNeeded(a, 10*time.Minute); err != nil {
+	if err := c.RefreshTokenIfNeeded(a, 10*time.Minute, "test"); err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
 	old := refreshAuth("u1", "r1", time.Minute)
-	if err := c.RefreshToken(old); err != nil {
+	if err := c.RefreshToken(old, "test"); err != nil {
 		t.Fatalf("forced refresh: %v", err)
 	}
 	if got := calls.Load(); got != 2 {
@@ -222,7 +222,7 @@ func TestRefreshIfNeededSkipsFresh(t *testing.T) {
 		return jsonResp(200, refreshOKBody), nil
 	})
 	a := refreshAuth("u1", "r1", time.Hour)
-	if err := c.RefreshTokenIfNeeded(a, 10*time.Minute); err != nil {
+	if err := c.RefreshTokenIfNeeded(a, 10*time.Minute, "test"); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
 	if got := calls.Load(); got != 0 {
@@ -248,12 +248,12 @@ func TestRefreshPanicReleasesWaiters(t *testing.T) {
 	leader := make(chan any, 1)
 	go func() {
 		defer func() { leader <- recover() }()
-		_ = c.RefreshToken(a)
+		_ = c.RefreshToken(a, "test")
 	}()
 	<-started
 
 	waiter := make(chan error, 1)
-	go func() { waiter <- c.RefreshTokenIfNeeded(a, 10*time.Minute) }()
+	go func() { waiter <- c.RefreshTokenIfNeeded(a, 10*time.Minute, "test") }()
 	time.Sleep(20 * time.Millisecond) // 让 waiter 进入在途等待
 	close(release)
 

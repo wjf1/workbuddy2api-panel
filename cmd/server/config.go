@@ -265,6 +265,13 @@ type Config struct {
 		GCInterval string `json:"gc_interval"` // 会话 GC 周期，默认 "5m"
 	} `json:"session_sticky"`
 
+	// Auths 凭证目录策略（M4）。strict_lease=true（默认）：启动时检测到异机新鲜
+	// 租约即拒绝启动（RT 双花会连坐吊销整条令牌链）；false 降级 WARN 放行（逃生门）。
+	// 同机租约（残留/双进程）只 WARN 不阻断，由 M6 轮换审计兜底。重启生效。
+	Auths struct {
+		StrictLease bool `json:"strict_lease"`
+	} `json:"auths"`
+
 	// Notify 批量判死告警（M2，internal/alert）。webhook_url 空 = 仅面板横幅不外发；
 	// 阈值/窗口/冷却 <=0 由 alert.SetConfig 归一为默认（3 / 10m / 30m）。热生效。
 	Notify struct {
@@ -306,6 +313,8 @@ func Default() *Config {
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
+	// auths.strict_lease 缺省 true（同 Schedule 开关逻辑：键缺席保留默认，显式 false 才关）。
+	c.Auths.StrictLease = true
 	// 批量判死告警缺省值（webhook_url 缺省空 = 仅横幅；数值 <=0 由 alert.SetConfig 归一，
 	// 这里显式写默认便于配置页展示与文档对齐）。
 	c.Notify.MassKillAccounts = 3

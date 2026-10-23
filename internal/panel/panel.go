@@ -68,6 +68,11 @@ type Config struct {
 	// 禁用事件经 pool.SetOnDisabled 收口到 Alert.NoteDisabled，此处只读窗口内汇总。
 	Alert *alert.Manager
 
+	// OnLoginRotate 登录成功后回调（M6 审计基准重置）：loginPoll 把新凭证落盘后
+	// 调用，rotaudit.Reset 重置该账号的 RT 基准——重登后的第一次刷新不构成
+	// 「外部轮换」。nil 安全（无审计时为零操作）。
+	OnLoginRotate func(uid, refreshToken string)
+
 	// Usage 逐请求用量记录器（nil = 用量接口返回 501）。
 	Usage *usage.Recorder
 	// RequestLog 请求指标与归档（nil = 对应接口返回 501）。
@@ -325,7 +330,8 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"credit_floor":    p.creditFloor(),
 		"low_credit":      p.lowCreditAccounts(accounts),
 		"upstream_queue":  p.upstreamQueuePayload(),
-		"mass_kill":       p.massKillPayload(),
+		"mass_kill":           p.massKillPayload(),
+		"external_rotations":  p.externalRotationsPayload(),
 	})
 }
 
@@ -364,6 +370,14 @@ func (p *Panel) massKillPayload() any {
 		return nil
 	}
 	return p.cfg.Alert.Payload()
+}
+
+// externalRotationsPayload 外部 RT 轮换横幅载荷（M6，未注入/无事件为 null）。
+func (p *Panel) externalRotationsPayload() any {
+	if p.cfg.Alert == nil {
+		return nil
+	}
+	return p.cfg.Alert.ExternalPayload()
 }
 
 // creditFloor 生效的积分保底线（0 = 关闭/未配置）。预警横幅据此现算。

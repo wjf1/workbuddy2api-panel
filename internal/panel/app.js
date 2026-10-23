@@ -554,15 +554,30 @@ function renderAlertBox(d) {
 function renderKillBox(d) {
   const box = $('killBox');
   const k = d && d.mass_kill;
-  if (!k) { box.hidden = true; return; }
-  $('killNote').textContent = k.window_minutes + ' 分钟内 ' + k.count + ' 个 · 最近 ' + (k.last_at ? fmtClock(k.last_at) : '—');
-  const names = (k.uids || []).map((u, i) =>
-    '<div style="padding:3px 0;font-size:12.5px">' +
-    '<span class="tag bad">待重登</span> ' + esc((k.nicknames || [])[i] || '未命名') +
-    ' <span class="hint">uid ' + esc(u) + '</span></div>').join('');
-  $('killList').innerHTML = names +
-    '<div class="hint" style="margin-top:6px">一键重登：账号池筛选「待重登 / 封号」→ 行内「重登」→ 完成一次 OAuth 授权即可覆盖凭证并复活。' +
-    '若确认没有第二实例，可关闭配置页外发告警仅保留横幅提醒。</div>';
+  const ext = d && d.external_rotations;
+  if (!k && !ext) { box.hidden = true; return; }
+  let html = '';
+  let notes = [];
+  if (k) {
+    notes.push(k.window_minutes + ' 分钟内 ' + k.count + ' 个');
+    html += (k.uids || []).map((u, i) =>
+      '<div style="padding:3px 0;font-size:12.5px">' +
+      '<span class="tag bad">待重登</span> ' + esc((k.nicknames || [])[i] || '未命名') +
+      ' <span class="hint">uid ' + esc(u) + '</span></div>').join('');
+    html += '<div class="hint" style="margin-top:6px">一键重登：账号池筛选「待重登 / 封号」→ 行内「重登」→ 完成一次 OAuth 授权即可覆盖凭证并复活。</div>';
+  }
+  if (ext) {
+    // 外部 RT 轮换（M6）：本进程之外有执行体在消费该账号的 RT——正是 RT 链
+    // 连坐吊销的成因。任意数量即显示，不凑阈值。
+    notes.push('外部轮换 ' + ext.count + ' 个');
+    html += '<div style="margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)">' +
+      (ext.uids || []).map(u =>
+        '<div style="padding:3px 0;font-size:12.5px">' +
+        '<span class="tag warn">凭证双活</span> <span class="hint">uid ' + esc(u) + ' · 最近 ' + (ext.last_at ? fmtClock(ext.last_at) : '—') + '</span></div>').join('') +
+      '<div class="hint" style="margin-top:4px">检测到本进程之外的执行体在刷新这些账号的 token（另一台机器的部署副本 / signin.sh 等独立进程）。双花同一 RT 会触发上游 rotation 检测、连坐吊销整条令牌链——请立即下线多余实例或按账号拆分 auths。</div></div>';
+  }
+  $('killNote').textContent = notes.join(' · ') + (notes.length && (k && k.last_at) ? ' · 最近 ' + fmtClock(k.last_at) : '');
+  $('killList').innerHTML = html;
   box.hidden = false;
 }
 

@@ -61,7 +61,7 @@ func main() {
 
 		// refresh 过期 token
 		if a.NeedsRefresh(2 * time.Hour) {
-			if err := up.RefreshTokenIfNeeded(a, 2*time.Hour); err != nil {
+			if err := up.RefreshTokenIfNeeded(a, 2*time.Hour, "signin"); err != nil {
 				if ue, ok := err.(*upstream.Error); ok && ue.Kind == upstream.ErrSessionDead {
 					r.status = "AUTH_INVALID"
 				} else {
