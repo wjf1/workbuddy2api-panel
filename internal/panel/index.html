@@ -717,6 +717,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnTravelAll" title="立即推进猫猫旅行：没领猫的自动同意协议并领养、在家的派出旅行、已到达的领取奖励。等同提前跑一次每日定时旅行（默认 9 / 21 点）。">旅行巡检</button>
           <button class="xs" id="btnActivityAll" title="立即为全部账号上报一次对话活跃：点亮连登天数并解锁领养（first_buddy）前置条件，每号每天 1 次。等同提前跑一次每日定时活跃上报（默认 10 点）。">活跃上报</button>
           <button class="xs" id="btnKeepaliveAll" title="立即刷新全部账号的登录凭证 token，保持账号持续有效；session 连续 3 次失效才会自动禁用（防误杀）。等同提前跑一次每日定时保活（默认 22 点）。">全部保活</button>
+          <button class="xs" id="btnProbeDead" hidden title="对「待重登」（会话失效）类禁用账号做一轮 token 刷新探测：若上游侧的吊销已解除（误吊销/临时故障恢复），账号会自动复活。失败静默。默认关闭定时探测，此为手动触发。">探测死号</button>
         </header>
         <div class="tbl-wrap">
         <table class="acc">
@@ -982,6 +983,27 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
                 <input type="checkbox" name="balance_refresh_enabled"></div>
               <label class="fld"><span class="lb">刷新间隔（分钟）</span>
                 <input name="balance_refresh_minutes" type="number" min="1" placeholder="5"></label>
+            </div>
+            <div class="hr"></div>
+            <div class="grid2">
+              <div>
+                <label class="fld"><span class="lb">任务时点抖动（分钟）</span>
+                  <input name="jitter_minutes" type="number" min="0" placeholder="20">
+                  <span class="hint">定时签到/保活等任务每号分散到 [0, N) 分钟内执行（按 uid+日期稳定散列），消除整点齐射风控特征；0 = 关闭。手动按钮不受影响</span></label>
+                <label class="fld"><span class="lb">死号探活时点（小时，逗号分隔，留空关闭）</span>
+                  <input name="probe_dead_hours" placeholder="如 8">
+                  <span class="hint">对「待重登」类禁用号做 token 刷新探测，上游误吊销解除即自动复活并 webhook 通知；需余额刷新循环开启。探测请求本身有上游可见特征，请自行权衡</span></label>
+              </div>
+              <div>
+                <label class="fld"><span class="lb">保活模式</span>
+                  <select name="keepalive_mode">
+                    <option value="daily">daily：每日全量强刷（默认）</option>
+                    <option value="smart">smart：仅刷临期账号（推荐）</option>
+                  </select>
+                  <span class="hint">smart 模式只刷 token 距过期 &lt; 阈值天数的账号（RT 恒 60 天滚动，每日全量强刷约 97% 是冗余上游调用且构成齐射特征）；手动「全部保活」始终全量</span></label>
+                <label class="fld"><span class="lb">smart 阈值（天）</span>
+                  <input name="smart_keepalive_days" type="number" min="1" placeholder="14"></label>
+              </div>
             </div>
             <div class="hr"></div>
             <div class="grid2">

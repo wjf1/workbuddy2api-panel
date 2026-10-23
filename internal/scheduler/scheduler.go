@@ -62,6 +62,8 @@ type Config struct {
 	// 待办并执行，与面板「执行全部待办」按钮同管线）。调度器只管时点不管实现——
 	// panel 在 scheduler 之后构造，用 SetGrowthHook 事后挂载；nil 时到点跳过。
 	GrowthHook func()
+	// RecoveredHook 死号复活回调（M8 探活命中；main 注入 → alert webhook）。
+	RecoveredHook func(uid, nickname string)
 }
 
 // Scheduler 调度器。
@@ -88,6 +90,32 @@ type Scheduler struct {
 	// 见 balance_401.go。降级 token 每轮探测都会 401，不去重会一天轮换 288 次 RT。
 	authHealMu sync.Mutex
 	authHealAt map[string]time.Time
+
+	// M5/M7/M8 运行时可变参数（schedMu 快照；独立 setter 与 SetIncludeDisabledInTasks
+	// 同哲学——Reconfigure 已有 12 个位置参数不再追加）：
+	//   jitterMinutes 定时任务抖动窗口（分钟，0 = 关闭齐射）；
+	//   kaSmart 智能保活（只刷 14d 内到期的号）；
+	//   smartDays 智能保活阈值（天）；
+	//   probeHours 死号探活时点（空 = 关闭，M8）。
+	jitterMinutes int
+	kaSmart       bool
+	smartDays     int
+	probeHours    []int
+
+	// kaMu/kaBackoff 智能保活的失败退避表（uid → 下次重试时刻），M7。
+	// 12153 判死不进表（死号重试无意义，走 NoteSessionDead 连续计数）。
+	kaMu      sync.Mutex
+	kaBackoff map[string]kaBack
+
+	// probeLastRun 死号探活去重（M8）：上次执行的小时键（CST 日|小时）。
+	// mu 保护（与 adoptTried 同锁）。
+	probeLastRun string
+}
+
+// kaBack 保活失败退避项。
+type kaBack struct {
+	nextAt time.Time
+	tries  int
 }
 
 // New 构建。
@@ -112,6 +140,7 @@ func New(cfg Config) *Scheduler {
 		adoptTried:    make(map[string]string),
 		rearmSchedule: make(chan struct{}, 1),
 		rearmBalance:  make(chan struct{}, 1),
+		kaBackoff:     make(map[string]kaBack),
 	}
 }
 
@@ -162,6 +191,54 @@ func (s *Scheduler) SetIncludeDisabledInTasks(v bool) {
 	s.schedMu.Lock()
 	s.cfg.IncludeDisabledInTasks = v
 	s.schedMu.Unlock()
+}
+
+// SetJitterMinutes 热更新定时任务抖动窗口（M5；0 = 关闭回到齐射）。
+func (s *Scheduler) SetJitterMinutes(v int) {
+	if v < 0 {
+		v = 0
+	}
+	s.schedMu.Lock()
+	s.jitterMinutes = v
+	s.schedMu.Unlock()
+}
+
+// SetKeepaliveSmart 热更新智能保活开关与阈值（M7）。smart=true 时定时保活只刷
+// ExpiresAt 距今 < days*24h 的账号（RT 恒 60 天滚动，每日全量强刷是 97% 冗余
+// 上游调用 + 齐射特征）；手动 RunKeepaliveNow 不受影响（运维兜底全量强制）。
+func (s *Scheduler) SetKeepaliveSmart(smart bool, days int) {
+	if days <= 0 {
+		days = 14
+	}
+	s.schedMu.Lock()
+	s.kaSmart = smart
+	s.smartDays = days
+	s.schedMu.Unlock()
+}
+
+// SetProbeDeadHours 热更新死号探活时点（M8；空 = 关闭）。
+func (s *Scheduler) SetProbeDeadHours(hours []int) {
+	s.schedMu.Lock()
+	s.probeHours = hours
+	s.schedMu.Unlock()
+}
+
+// probeDeadHours 快照读取探活时点。
+func (s *Scheduler) probeDeadHours() []int {
+	s.schedMu.Lock()
+	defer s.schedMu.Unlock()
+	return s.probeHours
+}
+
+// kaSnapshot 快照：保活模式 + 阈值时长。
+func (s *Scheduler) kaSnapshot() (bool, time.Duration) {
+	s.schedMu.Lock()
+	defer s.schedMu.Unlock()
+	days := s.smartDays
+	if days <= 0 {
+		days = 14
+	}
+	return s.kaSmart, time.Duration(days) * 24 * time.Hour
 }
 
 func (s *Scheduler) Reconfigure(checkinHours, travelHours, activityHours, keepaliveHours, blackcatHours, growthHours []int,
@@ -412,15 +489,15 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 			defer wg.Done()
 			switch k {
 			case taskCheckin:
-				s.RunCheckinNow()
+				s.runCheckinScheduled(ctx)
 			case taskTravel:
-				s.RunTravelNow()
+				s.runTravelScheduled(ctx)
 			case taskActivity:
 				s.runActivity(ctx)
 			case taskKeepalive:
-				s.RunKeepaliveNow()
+				s.runKeepaliveScheduled(ctx)
 			case taskBlackcat:
-				s.RunBlackcatNow()
+				s.runBlackcatScheduled(ctx)
 			case taskGrowth:
 				// 成长任务队列：回调在 panel 侧异步启动（返回不等执行完），nil 未挂载则跳过。
 				s.schedMu.Lock()
@@ -459,44 +536,63 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // 连登兑换按天数解锁，挂在每日签到后即「到天数那天自动完成兑换→抽奖闭环」。
 func (s *Scheduler) RunCheckinNow() {
 	expiringSoon := s.ExpiringSoonWindow()
-	includeDisabled := s.includeDisabledInTasks()
 	for _, st := range s.cfg.Pool.List() {
-		if st.Disabled && !includeDisabled {
-			continue
-		}
-		a := s.cfg.Pool.AuthByUID(st.UID)
-		if a == nil || a.RefreshTokenValue() == "" {
-			continue
-		}
-		// D4 门控：realm=global 账号无签到体系，直接跳过（不发起任何上游调用，避免风控）。
-		// 经 auth.Realm() 统一判定：逃生门（global.enabled=false）下 global 账号被降级为 cn、
-		// 按 CN 处理——这是逃生门的刻意语义（纯 CN 部署锁死一切 global），与引用处一致。
-		if a.IsGlobal() {
-			continue
-		}
-		if err := s.cfg.Upstream.DailyCheckin(a); err != nil {
-			// "今天已签到"是幂等成功（上游对重复签到返回 code!=0），不再当失败打 error 行。
-			if upstream.IsAlreadyCheckin(err) {
-				s.cfg.Pool.NoteCheckinDone(st.UID)
-				log.Printf("checkin %s: 今天已签到（幂等）", logfmt.Label(st.UID, st.Nickname))
-			} else {
-				log.Printf("checkin %s: %v", logfmt.Label(st.UID, st.Nickname), err)
-			}
-			// 其余业务错误也继续走余额查询
-		} else {
-			// 首次签到成功此前静默——排查「签到到底跑没跑」时无迹可循（幂等行只在
-			// 重复触发时出现），成功也落一行。
+		s.checkinOne(st, expiringSoon)
+	}
+	s.RunStreakBonusNow()
+}
+
+// checkinOne 单账号签到 + 分桶余额（从 RunCheckinNow 抽出：手动立即与定时抖动共用）。
+// disabled 过滤与 global 门控在此处（调用方无需重复判定）。
+func (s *Scheduler) checkinOne(st pool.Status, expiringSoon time.Duration) {
+	if st.Disabled && !s.includeDisabledInTasks() {
+		return
+	}
+	a := s.cfg.Pool.AuthByUID(st.UID)
+	if a == nil || a.RefreshTokenValue() == "" {
+		return
+	}
+	// D4 门控：realm=global 账号无签到体系，直接跳过（不发起任何上游调用，避免风控）。
+	// 经 auth.Realm() 统一判定：逃生门（global.enabled=false）下 global 账号被降级为 cn、
+	// 按 CN 处理——这是逃生门的刻意语义（纯 CN 部署锁死一切 global），与引用处一致。
+	if a.IsGlobal() {
+		return
+	}
+	if err := s.cfg.Upstream.DailyCheckin(a); err != nil {
+		// "今天已签到"是幂等成功（上游对重复签到返回 code!=0），不再当失败打 error 行。
+		if upstream.IsAlreadyCheckin(err) {
 			s.cfg.Pool.NoteCheckinDone(st.UID)
-			log.Printf("checkin %s: 签到成功", logfmt.Label(st.UID, st.Nickname))
+			log.Printf("checkin %s: 今天已签到（幂等）", logfmt.Label(st.UID, st.Nickname))
+		} else {
+			log.Printf("checkin %s: %v", logfmt.Label(st.UID, st.Nickname), err)
 		}
-		// 分桶查余额：配置窗口内的积分单独标记，同时记录最早未来到期批次。
-		remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
-		if err != nil {
-			log.Printf("user-resource %s: %v", logfmt.Label(st.UID, st.Nickname), err)
-			continue
+		// 其余业务错误也继续走余额查询
+	} else {
+		// 首次签到成功此前静默——排查「签到到底跑没跑」时无迹可循（幂等行只在
+		// 重复触发时出现），成功也落一行。
+		s.cfg.Pool.NoteCheckinDone(st.UID)
+		log.Printf("checkin %s: 签到成功", logfmt.Label(st.UID, st.Nickname))
+	}
+	// 分桶查余额：配置窗口内的积分单独标记，同时记录最早未来到期批次。
+	remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
+	if err != nil {
+		log.Printf("user-resource %s: %v", logfmt.Label(st.UID, st.Nickname), err)
+		return
+	}
+	s.cfg.Pool.ReenableIfCredits(st.UID, remain, total)
+	s.cfg.Pool.SetCreditsDetailed(st.UID, remain, total, expiring, earliestAt, earliestRemaining)
+}
+
+// runCheckinScheduled 定时签到（M5 抖动版）：每号在自己的偏移点执行，消除齐射。
+// streak 管家仍在全部账号完成后收尾一次。
+func (s *Scheduler) runCheckinScheduled(ctx context.Context) {
+	expiringSoon := s.ExpiringSoonWindow()
+	start := time.Now()
+	for _, st := range s.cfg.Pool.List() {
+		if !s.sleepJitter(ctx, st.UID, st.Nickname, start) {
+			return // 优雅停机
 		}
-		s.cfg.Pool.ReenableIfCredits(st.UID, remain, total)
-		s.cfg.Pool.SetCreditsDetailed(st.UID, remain, total, expiring, earliestAt, earliestRemaining)
+		s.checkinOne(st, expiringSoon)
 	}
 	s.RunStreakBonusNow()
 }
@@ -515,8 +611,10 @@ func (s *Scheduler) RunActivityNow() {
 }
 
 // runActivity 活跃上报遍历，随 ctx 取消立即退出。
+// M5：每号先等到自己的抖动偏移点（jitter 关闭时维持原 first/限速行为）。
 func (s *Scheduler) runActivity(ctx context.Context) {
 	first := true
+	start := time.Now()
 	includeDisabled := s.includeDisabledInTasks()
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled && !includeDisabled {
@@ -526,17 +624,19 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 		if a == nil || a.AccessTokenValue() == "" {
 			continue
 		}
+		wait := s.jitterWaitFor(st.UID, start)
+		if !first && wait < activityAccountDelay {
+			wait = activityAccountDelay
+		}
+		if wait > 0 && !sleepCtx(ctx, wait) {
+			return // 优雅停机：不等限速睡满，剩余账号下轮再报
+		}
+		first = false
 		// global 账号同样上报（PR #45 实测国际版 /v2/report 在 workbuddy.ai 上 code=0 OK，
 		// 点亮连登）；realmBase 路由/头由 upstream.billingJSON/BillingHeaders 按 realm 切，
 		// 无需改动 upstream。此处曾按「D4 门控：global 无活跃体系」跳过 global，实测该
 		// 判断不成立——国际版 /v2/report 可用，跳过即国际版账号永远点不亮连登（上游
 		// a190252 同口径修复）。checkin/travel 的 global 门控不受影响，仍跳过。
-		if !first {
-			if !sleepCtx(ctx, activityAccountDelay) {
-				return // 优雅停机：不等限速睡满，剩余账号下轮再报
-			}
-		}
-		first = false
 		// 会话 ID 用官方形态（v4 UUID）。旧值是 `wb2api-<毫秒>`——项目缩写直接进上报体
 		// （issue #51）；ReportChatActivity 把它写进 conversationId / parentConversationId。
 		cid := session.NewConversationID()
@@ -586,21 +686,119 @@ func (s *Scheduler) RunKeepaliveNow() {
 		if a == nil || a.RefreshTokenValue() == "" {
 			continue
 		}
-		if err := s.cfg.Upstream.RefreshToken(a, "keepalive"); err != nil {
-			log.Printf("keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)
-			var ue *upstream.Error
-			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && !st.Disabled {
+		s.keepaliveOne(st, a)
+	}
+}
+
+// keepaliveOne 单账号强制刷新 + 12153 连续计数 + M7 失败退避（手动/定时/退避驱动共用）。
+// 12153 禁用走 Pool.NoteSessionDead 的**连续计数**语义：一次刷新失败不再立即杀号，
+// 连续 sessionDeadThreshold 次（3 次）才禁用（P0-1：13 个 disabled 号全是历史误判）。
+// 刷新成功 → ClearSessionDead 清计数 + 清退避；非 session dead 的失败（网络/5xx）
+// 进退避表（30m/2h/6h/24h 封顶），由余额刷新循环驱动重试，避免「一轮失败要等 24h」。
+// session dead 不进退避：死号重试无意义，走连续计数。
+func (s *Scheduler) keepaliveOne(st pool.Status, a *auth.Auth) {
+	if err := s.cfg.Upstream.RefreshToken(a, "keepalive"); err != nil {
+		log.Printf("keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)
+		var ue *upstream.Error
+		if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
+			s.clearKaBackoff(st.UID)
+			if !st.Disabled {
 				if s.cfg.Pool.NoteSessionDead(st.UID) {
 					log.Printf("keepalive %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(st.UID, st.Nickname), pool.SessionDeadThreshold())
 				}
 			}
+			return
+		}
+		s.pushKaBackoff(st.UID)
+		return
+	}
+	s.cfg.Pool.ClearSessionDead(st.UID) // 刷新成功清误判计数，失败不该累计
+	s.clearKaBackoff(st.UID)
+	if err := a.SaveAtomicRetry(); err != nil {
+		log.Printf("keepalive %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
+	}
+}
+
+// runKeepaliveScheduled 定时保活（M5 抖动 + M7 smart 过滤）：
+// smart 模式只刷 ExpiresAt 距今 < 阈值的账号，其余跳过并汇总一行日志。
+func (s *Scheduler) runKeepaliveScheduled(ctx context.Context) {
+	smart, within := s.kaSnapshot()
+	start := time.Now()
+	skipped, done := 0, 0
+	for _, st := range s.cfg.Pool.List() {
+		if st.Disabled && !s.includeDisabledInTasks() {
 			continue
 		}
-		s.cfg.Pool.ClearSessionDead(st.UID) // 刷新成功清误判计数，失败不该累计
-		if err := a.SaveAtomicRetry(); err != nil {
-			log.Printf("keepalive %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
+		a := s.cfg.Pool.AuthByUID(st.UID)
+		if a == nil || a.RefreshTokenValue() == "" {
+			continue
+		}
+		if smart && !a.NeedsRefresh(within) {
+			skipped++
+			continue
+		}
+		if !s.sleepJitter(ctx, st.UID, st.Nickname, start) {
+			return
+		}
+		s.keepaliveOne(st, a)
+		done++
+	}
+	if smart {
+		log.Printf("keepalive: smart 模式 %d 刷新 / %d 跳过（RT 距过期超阈值）", done, skipped)
+	}
+}
+
+// pushKaBackoff 保活失败进退避：30m → 2h → 6h → 24h 封顶。
+func (s *Scheduler) pushKaBackoff(uid string) {
+	s.kaMu.Lock()
+	defer s.kaMu.Unlock()
+	if s.kaBackoff == nil {
+		s.kaBackoff = make(map[string]kaBack)
+	}
+	b := s.kaBackoff[uid]
+	b.tries++
+	d := []time.Duration{30 * time.Minute, 2 * time.Hour, 6 * time.Hour, 24 * time.Hour}[min(b.tries-1, 3)]
+	b.nextAt = time.Now().Add(d)
+	s.kaBackoff[uid] = b
+}
+
+// clearKaBackoff 刷新成功清退避。
+func (s *Scheduler) clearKaBackoff(uid string) {
+	s.kaMu.Lock()
+	defer s.kaMu.Unlock()
+	delete(s.kaBackoff, uid)
+}
+
+// driveKeepaliveBackoff 退避到期项重试（StartBalanceRefresh 每轮驱动）。
+// 到期项直接执行——本就零散，无需再抖动。返回重试数。
+func (s *Scheduler) driveKeepaliveBackoff() int {
+	now := time.Now()
+	s.kaMu.Lock()
+	var due []string
+	for uid, b := range s.kaBackoff {
+		if now.After(b.nextAt) {
+			due = append(due, uid)
 		}
 	}
+	s.kaMu.Unlock()
+	for _, uid := range due {
+		st, ok := s.cfg.Pool.Status(uid)
+		a := s.cfg.Pool.AuthByUID(uid)
+		if !ok || a == nil {
+			s.clearKaBackoff(uid)
+			continue
+		}
+		log.Printf("keepalive %s: 退避重试（第 %d 次）", logfmt.Label(uid, st.Nickname), s.kaBackTries(uid))
+		s.keepaliveOne(st, a)
+	}
+	return len(due)
+}
+
+// kaBackTries 读取当前退避次数（日志用）。
+func (s *Scheduler) kaBackTries(uid string) int {
+	s.kaMu.Lock()
+	defer s.kaMu.Unlock()
+	return s.kaBackoff[uid].tries
 }
 
 // RunBalanceRefreshNow 并发查询余额并更新池内 credits。
@@ -673,6 +871,8 @@ func (s *Scheduler) StartBalanceRefresh(ctx context.Context, interval time.Durat
 				timer.Stop() // 间隔已变：立刻按新值重算
 			case <-timer.C:
 				s.RunBalanceRefreshNow()
+				s.driveKeepaliveBackoff() // M7：保活失败退避到期重试
+				s.driveProbeDead()        // M8：到点探测 session dead 死号
 			}
 		}
 	}()

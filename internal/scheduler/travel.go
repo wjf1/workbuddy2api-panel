@@ -3,6 +3,7 @@
 package scheduler
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -60,6 +61,32 @@ func (s *Scheduler) RunTravelNow() {
 			time.Sleep(travelAccountDelay)
 		}
 		first = false
+		s.travelOne(a)
+	}
+}
+
+// runTravelScheduled 定时旅行（M5 抖动版）：每号在自己的偏移点执行；账号间限速
+// 保留为下限（抖动偏移通常远大于 travelAccountDelay，二者取大）。
+func (s *Scheduler) runTravelScheduled(ctx context.Context) {
+	start := time.Now()
+	for _, st := range s.cfg.Pool.List() {
+		if st.Disabled {
+			continue
+		}
+		a := s.cfg.Pool.AuthByUID(st.UID)
+		if a == nil || a.RefreshTokenValue() == "" {
+			continue
+		}
+		if a.IsGlobal() {
+			continue // D4 门控：global 无 CN 任务体系，不发起任何上游调用
+		}
+		wait := s.jitterWaitFor(st.UID, start)
+		if wait < travelAccountDelay {
+			wait = travelAccountDelay
+		}
+		if !sleepCtx(ctx, wait) {
+			return
+		}
 		s.travelOne(a)
 	}
 }

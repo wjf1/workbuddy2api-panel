@@ -268,6 +268,24 @@ func (m *Manager) ExternalPayload() any {
 	return out
 }
 
+// NoteRecovered 死号复活事件（M8 探活命中）：频率天然低（每号每日至多一轮），
+// 直接外发不走冷却。
+func (m *Manager) NoteRecovered(uid, nickname string) {
+	m.sendWebhook2("dead_recovered", m.cfgSnapshotURL(), map[string]any{
+		"event":    "dead_recovered",
+		"host":     m.host,
+		"version":  m.version,
+		"accounts": []map[string]string{{"uid": uid, "nickname": nickname, "at": time.Now().Format(time.RFC3339)}},
+	})
+}
+
+// cfgSnapshotURL 快照读取 webhook URL。
+func (m *Manager) cfgSnapshotURL() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg.WebhookURL
+}
+
 // maybeNotify 窗口内 distinct uid 达阈值且距上次外发 ≥ cooldown → 外发 webhook。
 // 外发在调用方 goroutine 同步执行（pool hook 已是独立 goroutine，5s 超时兜底）。
 func (m *Manager) maybeNotify() {

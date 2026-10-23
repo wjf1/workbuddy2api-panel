@@ -103,6 +103,23 @@ type Config struct {
 		// **依旧不参与选号**：pool 选号侧的 disabled 过滤不受本开关影响。
 		IncludeDisabledInTasks bool `json:"include_disabled_in_tasks"`
 
+		// JitterMinutes 定时保号任务的时点抖动窗口（M5，分钟）：每号在
+		// [0, J) 内按 hash(uid|日期) 分散执行，消除「整点齐射」风控特征。
+		// 0 = 关闭（回到齐射）。默认 20。热生效。
+		JitterMinutes int `json:"jitter_minutes"`
+
+		// KeepaliveMode 保活模式（M7）："daily"（默认，每日全量强刷，现状语义）|
+		// "smart"（只刷 ExpiresAt 距今 < smart_keepalive_days 的号；RT 恒 60 天
+		// 滚动，每日全量强刷 ≈97% 是冗余上游调用）。手动「全部保活」不受影响。
+		KeepaliveMode string `json:"keepalive_mode"`
+		// SmartKeepaliveDays smart 模式阈值（天），默认 14。
+		SmartKeepaliveDays int `json:"smart_keepalive_days"`
+
+		// ProbeDeadHours 死号探活时点（M8，CST 小时；空 = 默认关闭）。对 session
+		// dead 禁用号 refresh 探测，上游误吊销解除即自动复活 + webhook。开启后
+		// 依赖余额刷新循环驱动（balance_refresh_enabled=true）。
+		ProbeDeadHours []int `json:"probe_dead_hours"`
+
 		// 余额后台周期刷新：两次签到时点之间 credits 也能保持新鲜（面板/状态观测用）。
 		// 解冻语义同签到（余额 > 0 的冷却账号自动解冻），但不做签到不刷 token。
 		BalanceRefreshEnabled bool `json:"balance_refresh_enabled"` // 缺省 true；false = 关闭
@@ -348,6 +365,11 @@ func Default() *Config {
 	c.Schedule.BlackcatEnabled = true
 	c.Schedule.BalanceRefreshEnabled = true
 	c.Schedule.BalanceRefreshMinutes = 5
+	// M5 抖动默认 20 分钟（0 = 关闭齐射）；M7 保活默认 daily（兼容，README 推荐 smart）；
+	// M8 探活默认关闭（probe_dead_hours 空——探死请求本身是上游可观测特征）。
+	c.Schedule.JitterMinutes = 20
+	c.Schedule.KeepaliveMode = "daily"
+	c.Schedule.SmartKeepaliveDays = 14
 	c.Upstream.TimeoutSeconds = 120
 	// HeaderTimeoutSeconds/IdleTimeoutSeconds 默认 0（未设置态），回落见 normalize()。
 	c.Upstream.HeaderTimeoutSeconds = 0
@@ -698,6 +720,16 @@ func (c *Config) normalize() error {
 	if len(c.Schedule.GrowthHours) == 0 {
 		c.Schedule.GrowthHours = []int{1}
 	}
+	// M7 keepalive_mode 非法值回落 daily（用户手写错别字不至于静默变成 smart/daily 之外的第三态）。
+	if c.Schedule.KeepaliveMode != "daily" && c.Schedule.KeepaliveMode != "smart" {
+		c.Schedule.KeepaliveMode = "daily"
+	}
+	if c.Schedule.SmartKeepaliveDays <= 0 {
+		c.Schedule.SmartKeepaliveDays = 14
+	}
+	if c.Schedule.JitterMinutes < 0 {
+		c.Schedule.JitterMinutes = 0
+	}
 	// 余额后台刷新：启用时 minutes<=0 回落默认 5；关闭时 interval 保持 0（不启动）。
 	if c.Schedule.BalanceRefreshEnabled {
 		if c.Schedule.BalanceRefreshMinutes <= 0 {
@@ -744,6 +776,9 @@ func (c *Config) normalizePrompt() error {
 // 实际可能被当成另一个整点照常执行；这里直接快速失败，并在错误信息里指向正确的开关
 // （checkin_enabled / keepalive_enabled），避免用户靠猜哨兵值来配。
 func (c *Config) validateScheduleHours() error {
+	if err := checkHourRange("schedule.probe_dead_hours", "schedule.probe_dead_hours", c.Schedule.ProbeDeadHours); err != nil {
+		return err
+	}
 	if err := checkHourRange("schedule.checkin_hours", "checkin_enabled", c.Schedule.CheckinHours); err != nil {
 		return err
 	}

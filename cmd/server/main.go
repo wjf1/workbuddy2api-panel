@@ -303,6 +303,15 @@ func main() {
 		seed[a.UID] = a.RefreshTokenValue()
 	}
 	rotRec.Seed(seed)
+
+	// M5/M7/M8：抖动窗口、智能保活、死号探活（全部热可改）。
+	sch.SetJitterMinutes(cfg.Schedule.JitterMinutes)
+	sch.SetKeepaliveSmart(cfg.Schedule.KeepaliveMode == "smart", cfg.Schedule.SmartKeepaliveDays)
+	sch.SetProbeDeadHours(cfg.Schedule.ProbeDeadHours)
+	sch.SetRecoveredHook(alertMgr.NoteRecovered)
+	log.Printf("[scheduler] 抖动 %d 分钟窗口；保活模式 %s（阈值 %d 天）；死号探活 %v",
+		cfg.Schedule.JitterMinutes, cfg.Schedule.KeepaliveMode, cfg.Schedule.SmartKeepaliveDays,
+		map[bool]string{true: "已启用", false: "关闭"}[len(cfg.Schedule.ProbeDeadHours) > 0])
 	log.Printf("[rotaudit] RT 轮换审计已启用：%s（外部轮换检测：本进程之外的任何 RT 消费都会告警）",
 		stateSibling(cfg.StateFile, "refresh-audit"))
 
@@ -616,6 +625,10 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		MassKillWindowMin: newCfg.Notify.MassKillWindowMin,
 		CooldownMin:       newCfg.Notify.CooldownMin,
 	})
+	// M5/M7/M8 配置热生效。
+	sch.SetJitterMinutes(newCfg.Schedule.JitterMinutes)
+	sch.SetKeepaliveSmart(newCfg.Schedule.KeepaliveMode == "smart", newCfg.Schedule.SmartKeepaliveDays)
+	sch.SetProbeDeadHours(newCfg.Schedule.ProbeDeadHours)
 
 	return restartRequiredFields(newCfg), nil
 }

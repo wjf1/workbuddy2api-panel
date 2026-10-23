@@ -835,6 +835,17 @@ func (p *Panel) activityAll(w http.ResponseWriter, r *http.Request) {
 }
 
 // keepaliveAll 手动触发全量 token 保活（异步执行）。
+// probeDeadAll 手动触发死号探活（M8）：对 session dead 禁用号 refresh 探测一轮，
+// 上游误吊销解除即自动复活。Scheduler 未注入（测试装配）返回 501。
+func (p *Panel) probeDeadAll(w http.ResponseWriter, r *http.Request) {
+	if p.cfg.Scheduler == nil {
+		writeErr(w, http.StatusNotImplemented, "scheduler 未注入")
+		return
+	}
+	go p.cfg.Scheduler.RunProbeDeadNow()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "死号探活已开始（对会话失效类禁用号逐个探测，结果见日志）"})
+}
+
 func (p *Panel) keepaliveAll(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")

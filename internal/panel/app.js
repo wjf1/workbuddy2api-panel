@@ -486,6 +486,9 @@ async function loadOverview(quiet) {
     renderQueueBox(d);
     renderAlertBox(d);
     renderKillBox(d);
+    // M8：仅存在「待重登」类死号时显示「探测死号」按钮。
+    const hasDead = (d.accounts || []).some(x => x.dead_kind === 'session_dead');
+    $('btnProbeDead').hidden = !hasDead;
     const raw = d.accounts || [];
     const shown = accApply(raw);
     renderAccounts(shown, shown.length !== raw.length);
@@ -655,6 +658,10 @@ $('btnTravelAll').onclick = async () => {
 };
 $('btnActivityAll').onclick = async () => {
   try { await api('activity_all', { method: 'POST' }); toast('活跃上报已开始，结果见日志', 'ok'); }
+  catch (e) { toast(e.message, 'err'); }
+};
+$('btnProbeDead').onclick = async () => {
+  try { await api('probe_dead_all', { method: 'POST' }); toast('死号探活已开始，结果见日志', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 };
 
@@ -1059,6 +1066,10 @@ const CFG_MAP = {
   keepalive_hours: ['schedule', 'keepalive_hours'], keepalive_enabled: ['schedule', 'keepalive_enabled'],
   balance_refresh_enabled: ['schedule', 'balance_refresh_enabled'], balance_refresh_minutes: ['schedule', 'balance_refresh_minutes'],
   include_disabled_in_tasks: ['schedule', 'include_disabled_in_tasks'],
+  jitter_minutes: ['schedule', 'jitter_minutes'],
+  keepalive_mode: ['schedule', 'keepalive_mode'],
+  smart_keepalive_days: ['schedule', 'smart_keepalive_days'],
+  probe_dead_hours: ['schedule', 'probe_dead_hours'],
   notify_webhook_url: ['notify', 'webhook_url'],
   notify_mass_kill_accounts: ['notify', 'mass_kill_accounts'],
   notify_mass_kill_window_minutes: ['notify', 'mass_kill_window_minutes'],

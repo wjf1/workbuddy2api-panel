@@ -48,7 +48,11 @@
     "blackcat_enabled": true,
     "balance_refresh_enabled": true,
     "balance_refresh_minutes": 5,
-    "include_disabled_in_tasks": false
+    "include_disabled_in_tasks": false,
+    "jitter_minutes": 20,
+    "keepalive_mode": "daily",
+    "smart_keepalive_days": 14,
+    "probe_dead_hours": []
   },
   "trash": {
     "retention_days": 30
