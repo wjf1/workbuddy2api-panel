@@ -547,6 +547,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		SoftStreak:               e.softStreak,
 		ModelCosts:               p.modelCostsStatusLocked(e, now),
 		ConsecutiveFails:         e.consecutiveFails,
+		SessionDeadFails:         e.sessionDeadFails,
 		DegradeUntil:             e.degradeUntil,
 		InFlight:                 int(e.inFlight.Load()),
 		BreakerFails:             e.fails,

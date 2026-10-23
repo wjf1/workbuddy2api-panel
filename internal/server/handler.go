@@ -934,7 +934,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		// token 临近过期 → 先 refresh（失败冷却换号）
 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
-			if err := h.cfg.Upstream.RefreshToken(acct); err != nil {
+			if err := h.cfg.Upstream.RefreshTokenIfNeeded(acct, h.cfg.RefreshSkew); err != nil {
 				lastErr = err
 				var ue *upstream.Error
 				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
@@ -948,7 +948,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			if err := acct.SaveAtomic(); err != nil {
+			if err := acct.SaveAtomicRetry(); err != nil {
 				// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
 				log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
 			}
@@ -1591,6 +1591,30 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		}
 		h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "waf 403 block")
 	case upstream.ErrSessionDead:
+		// 裸 401（APISIX/openresty HTML 页，无业务信封）不是权威判据：可能来自
+		// 网关短时故障或认证规则误配，单发永久禁用会在一次流量轮转里打空整池
+		// （修复前该形态落 ErrClient，只换号不罚；判死是补丁一新引入的杀伤面）。
+		// 与余额探针同口径：连续 sessionDeadThreshold 次才禁用——代价是死号收敛
+		// 从「首次命中」慢到「3 次」，但误杀全池不可逆（要人工重登），值得换。
+		// 带业务信封的 12153 是铁证，仍走下面的单发 Disable；refresh 端点回
+		// 12153 亦然（见 chatCompletions 的 refresh 分支）。NoteSuccess 会清零，
+		// 网关抖动攒不满 3 次。
+		// 注意 status==401 这一步是承重的：429+12153 会被 Classify 的
+		// sessionDeadMarkers 先判成 ErrSessionDead（先于 status==429 层），
+		// IsGatewayUnauthorized 必须靠状态码把它挡回去，否则 429+12153 会被
+		// 降级成「计数 3 次」，终态判据被削弱。
+		if uerr != nil && upstream.IsGatewayUnauthorized(uerr.Status, body) {
+			if h.cfg.Pool.NoteSessionDead(uid) {
+				nick := ""
+				if st, ok := h.cfg.Pool.Status(uid); ok {
+					nick = st.Nickname
+				}
+				log.Printf("[server] acct=%s 连续 %d 次裸 401 — 禁用", logfmt.Label(uid, nick), pool.SessionDeadThreshold())
+			} else if st, ok := h.cfg.Pool.Status(uid); ok {
+				log.Printf("[server] acct=%s 裸 401（session dead 计数 %d/%d）", logfmt.Label(uid, st.Nickname), st.SessionDeadFails, pool.SessionDeadThreshold())
+			}
+			return
+		}
 		h.cfg.Pool.Disable(uid, "12153 session dead")
 	case upstream.ErrNotFound:
 		// 404 短冷却（软冷却），防雪崩。固定 notFoundCooldown，不随 soft_rate 退避：

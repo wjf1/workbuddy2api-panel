@@ -83,6 +83,11 @@ type Scheduler struct {
 	// balanceInterval 余额刷新间隔（纳秒，0=暂停）。atomic 读写：执行循环每轮读当前值，
 	// SetBalanceInterval 可任意时刻热改（面板保存配置）。
 	balanceInterval atomic.Int64
+
+	// authHealMu/authHealAt 余额 401 → refresh 求证的退避表（uid → 上次求证时刻），
+	// 见 balance_401.go。降级 token 每轮探测都会 401，不去重会一天轮换 288 次 RT。
+	authHealMu sync.Mutex
+	authHealAt map[string]time.Time
 }
 
 // New 构建。
@@ -592,7 +597,7 @@ func (s *Scheduler) RunKeepaliveNow() {
 			continue
 		}
 		s.cfg.Pool.ClearSessionDead(st.UID) // 刷新成功清误判计数，失败不该累计
-		if err := a.SaveAtomic(); err != nil {
+		if err := a.SaveAtomicRetry(); err != nil {
 			log.Printf("keepalive %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
 		}
 	}
@@ -623,6 +628,7 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 			remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
 			if err != nil {
 				log.Printf("balance %s: %v", logfmt.Label(uid, a.Nickname), err)
+				s.noteBalanceAuthFailure(a, uid, err)
 				return
 			}
 			s.cfg.Pool.ReenableIfCredits(uid, remain, total)

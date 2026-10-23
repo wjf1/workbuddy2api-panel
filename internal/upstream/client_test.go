@@ -114,6 +114,16 @@ func TestClassify(t *testing.T) {
 		// 非 403 的无信封错误体不进 WAF 分类（WAF 判定绑定 403 形态）。
 		{400, `bad request`, ErrClient},
 		{429, ``, ErrSoftRate},
+		// 网关 401：401 + 无业务信封 = APISIX/openresty 授权拒绝页（token 被上游
+		// 判无效）→ ErrSessionDead。旧行为落 ErrClient（只换号不罚）会让死号永久
+		// 留在池里反复被选中（2026-10-17 现场：一次请求打空一整排 401）。
+		{401, `<html><head><title>401 Authorization Required</title></head><body><center><h1>401 Authorization Required</h1></center><hr><center>openresty</center></body></html>`, ErrSessionDead},
+		{401, ``, ErrSessionDead},
+		{401, `Unauthorized`, ErrSessionDead},
+		// 401 带业务信封的仍走既有分类：12153 由 sessionDeadMarkers 捕获；
+		// 其他业务码不得被网关 401 判定劫持（仍 ErrClient，只换号不罚）。
+		{401, `{"code":12153,"msg":"refresh token is invalid"}`, ErrSessionDead},
+		{401, `{"code":10001,"msg":"x"}`, ErrClient},
 		// 6020/6021 上游免费档排队（queue.waiting / queue.full）：上游服务端队列
 		// 水位，与账号、模型都无关 → ErrUpstreamQueue（不罚号、不轮转）。
 		// 真实响应形态（2026-10-15 本机实测原文）：
@@ -133,6 +143,30 @@ func TestClassify(t *testing.T) {
 	for _, c := range cases {
 		if got := Classify(c.status, c.body); got != c.want {
 			t.Errorf("Classify(%d,%q)=%v want %v", c.status, c.body, got, c.want)
+		}
+	}
+}
+
+// TestIsGatewayUnauthorized 边界：只认 401 + 无业务信封；403 归 WAF 判定，带
+// 信封的 401 归业务分类链（不得劫持）。
+func TestIsGatewayUnauthorized(t *testing.T) {
+	const apisixHTML = `<html><head><title>401 Authorization Required</title></head><body><center><h1>401 Authorization Required</h1></center><hr><center>openresty</center></body></html>`
+	cases := []struct {
+		status int
+		body   string
+		want   bool
+	}{
+		{401, apisixHTML, true},
+		{401, ``, true},
+		{401, `Unauthorized`, true},
+		{401, `{"code":12153,"msg":"Offline user session not found"}`, false},
+		{401, `{"msg":"invalid token"}`, false},
+		{403, apisixHTML, false}, // 403 归 IsWafBlocked，互不越界
+		{500, apisixHTML, false},
+	}
+	for _, c := range cases {
+		if got := IsGatewayUnauthorized(c.status, c.body); got != c.want {
+			t.Errorf("IsGatewayUnauthorized(%d,%q)=%v want %v", c.status, c.body, got, c.want)
 		}
 	}
 }
@@ -297,6 +331,7 @@ func TestIsUpstreamQueue(t *testing.T) {
 }
 
 type rtFunc func(*http.Request) (*http.Response, error)
+
 func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func jsonResp(status int, body string) *http.Response {

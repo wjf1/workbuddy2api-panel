@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -990,12 +991,19 @@ func TestChatAllUnavailableReturns503(t *testing.T) {
 	}
 }
 
+// TestChatSessionDeadDisables 带业务信封的 12153 是权威判据：**单发**即禁用。
+// 与裸 401 的 3 次门槛（TestChatGateway401RequiresThreeStrikes）对照——防止
+// 日后把两条路径误统一成同一口径，弱化 12153 的终态语义。
 func TestChatSessionDeadDisables(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 401, `{"code":12153,"msg":"Offline user session not found"}`, false
 	})
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	h := NewHandler(Config{Pool: p, Upstream: up})
+	var logBuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prevOut)
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -1005,6 +1013,102 @@ func TestChatSessionDeadDisables(t *testing.T) {
 	st, _ := p.Status("u1")
 	if !st.Disabled {
 		t.Errorf("account should be disabled: %+v", st)
+	}
+	// 12153 走单发 Disable，不该出现「裸 401 计数」日志（判据来源不同，日志必须能分开）。
+	if strings.Contains(logBuf.String(), "裸 401（session dead 计数") {
+		t.Errorf("12153 路径不该打裸 401 计数日志：\n%s", logBuf.String())
+	}
+	if st.SessionDeadFails != 0 {
+		t.Errorf("12153 应走单发 Disable，不该动连续计数: %d", st.SessionDeadFails)
+	}
+}
+
+// TestChatGateway401RequiresThreeStrikes 裸 401（APISIX/openresty HTML 页，无业务
+// 信封）单发**不得**永久禁用：网关短时故障或认证规则误配会对整批 token 统一回
+// 裸 401，单发禁用会在一次流量轮转里清空整池（修复前该形态落 ErrClient 只换号
+// 不罚）。与余额探针同口径：连续 sessionDeadThreshold 次才禁用。
+func TestChatGateway401RequiresThreeStrikes(t *testing.T) {
+	const apisixHTML = `<html><head><title>401 Authorization Required</title></head>` +
+		`<body><center><h1>401 Authorization Required</h1></center><hr><center>openresty</center></body></html>`
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 401, apisixHTML, false
+	})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	// 计数进度必须有日志痕迹（面板 session_dead_fails 在涨、日志不能是空的），
+	// 文案与余额链路对齐，运维才查得下去。这里钉住精确文案。
+	var logBuf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prevOut)
+	send := func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	}
+
+	for i := 1; i <= pool.SessionDeadThreshold()-1; i++ {
+		send()
+		st, _ := p.Status("u1")
+		if st.Disabled {
+			t.Fatalf("裸 401 第 %d 次就禁用（want 满 %d 次才禁）: %+v", i, pool.SessionDeadThreshold(), st)
+		}
+		if st.SessionDeadFails != i {
+			t.Fatalf("第 %d 次后 session dead 计数=%d want %d", i, st.SessionDeadFails, i)
+		}
+	}
+	send()
+	st, _ := p.Status("u1")
+	if !st.Disabled {
+		t.Fatalf("连续 %d 次裸 401 应禁用: %+v", pool.SessionDeadThreshold(), st)
+	}
+	if !strings.Contains(st.DisabledReason, "12153 session dead") {
+		t.Fatalf("disabled_reason=%q want 含 12153 session dead", st.DisabledReason)
+	}
+	// 日志闭环：未达阈打进度，达阈打禁用。文案与余额链路同形，改字先同步 QA。
+	logs := logBuf.String()
+	for _, want := range []string{
+		"裸 401（session dead 计数 1/3）",
+		"裸 401（session dead 计数 2/3）",
+		"连续 3 次裸 401 — 禁用",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("日志缺 %q；实际日志：\n%s", want, logs)
+		}
+	}
+}
+
+// TestChatGateway401CounterClearsOnSuccess 裸 401 的连续计数必须被成功清零：
+// 网关抖动打出的零散裸 401 不能跨请求攒到 3 次把健康号打死（NoteSuccess →
+// ClearSessionDead 是这条护栏的落点）。
+func TestChatGateway401CounterClearsOnSuccess(t *testing.T) {
+	const apisixHTML = `<html><head><title>401 Authorization Required</title></head><body>openresty</body></html>`
+	var calls int
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls++
+		if calls == 2 {
+			return 200, sseOK, true // 中间成功一次：代表抖动已过
+		}
+		return 401, apisixHTML, false
+	})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	send := func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	}
+
+	send() // 裸 401 → 计数 1
+	if st, _ := p.Status("u1"); st.SessionDeadFails != 1 {
+		t.Fatalf("第一次裸 401 后计数=%d want 1", st.SessionDeadFails)
+	}
+	send() // 成功 → 计数清零
+	send() // 再裸 401 → 计数应回到 1
+	st, _ := p.Status("u1")
+	if st.Disabled {
+		t.Fatalf("中间成功过就不该禁用: %+v", st)
+	}
+	if st.SessionDeadFails != 1 {
+		t.Fatalf("成功后再裸 401 计数=%d want 1（NoteSuccess 未清零？）", st.SessionDeadFails)
 	}
 }
 

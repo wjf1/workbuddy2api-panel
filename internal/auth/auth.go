@@ -258,7 +258,7 @@ func NormalizeTags(tags []string) []string {
 
 // maxTags / maxTagRunes 单账号标签数量与单标签长度上限（NormalizeTags 口径）。
 const (
-	maxTags    = 16
+	maxTags     = 16
 	maxTagRunes = 32
 )
 
@@ -437,6 +437,25 @@ func (a *Auth) SaveAtomic() error {
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// SaveAtomicRetry 在 SaveAtomic 基础上做有界重试（0/100ms/300ms）。
+//
+// 为什么需要：refresh 成功后上游已经轮换了 RT，新 token 只在内存里；如果这一次
+// 落盘失败（磁盘瞬时满、bind-mount 抖动），进程重启会拿旧 RT 去刷新——旧 RT 可能
+// 已被消费，账号直接进入「需要重新登录」。重试把瞬时失败挡掉；仍失败由调用方
+// 打 ERR（错误汇总可见），至少不让问题静默。
+func (a *Auth) SaveAtomicRetry() error {
+	var err error
+	for i, delay := range []time.Duration{0, 100 * time.Millisecond, 300 * time.Millisecond} {
+		if i > 0 {
+			time.Sleep(delay)
+		}
+		if err = a.SaveAtomic(); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // LoadDir 扫描并解析 dir 下 workbuddy*.json。单个文件读不通时：正文损坏先用

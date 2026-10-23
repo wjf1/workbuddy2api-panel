@@ -108,6 +108,10 @@ type Status struct {
 	// 零值也透出（运维口径：与 err_total/session_dead_fails 一致，零值缺失会让人
 	// 误以为"没记录"，实际是零值被 omitempty 省略）。
 	ConsecutiveFails int       `json:"consecutive_fails"`
+	// SessionDeadFails 连续 12153（ErrSessionDead）计数，即「离禁用还差几次」的进度。
+	// 此前只落 state.json 不透出：上游批量注销会话后号已不可用，面板仍显示「可用」，
+	// 要等每日保活连败满阈（≈3 天）才转 disabled。
+	SessionDeadFails int       `json:"session_dead_fails"`
 	DegradeUntil     time.Time `json:"degrade_until,omitempty"` // 连败降权截止（非零且未过 = 降权中）
 	// 运行态（不持久化）：在途请求数 + 熔断器状态。
 	InFlight     int       `json:"in_flight"`
@@ -526,6 +530,11 @@ const defaultCostExploreInterval = 30 * time.Minute
 const sessionDeadThreshold = 3
 
 // sessionDeadReason 12153 判定为 session 死亡时的持久化 reason。
+//
+// 该 reason 的 12153 语义同时涵盖「业务层 12153」与「网关裸 401」两类终态：
+// 前者由 refresh/chat 的业务信封给出，后者由 Classify 的 IsGatewayUnauthorized
+// 判定，两者都指向「会话已失效、需重新登录」，故共用同一 reason。区分手段看日志：
+// 裸 401 路径会打「裸 401（session dead 计数 n/N）」，12153 路径不会。
 const sessionDeadReason = "12153 session dead"
 
 // SessionDeadThreshold 暴露连续 12153 的禁用阈值（供 scheduler 日志/运维文档引用）。
