@@ -4,6 +4,35 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.15.7-panel] - 2026-10-23
+
+本版为**会话失效治理**：从同源上游 [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel) 逐补丁移植三项（网关 401 分类 / 余额 401 求证 / RT 单飞），另针对 chat 路径补一处本分支加固（裸 401 不再单发致命）。
+
+**触发背景**（2026-10-23 本机实案）：账号池 6 个账号在 11:41 一次批量刷新后集体 401，面板显示 `upstream client (http 401)` 却是 `ErrClient`（只换号不罚），死号从 11:41 一直挂到 13:40 仍在池内参与调度；查 refresh 端点全部回 `code=12153 invalid_grant: Session doesn't have required client`，确认会话已在上游作废、只能重登。
+
+### 新增
+
+- **网关 401 归类为会话失效**（移植上游）：APISIX/openresty 的 401 HTML 页（`<title>401 Authorization Required</title>`，无 `{"code":…}`/`{"msg":…}` 业务信封）此前落 `ErrClient`——语义是「只换号不罚」，于是死号永远留在池里，每次请求都白打一轮上游、日志刷一串 401。新增 `upstream.IsGatewayUnauthorized(status, body)`，在 `Classify` 的 WAF 403 之后、图片/参数判定之前判为 `ErrSessionDead`。业务层 401（带信封，如 `code=12153`）分类路径不变。
+- **余额探测 401 的登录态求证**（移植上游 `internal/scheduler/balance_401.go`）：余额刷新是池内唯一的分钟级健康观测量，此前错误分支只 `log.Printf` + `return`，不碰池状态——上游批量注销会话后面板仍显示「可用」，要等每日 22:00 保活连败满阈（≈3 天）才转 disabled。新增 `noteBalanceAuthFailure`：401 后用 refresh 做权威求证，区分两种成因——refresh **成功**即「降级 token」（billing 恒 401 但 chat 仍可用），换新 token + `ClearSessionDead`，**不误杀**；refresh 回 12153 才计入 `sessionDeadFails`，满 3 次禁用。判定同时看 `Kind == ErrSessionDead` 与 `strings.Contains(msg, "12153")`（上游 12153 文案本地化后可能不含 marker，会落成 ErrClient）。30 分钟退避**只记成功**，避免降级 token 每轮探测都轮换 RT（一天 288 次）。
+- **`pool.Status` 透出 `session_dead_fails`**：此前只落 `state.json` 不透出，运维在 `/panel/api/overview` 看不到「离禁用还差几次」的进度。
+
+### 修复
+
+- **并发刷新同一 RT 导致整条 RT 链被上游吊销**（移植上游 PR #7，merge `28497e8`）：同一账号的 refresh token 被两个 goroutine 同时消耗时，第二次会撞上游 rotation/replay 检测（12153 `refresh token is invalid`），把整条 RT 链吊销、账号只能重新 OAuth。旧实现是两段式（锁内读快照 → 锁外 HTTP → 锁内写回），写回守卫只能防重复写，**挡不住第二个刷新请求已经发出**。新增按 `UID + "\n" + RT` 的单飞事务：同 RT 并发共享一个 leader、只打一次上游；按需刷新（`RefreshTokenIfNeeded`）成功后 60s 内复用结果；**keepalive 的强制刷新只共享在途结果、不吃 60s 宽限**（否则上游不换 RT 时会把后续真失败掩盖成成功，破坏 12153 连续计数）；并发落败方双检 token 已换新则返回 nil，不误判 `ErrSessionDead`；leader panic 经 `sync.Once` 释放等待者。
+- **落盘重试**：新增 `auth.SaveAtomicRetry`（0 / 100ms / 300ms），chat / keepalive / signin / 余额求证四路统一改走重试。上游已轮换 RT 后落盘抖动一次就会丢新 token，账号下次仍需重登——与 RT 单飞防的是同一类事故（余额取证路径刻意偏离上游 `SaveAtomic`）。
+- **chat 路径裸 401 单发永久禁用**（本分支加固，刻意偏离上游一处）：移植上述 401 分类后，一条 chat 请求撞上一次裸 401 即 `Pool.Disable`，而同一事实在余额链路要 3 次 + refresh 求证才判死，口径冲突。若 APISIX 侧短时故障或认证规则误配、对整批 token 统一回裸 401，网关轮转几个号就能在几分钟内清空整池（修复前该形态是 `ErrClient`，只换号不罚，所以这是本补丁新引入的杀伤面）。改为：裸 401 走 `NoteSessionDead` 连续计数，满 `sessionDeadThreshold`（3）次才禁用；**带业务信封的 12153 与 refresh 端点回 12153 仍单发禁用**（权威判据不打折）；`NoteSuccess` 会清计数，网关抖动攒不满 3 次。日志打 `裸 401（session dead 计数 n/3）` 与 `连续 N 次裸 401 — 禁用`，与余额链路口径一致。
+
+### 语义修正
+
+- **`cmd/signin` 的刷新窗口**：`NeedsRefresh(2*3600)` 传的是 7200 **纳秒**（≈ 每次必刷），改为 `2*time.Hour`。属与函数语义对齐的修正，会实质降低 signin 的 RT 轮换频率，**不是等价移植**，单独列出。
+
+### 验证
+
+- **单测**：`go test ./... -count=1` → 21 个包全绿，0 FAIL。新增 `internal/upstream/refresh_test.go`（8 例：单飞 / 强制与按需共享在途 / 宽限复用与过期 / 强制绕宽限 / 落败不误判 / 新鲜跳过 / panic 释放）、`client_test.go` 5 例（401 裸 HTML、空体、纯文本、401+12153、401+未知信封）、`internal/scheduler/balance_401_test.go` 5 例（含本地化 12153 文案）、`internal/server/handler_test.go` 3 例（裸 401 三次才禁 / 信封 12153 一次禁 + 负向日志断言 / 成功清零）。
+- **独立 QA 回归（两轮，含真实上游沙箱）**：17 账号副本、`include_disabled_in_tasks=true`、其余任务全关，7871 端口。6 个已失效账号三轮走完 `1/3 → 2/3 → 禁用`，日志从 `upstream client (http 401)` 变为 `upstream session_dead (http 401)`，全量 stdout 过滤旧字符串 **0 命中**；落盘 `disabled=true, reason="12153 session dead"`。健康账号 `6cf0d820` 三轮前后各查一次余额均 **200**、credits 正常、`session_dead_fails` 保持 0，其余 9 个健康号同样未被波及。
+- **边界反例**：403+HTML 仍判 `ErrWafBlock` 不进计数；`{"code":10001}` 走 `ErrClient` 不判死；429+12153 混排仍单发禁用；`uerr == nil`（SSE error frame 路径）仍单发禁用；401 后 refresh 回非 12153 错误不计罚；无 RT 账号不 refresh 不计罚。
+- **未覆盖**：`-race`（本机无 gcc，并发正确性靠单测 ×10 + 锁序审查 `refreshMu → a.mu` 无反向）；真实「降级 token」账号（池内无样本，用假上游构造）；多进程共享 `auths` 目录（单实例部署不涉及，单飞与退避均为进程内状态）。
+
 ## [1.15.6-panel] - 2026-10-22
 
 本版为**上游同步版**：从同源上游 [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel) 选择性移植 4 项 P0 修复（不合并分支，逐补丁移植，未引入上游的 `/v1/responses`、`/v1/search`、API Key、预算双闸等大功能）。
