@@ -54,6 +54,12 @@ func (p *Pool) disableLocked(e *entry, reason string) {
 	e.paused = false // 禁用是比暂停更强的终态，二者不叠加（禁用后须 revive 才能复用）
 	e.reason = reason
 	p.dirty.Store(true)
+	// M2 告警收口：拷贝参数后在锁外独立 goroutine 触发（回调不得反取 p.mu）。
+	// nickname 取凭证当前昵称，回调方按需落横幅 / 外发 webhook。
+	if p.onDisabled != nil {
+		fn, uid, nick := p.onDisabled, e.a.UID, e.a.Nickname
+		go fn(uid, nick, reason)
+	}
 }
 
 // pauseLocked 暂停选号迁移：置 paused 使账号退出选号候选（healthy 判否），

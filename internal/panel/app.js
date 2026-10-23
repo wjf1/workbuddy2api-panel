@@ -485,6 +485,7 @@ async function loadOverview(quiet) {
     refreshTagOptions(d);
     renderQueueBox(d);
     renderAlertBox(d);
+    renderKillBox(d);
     const raw = d.accounts || [];
     const shown = accApply(raw);
     renderAccounts(shown, shown.length !== raw.length);
@@ -545,6 +546,23 @@ function renderAlertBox(d) {
     esc(a.nickname || '未命名') + ' <span class="hint">uid ' + esc(a.uid) + '</span></div>'
   ).join('') +
   '<div class="hint" style="margin-top:6px">签到回血 / 手动「刷新」余额后自动解除；调整阈值见配置页「积分保底」。</div>';
+  box.hidden = false;
+}
+
+/* 批量会话判死横幅（M2）：overview.mass_kill（窗口内 ≥ 阈值个账号被自动禁用）。
+ * 横幅无冷却——事件老化后自然消失；webhook 外发与冷却在后端 alert.Manager。 */
+function renderKillBox(d) {
+  const box = $('killBox');
+  const k = d && d.mass_kill;
+  if (!k) { box.hidden = true; return; }
+  $('killNote').textContent = k.window_minutes + ' 分钟内 ' + k.count + ' 个 · 最近 ' + (k.last_at ? fmtClock(k.last_at) : '—');
+  const names = (k.uids || []).map((u, i) =>
+    '<div style="padding:3px 0;font-size:12.5px">' +
+    '<span class="tag bad">待重登</span> ' + esc((k.nicknames || [])[i] || '未命名') +
+    ' <span class="hint">uid ' + esc(u) + '</span></div>').join('');
+  $('killList').innerHTML = names +
+    '<div class="hint" style="margin-top:6px">一键重登：账号池筛选「待重登 / 封号」→ 行内「重登」→ 完成一次 OAuth 授权即可覆盖凭证并复活。' +
+    '若确认没有第二实例，可关闭配置页外发告警仅保留横幅提醒。</div>';
   box.hidden = false;
 }
 
@@ -1026,6 +1044,10 @@ const CFG_MAP = {
   keepalive_hours: ['schedule', 'keepalive_hours'], keepalive_enabled: ['schedule', 'keepalive_enabled'],
   balance_refresh_enabled: ['schedule', 'balance_refresh_enabled'], balance_refresh_minutes: ['schedule', 'balance_refresh_minutes'],
   include_disabled_in_tasks: ['schedule', 'include_disabled_in_tasks'],
+  notify_webhook_url: ['notify', 'webhook_url'],
+  notify_mass_kill_accounts: ['notify', 'mass_kill_accounts'],
+  notify_mass_kill_window_minutes: ['notify', 'mass_kill_window_minutes'],
+  notify_cooldown_minutes: ['notify', 'cooldown_minutes'],
   trash_retention_days: ['trash', 'retention_days'],
   backup_enabled: ['backup', 'enabled'], backup_hour: ['backup', 'hour'], backup_keep: ['backup', 'keep'],
   max_in_flight: ['pool', 'max_in_flight'], max_in_flight_global: ['pool', 'max_in_flight_global'],

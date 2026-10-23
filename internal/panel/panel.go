@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/alert"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
@@ -62,6 +63,10 @@ type Config struct {
 
 	// StickyCount 返回粘性会话绑定数；nil 时报告 0。
 	StickyCount func() int
+
+	// Alert 批量判死告警器（M2，main 装配注入；nil = mass_kill 恒 null，无横幅）。
+	// 禁用事件经 pool.SetOnDisabled 收口到 Alert.NoteDisabled，此处只读窗口内汇总。
+	Alert *alert.Manager
 
 	// Usage 逐请求用量记录器（nil = 用量接口返回 501）。
 	Usage *usage.Recorder
@@ -320,6 +325,7 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"credit_floor":    p.creditFloor(),
 		"low_credit":      p.lowCreditAccounts(accounts),
 		"upstream_queue":  p.upstreamQueuePayload(),
+		"mass_kill":       p.massKillPayload(),
 	})
 }
 
@@ -349,6 +355,15 @@ func (p *Panel) upstreamQueuePayload() any {
 		out["retry_after"] = int(info.RetryAfter.Seconds())
 	}
 	return out
+}
+
+// massKillPayload 批量判死横幅载荷（M2）：窗口内会话失效类禁用达标即给汇总，
+// 未达标 / 未注入 Alert 为 null（横幅隐藏）。无冷却——事件老化后自然消失。
+func (p *Panel) massKillPayload() any {
+	if p.cfg.Alert == nil {
+		return nil
+	}
+	return p.cfg.Alert.Payload()
 }
 
 // creditFloor 生效的积分保底线（0 = 关闭/未配置）。预警横幅据此现算。

@@ -80,6 +80,11 @@ type Pool struct {
 	stopCh chan struct{}
 	// closeOnce 保证 Close 幂等（多次调用不重复 close channel）。
 	closeOnce sync.Once
+	// onDisabled 禁用回调（SetOnDisabled 注入；nil = 无）。disableLocked 触发，
+	// 拷贝参数后在锁外独立 goroutine 执行——回调内不得同步调用任何取 p.mu 的
+	// Pool 方法（会死锁）。M2 告警（internal/alert.NoteDisabled）经此单一收口：
+	// NoteSessionDead 满阈 / chat 单发 Disable / 11140 banned / 人工禁用全部经过。
+	onDisabled func(uid, nickname, reason string)
 }
 
 // defaultBreaker* 熔断器默认参数（FreeBuff2API 参考口径）。
@@ -119,6 +124,14 @@ func (p *Pool) Close() {
 		close(p.stopCh)
 	})
 	p.Flush()
+}
+
+// SetOnDisabled 注入禁用回调（main 装配 alert.Manager.NoteDisabled；nil = 移除）。
+// 回调在锁外 goroutine 执行，参数是禁用时刻的拷贝，与后续状态变化解耦。
+func (p *Pool) SetOnDisabled(fn func(uid, nickname, reason string)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onDisabled = fn
 }
 
 // SetBreaker 注入熔断器参数（main 从 config 解析后调用）。非正值保留原值（用默认）。

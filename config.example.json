@@ -20,12 +20,26 @@
     "soft_rate_max": "2h"
   },
   "schedule": {
-    "checkin_hours": [9, 21],
-    "growth_hours": [1],
-    "travel_hours": [9, 21],
-    "activity_hours": [10],
-    "keepalive_hours": [22],
-    "blackcat_hours": [23],
+    "checkin_hours": [
+      9,
+      21
+    ],
+    "growth_hours": [
+      1
+    ],
+    "travel_hours": [
+      9,
+      21
+    ],
+    "activity_hours": [
+      10
+    ],
+    "keepalive_hours": [
+      22
+    ],
+    "blackcat_hours": [
+      23
+    ],
     "checkin_enabled": true,
     "growth_enabled": true,
     "travel_enabled": true,
@@ -104,5 +118,11 @@
     "enabled": true,
     "ttl": "30m",
     "gc_interval": "5m"
+  },
+  "notify": {
+    "webhook_url": "",
+    "mass_kill_accounts": 3,
+    "mass_kill_window_minutes": 10,
+    "cooldown_minutes": 30
   }
 }

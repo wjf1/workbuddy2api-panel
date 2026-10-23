@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/alert"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/panel"
@@ -268,11 +269,25 @@ func main() {
 		log.Printf("[reqlog] 请求指标已启用；JSONL 归档已关闭")
 	}
 
+	// M2 批量判死告警：pool 禁用 hook → alert（横幅 + webhook）。webhook_url 空 =
+	// 仅横幅不外发；配置页 notify 段热改（SetConfig），无需重启。
+	alertMgr := alert.New(alert.Config{
+		WebhookURL:        cfg.Notify.WebhookURL,
+		MassKillAccounts:  cfg.Notify.MassKillAccounts,
+		MassKillWindowMin: cfg.Notify.MassKillWindowMin,
+		CooldownMin:       cfg.Notify.CooldownMin,
+	}, "", appVersion)
+	p.SetOnDisabled(alertMgr.NoteDisabled)
+	log.Printf("[alert] 批量判死告警已启用：阈值 %d 号 / %d 分钟窗口%s",
+		cfg.Notify.MassKillAccounts, cfg.Notify.MassKillWindowMin,
+		map[bool]string{true: "，webhook 已配置", false: "（仅面板横幅，未配 webhook）"}[cfg.Notify.WebhookURL != ""])
+
 	// pn 先声明再赋值：SaveConfig 闭包需引用 pn 本身（配置页热改备份/回收站设置），
 	// 闭包执行时 pn 已完成装配（首次保存必然发生在面板可用之后）。
 	var pn *panel.Panel
 	pn = panel.New(panel.Config{
 		Pool:        p,
+		Alert:       alertMgr,
 		Usage:       rec,
 		RequestLog:  requestLog,
 		Upstream:    up,
@@ -297,7 +312,7 @@ func main() {
 			return Load(*cfgPath)
 		},
 		SaveConfig: func(raw []byte) ([]string, error) {
-			return saveConfig(raw, *cfgPath, live, p, up, sch, pn)
+			return saveConfig(raw, *cfgPath, live, p, up, sch, pn, alertMgr)
 		},
 	})
 	// 备份设置注入 + 每日定时备份与回收站过期清理循环（随 ctx 取消退出）。
@@ -483,7 +498,7 @@ func writeConfigInPlace(path string, out []byte) error {
 // 落盘用"先写 tmp 再 rename"原子替换，且优先保留磁盘上的原始 JSON 结构（只改
 // 面板表单覆盖到的键），避免把用户手写的注释性字段/未知键洗掉——这里直接整体
 // 序列化校验后的配置，未知键在 json.Unmarshal 时已丢失，故先合并原始 map。
-func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up *upstream.Client, sch *scheduler.Scheduler, pn *panel.Panel) ([]string, error) {
+func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up *upstream.Client, sch *scheduler.Scheduler, pn *panel.Panel, alertMgr *alert.Manager) ([]string, error) {
 	// 1) 解析原始 JSON 为 map（保留用户手写的未知键），再叠加面板提交的键。
 	oldRaw, err := os.ReadFile(path)
 	if err != nil {
@@ -568,6 +583,14 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		pn.SetTrashRetention(newCfg.Trash.RetentionDays)
 		pn.SetBackupSettings(newCfg.Backup.Enabled, newCfg.Backup.Hour, newCfg.Backup.Keep)
 	}
+
+	// M2 告警配置热生效（阈值/窗口/冷却/webhook 全部无需重启）。
+	alertMgr.SetConfig(alert.Config{
+		WebhookURL:        newCfg.Notify.WebhookURL,
+		MassKillAccounts:  newCfg.Notify.MassKillAccounts,
+		MassKillWindowMin: newCfg.Notify.MassKillWindowMin,
+		CooldownMin:       newCfg.Notify.CooldownMin,
+	})
 
 	return restartRequiredFields(newCfg), nil
 }

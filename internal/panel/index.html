@@ -692,6 +692,15 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="pad"><div id="alertList"></div></div>
       </div>
 
+      <div class="box" id="killBox" hidden>
+        <header>
+          <h3>批量会话判死<span class="hint">短时间内多个账号连续 session 判死被自动禁用——疑似上游批量吊销会话或凭证双活（另一实例在共享同一批账号）。这些账号任何刷新 / 保活 / 重导 JSON 都救不回来，请到账号池「待重登」逐个重新授权，并检查是否有第二实例在跑同一份 auths</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="killNote"></span>
+        </header>
+        <div class="pad"><div id="killList"></div></div>
+      </div>
+
       <div class="box">
         <header>
           <h3>账号池</h3>
@@ -986,6 +995,20 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <div class="switch"><span class="lb">保号任务覆盖已禁用账号</span>
               <input type="checkbox" name="include_disabled_in_tasks"></div>
             <div class="hint">禁用只关选号：打开后已禁用的账号仍会签到 / 活跃上报 / 保活 / 刷新余额（依旧不参与选号）。适合「一次只放开一个账号、用禁用做流量开关」的轮换养号用法，默认关闭。<br>若只想让<b>单个</b>账号临时退出选号但保留保号，直接用账号行的「<b>暂停选号</b>」按钮（账号级，无需打开本开关）。</div>
+            <div class="hr"></div>
+            <div class="grid2">
+              <label class="fld"><span class="lb">批量判死告警 webhook（可留空）</span>
+                <input name="notify_webhook_url" placeholder="https://...（飞书 / Bark / 企微通用 JSON）">
+                <span class="hint">留空 = 仅面板横幅不外发。短窗口内多个账号被批量判死时 POST JSON 告警（受冷却约束）</span></label>
+              <div>
+                <label class="fld"><span class="lb">判死阈值（账号数）</span>
+                  <input name="notify_mass_kill_accounts" type="number" min="1" placeholder="3"></label>
+                <label class="fld"><span class="lb">判死窗口（分钟）</span>
+                  <input name="notify_mass_kill_window_minutes" type="number" min="1" placeholder="10"></label>
+                <label class="fld"><span class="lb">webhook 冷却（分钟）</span>
+                  <input name="notify_cooldown_minutes" type="number" min="1" placeholder="30"></label>
+              </div>
+            </div>
           </div>
         </div>
 
