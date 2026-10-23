@@ -354,14 +354,17 @@ setTimeout(() => {
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
-/* accFilter 账号列表筛选（仿 mdFilter 模式）：q 匹配昵称/uid 子串，tag 精确命中。 */
-const accFilter = { q: '', tag: '' };
+/* accFilter 账号列表筛选（仿 mdFilter 模式）：q 匹配昵称/uid 子串，tag 精确命中，
+   st 状态维度（dead = dead_kind 非空的失效号，ok = 非 dead 的其余账号）。 */
+const accFilter = { q: '', tag: '', st: '' };
 function accApply(list) {
   const tagsMap = (overviewData && overviewData.tags) || {};
   const q = accFilter.q.trim().toLowerCase();
   return (list || []).filter(s => {
     if (q && !(String(s.nickname || '').toLowerCase().includes(q) || String(s.uid || '').toLowerCase().includes(q))) return false;
     if (accFilter.tag && !((tagsMap[s.uid] || []).includes(accFilter.tag))) return false;
+    if (accFilter.st === 'dead' && !s.dead_kind) return false;
+    if (accFilter.st === 'ok' && s.dead_kind) return false;
     return true;
   });
 }
@@ -381,7 +384,14 @@ function renderAccounts(list, filtered) {
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
     let cls = '', tag;
-    if (s.disabled) { cls = 'off'; tag = '<span class="tag bad">已禁用</span>'; }
+    if (s.disabled) {
+      cls = 'off';
+      // dead_kind 非空 = 会话失效 / 封号类终态：用醒目文案与普通「已禁用」区分，
+      // session_dead 的行内挂「重登」按钮（见操作列）；banned（11140 风控）不给重登入口。
+      if (s.dead_kind === 'session_dead') tag = '<span class="tag bad">待重登</span>';
+      else if (s.dead_kind === 'banned') tag = '<span class="tag bad">上游封号</span>';
+      else tag = '<span class="tag bad">已禁用</span>';
+    }
     else if (s.paused) { cls = 'off'; tag = '<span class="tag warn">已暂停选号</span>'; }
     else if (cool > 0) {
       cls = 'cool';
@@ -389,6 +399,11 @@ function renderAccounts(list, filtered) {
         : (dg > (s.cool_remaining_sec || 0) ? '连败降权' : (s.cool_kind === 'hard_credit' ? '积分冷却' : '限流冷却'));
       tag = '<span class="tag warn">' + kind + ' · ' + dur(cool) + '</span>';
     } else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
+    // M3：session_dead_fails 是「离自动禁用还差几次」的进度（连续 3 次判死才禁用），
+    // 亚健康（1/3、2/3）可见，赶在满阈前手动保活一次（成功即清零）。
+    const sdTag = (!s.disabled && s.session_dead_fails > 0)
+      ? ' <span class="tag warn" style="font-size:10.5px" title="连续 session 判死计数，满 3 次自动禁用；保活 / 请求成功即清零">session ' + s.session_dead_fails + '/3</span>'
+      : '';
     const note = s.reason ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' + esc(s.reason) + '</div>' : '';
     // 标签徽章（overview.tags 透出，落盘 account.tags；随导出/导入往返）。
     const myTags = ((overviewData && overviewData.tags) || {})[s.uid] || [];
@@ -420,7 +435,7 @@ function renderAccounts(list, filtered) {
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
       '<td class="who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + '</div><div class="id">' + esc(short) + '</div>' + tagBadges + '</td>' +
-      '<td>' + tag + note + rateLimits + '</td>' +
+      '<td>' + tag + sdTag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
       '<td class="num">' + (s.in_flight || 0) + '</td>' +
@@ -436,6 +451,7 @@ function renderAccounts(list, filtered) {
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '">余额</button>' +
         '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' +
         '<button class="xs ghost" data-a="tags" data-u="' + esc(s.uid) + '"' + (myTags.length ? ' title="' + esc(myTags.join(' / ')) + '"' : '') + '>标签</button>' +
+        (s.dead_kind === 'session_dead' ? '<button class="xs primary" data-a="relogin" data-u="' + esc(s.uid) + '" title="该账号的登录会话已在上游失效（refresh 回 12153），任何刷新 / 保活 / 重导 JSON 都救不回来；重走一次 OAuth 授权即可覆盖凭证并复活。">重登</button>' : '') +
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额">暂停选号</button>')) +
@@ -544,6 +560,12 @@ $('accFilterTag').addEventListener('change', () => {
   const shown = accApply(raw);
   renderAccounts(shown, shown.length !== raw.length);
 });
+$('accFilterSt').addEventListener('change', () => {
+  accFilter.st = $('accFilterSt').value || '';
+  const raw = (overviewData && overviewData.accounts) || [];
+  const shown = accApply(raw);
+  renderAccounts(shown, shown.length !== raw.length);
+});
 
 $('accBody').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-a]');
@@ -575,6 +597,8 @@ $('accBody').addEventListener('click', async ev => {
       openTasks(u);
     } else if (a === 'tags') {
       openTagModal(u);
+    } else if (a === 'relogin') {
+      openRelogin(u);
     } else if (a === 'remove') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/remove', { method: 'POST' });
       toast(r.file_error ? '已移除（凭证移入回收站失败：' + r.file_error + '）'
@@ -1209,6 +1233,81 @@ $('btnCloseAdd').onclick = closeAdd;
 $('btnStartLogin').onclick = startAddLogin;
 $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank');
 $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textContent)
+  .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
+
+/* ── 死号一键重登（复用「添加账号」的设备授权流）───────────────────── */
+/* loginPoll 完成后 SaveAtomic 覆盖 auths/workbuddy-<uid>.json + Pool.Add(upsert)
+   + Pool.Revive（全清禁用/冷却/计数），对死号重登同 uid 即「覆盖凭证 + 复活」。 */
+let reloginUid = null, reloginState = null, reloginTimer = null;
+function openRelogin(uid) {
+  const acc = ((overviewData && overviewData.accounts) || []).find(s => s.uid === uid) || {};
+  reloginUid = uid;
+  $('reloginTarget').textContent = acc.nickname ? '· ' + acc.nickname : '';
+  // 预选该账号现有域（global 账号默认 global），可手动改。
+  const realm = acc.realm === 'global' ? 'global' : 'cn';
+  document.querySelectorAll('input[name="reloginRealm"]').forEach(r => { r.checked = r.value === realm; });
+  $('reloginLoad').hidden = true; $('reloginReady').hidden = true;
+  $('reloginDone').hidden = true; $('reloginErr').hidden = true;
+  $('btnStartRelogin').hidden = false; $('btnStartRelogin').disabled = false;
+  $('btnCopyReloginUrl').hidden = true; $('btnOpenReloginUrl').hidden = true;
+  stopReloginPoll();
+  $('reloginVeil').classList.add('on');
+}
+function startRelogin() {
+  if (!reloginUid) return;
+  const realm = (document.querySelector('input[name="reloginRealm"]:checked') || {}).value || 'cn';
+  $('btnStartRelogin').disabled = true;
+  $('reloginLoad').hidden = false; $('reloginErr').hidden = true;
+  api('login/start', { method: 'POST', body: JSON.stringify({ realm }) }).then(r => {
+    reloginState = r.state;
+    $('reloginUrl').textContent = r.url;
+    $('reloginLoad').hidden = true; $('reloginReady').hidden = false;
+    $('btnStartRelogin').hidden = true;
+    $('btnCopyReloginUrl').hidden = false; $('btnOpenReloginUrl').hidden = false;
+    reloginTimer = setInterval(pollRelogin, 3000);
+  }).catch(e => {
+    $('reloginLoad').hidden = true;
+    $('btnStartRelogin').disabled = false;
+    $('reloginErr').hidden = false;
+    $('reloginErr').textContent = e.message;
+  });
+}
+function stopReloginPoll() { if (reloginTimer) { clearInterval(reloginTimer); reloginTimer = null; } }
+async function pollRelogin() {
+  if (!reloginState) return;
+  try {
+    const r = await api('login/poll?state=' + encodeURIComponent(reloginState));
+    if (!r.done) return;
+    stopReloginPoll();
+    $('reloginReady').hidden = true;
+    if (reloginUid && r.uid === reloginUid) {
+      $('reloginDone').hidden = false;
+      $('reloginDone').textContent = '重登成功：' + (r.nickname || r.uid) + ' 已覆盖新凭证并复活（账号已可用）';
+      setTimeout(() => { closeRelogin(); loadOverview(true); }, 1600);
+    } else {
+      // 登成了另一个账号：凭证已作为新账号入池（后端 upsert + Revive），但目标死号仍待重登。
+      $('reloginErr').hidden = false;
+      $('reloginErr').textContent = '本次登录的是另一个账号「' + (r.nickname || r.uid) + '」，已作为新账号加入账号池；目标账号仍待重登，请重新发起并用目标账号授权。';
+      $('btnStartRelogin').hidden = false; $('btnStartRelogin').disabled = false;
+    }
+  } catch (e) {
+    // 后端 loginTTL 15 分钟过期返回 404：提示重新发起。
+    stopReloginPoll();
+    $('reloginReady').hidden = true;
+    $('reloginErr').hidden = false;
+    $('reloginErr').textContent = e.message + '（重新点「获取授权链接」再试）';
+    $('btnStartRelogin').hidden = false; $('btnStartRelogin').disabled = false;
+  }
+}
+function closeRelogin() {
+  stopReloginPoll();
+  reloginState = null; reloginUid = null;
+  $('reloginVeil').classList.remove('on');
+}
+$('btnCloseRelogin').onclick = closeRelogin;
+$('btnStartRelogin').onclick = startRelogin;
+$('btnOpenReloginUrl').onclick = () => open($('reloginUrl').textContent, '_blank');
+$('btnCopyReloginUrl').onclick = () => navigator.clipboard.writeText($('reloginUrl').textContent)
   .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
 $('importFile').onchange = async () => {
   const files = Array.from($('importFile').files);

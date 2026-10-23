@@ -554,8 +554,9 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		BreakerUntil:             e.breakerUntil,
 	}
 	if st.Disabled {
-		// 禁用账号透出禁用原因（运维看不到为什么死）。
+		// 禁用账号透出禁用原因（运维看不到为什么死）+ 死因分类（面板「待重登」分组）。
 		st.DisabledReason = e.reason
+		st.DeadKind = deadKindOf(e.reason)
 	}
 	if st.Cooling {
 		// 冷却剩余秒数（向上取整，避免 0 显示为已到期）。

@@ -697,6 +697,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <h3>账号池</h3>
           <span class="grow"></span>
           <input id="accFilterQ" type="search" placeholder="筛选：昵称 / uid" style="width:150px;margin-right:6px" title="按昵称或 uid 过滤账号列表">
+          <select id="accFilterSt" style="margin-right:6px" title="按账号状态过滤">
+            <option value="">全部状态</option>
+            <option value="dead">待重登 / 封号（失效号）</option>
+            <option value="ok">可用正常</option>
+          </select>
           <select id="accFilterTag" style="margin-right:6px" title="按标签过滤账号列表"><option value="">全部标签</option></select>
           <span class="note" id="accNote"></span>
           <button class="xs" id="btnCheckinAll" title="立即对全部账号执行一次签到：签到 + 刷新余额（余额恢复的冷却账号自动解冻），随后自动兑换连登已解锁档位、用完抽奖次数。等同提前跑一次每日定时签到（默认 9 / 21 点）。">全部签到</button>
@@ -1282,6 +1287,36 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <button id="btnCopyUrl" hidden>复制链接</button>
       <button id="btnOpenUrl" class="primary" hidden>在浏览器打开</button>
       <button id="btnCloseAdd">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 死号一键重登（复用设备授权流，成功后覆盖同 uid 凭证并复活账号） -->
+<div class="veil" id="reloginVeil">
+  <div class="dlg">
+    <header><h3>重新登录 <span id="reloginTarget" style="font-weight:normal;color:var(--ink-2)"></span></h3></header>
+    <div class="body">
+      <div class="realm-row">
+        <span class="hint" style="font-size:12px">版本：</span>
+        <label class="realm-opt"><input type="radio" name="reloginRealm" value="cn" checked> 国内版（CN）</label>
+        <label class="realm-opt"><input type="radio" name="reloginRealm" value="global"> 国际版（Global）</label>
+      </div>
+      <div class="hint" style="font-size:12px;margin-top:2px">在浏览器打开授权链接并登录该账号，完成后自动覆盖旧凭证并复活（禁用态 / 冷却 / 计数全清）。</div>
+      <div id="reloginLoad" class="state" hidden><span class="dots">正在获取授权链接</span></div>
+      <div id="reloginReady" hidden>
+        <div class="state">在浏览器打开以下链接并登录：</div>
+        <div class="url" id="reloginUrl"></div>
+        <div class="state" id="reloginPoll"><span class="dots">等待授权完成，自动检测中</span></div>
+      </div>
+      <div id="reloginDone" class="state ok" hidden></div>
+      <div id="reloginErr" class="state err" hidden></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button id="btnStartRelogin" class="primary">获取授权链接</button>
+      <button id="btnCopyReloginUrl" hidden>复制链接</button>
+      <button id="btnOpenReloginUrl" class="primary" hidden>在浏览器打开</button>
+      <button id="btnCloseRelogin">关闭</button>
     </footer>
   </div>
 </div>

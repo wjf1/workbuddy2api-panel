@@ -2,6 +2,7 @@
 package pool
 
 import (
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -86,6 +87,10 @@ type Status struct {
 	Realm           string     `json:"realm,omitempty"`
 	Disabled        bool       `json:"disabled"`
 	DisabledReason  string     `json:"disabled_reason,omitempty"` // 仅 disabled 账号：禁用原因（运维可见）
+	// DeadKind 仅 disabled 账号：死因分类（"session_dead" | "banned"），非禁用恒空。
+	// reason 是自由文本，前端不猜字符串——分类收口在 deadKindOf 一处。
+	// session_dead → 面板「待重登」分组（重登可救）；banned → 上游风控封号（重登大概率再封）。
+	DeadKind string `json:"dead_kind,omitempty"`
 	// Paused 暂停选号：退出选号候选（与 disabled 一样不参与选号），但**照常参与**
 	// 签到 / 活跃上报 / 保活 / 余额刷新四类保号任务。与 disabled 正交——disabled 是
 	// 「授权/session 终态，需人工 revive」，paused 是「运维临时让位」（多号轮换场景），
@@ -536,6 +541,30 @@ const sessionDeadThreshold = 3
 // 判定，两者都指向「会话已失效、需重新登录」，故共用同一 reason。区分手段看日志：
 // 裸 401 路径会打「裸 401（session dead 计数 n/N）」，12153 路径不会。
 const sessionDeadReason = "12153 session dead"
+
+// IsSessionDeadReason 判断禁用原因是否为会话失效类（"12153 session dead" /
+// "refresh session dead" 两类终态共用 "session dead" 子串）。
+// 面板「待重登」分组与 M2 告警（internal/alert）复用同一判定，避免文案漂移漏判。
+func IsSessionDeadReason(reason string) bool {
+	return strings.Contains(reason, "session dead")
+}
+
+// IsBannedReason 判断禁用原因是否为上游风控封号类（11140 request illegal）。
+func IsBannedReason(reason string) bool {
+	return strings.Contains(reason, "banned")
+}
+
+// deadKindOf 禁用账号的死因分类（Status.DeadKind）："session_dead" | "banned" | ""。
+// 非禁用账号 / 其余人工禁用等原因恒为 ""（仍显示普通「已禁用」，不进重登分组）。
+func deadKindOf(reason string) string {
+	switch {
+	case IsSessionDeadReason(reason):
+		return "session_dead"
+	case IsBannedReason(reason):
+		return "banned"
+	}
+	return ""
+}
 
 // SessionDeadThreshold 暴露连续 12153 的禁用阈值（供 scheduler 日志/运维文档引用）。
 func SessionDeadThreshold() int { return sessionDeadThreshold }
