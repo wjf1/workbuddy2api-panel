@@ -84,8 +84,22 @@ func (p *Pool) RestoreFromSnapshot() {
 	log.Printf("pool: 恢复来源=本地 state.json（较新于 Redis 快照 %s）", snap.SavedAt.Format(time.RFC3339))
 }
 
-// Acquire 为账号占一个在途名额；false 表示该账号已达上限（或不存在）。
-// 必须在成功 Pick 后调用；调用方负责 defer Release。
+// applySnapshotLocked 用 Redis 快照覆盖内存状态（已在择新判定后采用）。调用方必须已持有 p.mu。
+// adoptSnapshot 采用 Redis 快照为当前池状态，并置 dirty 让下一次落盘把它物化回本地
+// state.json（否则快照只在内存生效，下次崩溃恢复又回到旧本地文件）。
+func (p *Pool) adoptSnapshot(s snapshot) {
+	p.mu.Lock()
+	p.applySnapshotLocked(s)
+	p.mu.Unlock()
+	p.dirty.Store(true)
+}
+
+func (p *Pool) applySnapshotLocked(s snapshot) {
+	p.byUID = map[string]*entry{}
+	p.applyAccountsLocked(s.Accounts)
+}
+
+// startFlusher 周期性把 dirty 状态落盘（5s 一轮，锁外写盘）。
 func (p *Pool) startFlusher() {
 	stopCh := make(chan struct{})
 	// 在启动 goroutine 前同步写入（避免与测试对 flushInterval 的恢复写竞争）；
@@ -98,11 +112,7 @@ func (p *Pool) startFlusher() {
 		for {
 			select {
 			case <-t.C:
-				p.mu.Lock()
-				if p.dirty.Swap(false) {
-					p.saveLocked()
-				}
-				p.mu.Unlock()
+				p.persistState()
 				// 余额趋势节流落盘（锁内拷贝、锁外写；节流窗口 5 分钟）。
 				p.flushCreditsHistory(false)
 			case <-stopCh:
@@ -113,12 +123,56 @@ func (p *Pool) startFlusher() {
 }
 
 // Flush 同步把内存状态落盘（幂等：无变更不写盘）。供进程退出前调用。
+// 锁内只取快照，Marshal + fsync + rename 全在锁外——磁盘被实时扫描/满载拖慢时
+// 不阻塞选号与状态查询（「锁内不做 IO」纪律；credithistory 死锁教训的同类修复）。
 func (p *Pool) Flush() {
+	p.persistState()
+}
+
+// persistState 落盘入口（flusher 周期 / Flush / Remove / SyncToDir 共用）：
+// 锁内 [dirty 交换 + 快照] → 锁外 [Marshal + safefile 写 + Redis 镜像]。
+// 写盘失败把 dirty 复位（下一轮 flusher 自动重试）。
+func (p *Pool) persistState() {
 	p.mu.Lock()
-	if p.dirty.Swap(false) {
-		p.saveLocked()
+	if p.stateFp == "" || !p.dirty.Swap(false) {
+		p.mu.Unlock()
+		return
 	}
+	sf := p.stateOverviewLocked()
+	store := p.store
 	p.mu.Unlock()
+
+	raw, err := json.MarshalIndent(sf, "", "  ")
+	if err != nil {
+		p.notePersistFail(err)
+		p.dirty.Store(true)
+		return
+	}
+	if dir := filepath.Dir(p.stateFp); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	// safefile：fsync 后 rename（掉电不会留下全 0 的 state.json），并把上一份
+	// 有效内容留成 .bak —— 读到坏文件时兜底，冷却/停牌状态不至于一次掉电全丢。
+	if err := safefile.WriteKeep(p.stateFp, raw, 0o600); err != nil {
+		p.notePersistFail(err)
+		p.dirty.Store(true) // 失败复位：下一轮 flusher 重试（此前要等下次状态变更）
+		return
+	}
+	p.mu.Lock()
+	recovered := p.persistFails > 0
+	p.persistFails = 0
+	p.mu.Unlock()
+	if recovered {
+		// 从连续失败中恢复：打一条恢复日志，避免"错误打完却无人知道已恢复"。
+		log.Printf("pool: state.json 落盘恢复（此前连续失败）")
+	}
+	// 同步镜像一份快照到 Redis（fire-and-forget），与本地 state.json 并存作恢复备份。
+	if store != nil {
+		snapRaw, err := json.Marshal(snapshot{stateFile: sf, SavedAt: time.Now()})
+		if err == nil {
+			store.SaveState(snapRaw)
+		}
+	}
 }
 
 // Add 加入账号；已存在则保留原状态、更新凭证（upsert 单账号，不影响其他账号）。
@@ -226,52 +280,6 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			}
 		}
 		p.byUID[uid] = e
-	}
-}
-
-// applySnapshotLocked 用 Redis 快照覆盖内存状态（已在择新判定后采用）。调用方必须已持有 p.mu。
-// adoptSnapshot 采用 Redis 快照为当前池状态，并置 dirty 让下一次落盘把它物化回本地
-// state.json（否则快照只在内存生效，下次崩溃恢复又回到旧本地文件）。
-func (p *Pool) adoptSnapshot(s snapshot) {
-	p.mu.Lock()
-	p.applySnapshotLocked(s)
-	p.mu.Unlock()
-	p.dirty.Store(true)
-}
-func (p *Pool) applySnapshotLocked(s snapshot) {
-	p.byUID = map[string]*entry{}
-	p.applyAccountsLocked(s.Accounts)
-}
-func (p *Pool) saveLocked() {
-	if p.stateFp == "" {
-		return
-	}
-	sf := p.stateOverviewLocked()
-	raw, err := json.MarshalIndent(sf, "", "  ")
-	if err != nil {
-		p.notePersistFail(err)
-		return
-	}
-	if dir := filepath.Dir(p.stateFp); dir != "" {
-		_ = os.MkdirAll(dir, 0o755)
-	}
-	// safefile：fsync 后 rename（掉电不会留下全 0 的 state.json），并把上一份
-	// 有效内容留成 .bak —— 读到坏文件时兜底，冷却/停牌状态不至于一次掉电全丢。
-	if err := safefile.WriteKeep(p.stateFp, raw, 0o600); err != nil {
-		p.notePersistFail(err)
-		return
-	}
-	if p.persistFails > 0 {
-		// 从连续失败中恢复：打一条恢复日志，避免"错误打完却无人知道已恢复"。
-		log.Printf("pool: state.json 落盘恢复（此前连续失败 %d 次）", p.persistFails)
-		p.persistFails = 0
-	}
-	// 同步镜像一份快照到 Redis（fire-and-forget），与本地 state.json 并存作恢复备份。
-	if p.store != nil {
-		snapRaw, err := json.Marshal(snapshot{stateFile: sf, SavedAt: time.Now()})
-		if err == nil {
-			p.store.SaveState(snapRaw)
-		}
 	}
 }
 

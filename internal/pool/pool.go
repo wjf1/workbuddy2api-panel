@@ -376,22 +376,22 @@ func (p *Pool) Add(a *auth.Auth) {
 // 剔除结果持久化回 state.json，避免已删账号在下次启动时被 load() 复活。
 func (p *Pool) SyncToDir(auths []*auth.Auth) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	seen := make(map[string]bool, len(auths))
 	for _, a := range auths {
 		seen[a.UID] = true
 		p.upsertLocked(a)
 	}
-	changed := false
 	for uid := range p.byUID {
 		if !seen[uid] {
 			delete(p.byUID, uid)
-			changed = true
+			// 消失账号的趋势历史一并清掉：30 天裁剪只发生在该号下一次采样，
+			// 已删号永不采样 → 点位无限滞留（credits-history 与 /credits_trend 越积越脏）。
+			delete(p.creditHist, uid)
+			p.dirty.Store(true)
 		}
 	}
-	if changed {
-		p.saveLocked()
-	}
+	p.mu.Unlock()
+	p.persistState()
 }
 
 // Remove 从池中移除账号并立即落盘（管理面板用）。返回被移除账号的凭证
@@ -399,14 +399,16 @@ func (p *Pool) SyncToDir(auths []*auth.Auth) {
 // 在途请求的 Release 对已删条目是 no-op，无需等待。
 func (p *Pool) Remove(uid string) *auth.Auth {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	e, ok := p.byUID[uid]
 	if !ok {
+		p.mu.Unlock()
 		return nil
 	}
 	delete(p.byUID, uid)
+	delete(p.creditHist, uid) // 趋势历史随账号移除（否则永不裁剪，见 SyncToDir 注释）
 	p.dirty.Store(true)
-	p.saveLocked()
+	p.mu.Unlock()
+	p.persistState() // 立即落盘语义保留（锁外写，不阻塞其他调用方）
 	return e.a
 }
 
