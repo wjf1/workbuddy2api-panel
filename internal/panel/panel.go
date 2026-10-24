@@ -328,7 +328,7 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"disabled":        disabled,
 		"in_flight_full":  inFlightFull,
 		"accounts":        accounts,
-		"tags":            p.tagsByUID(),
+		"tags":            p.tagsByUID(accounts),
 		"credit_floor":    p.creditFloor(),
 		"low_credit":      p.lowCreditAccounts(accounts),
 		"upstream_queue":  p.upstreamQueuePayload(),
@@ -419,9 +419,14 @@ func (p *Panel) lowCreditAccounts(accounts []pool.Status) []map[string]any {
 }
 
 // tagsByUID 汇总各账号标签（仅非空账号入表；uid → tags）。
-func (p *Panel) tagsByUID() map[string][]string {
+// accounts 参数复用调用方已取的全池快照（overview 每 5s 轮询两次 List 深拷贝之一
+// 由此消除；nil 时自取，兼容其他调用点）。
+func (p *Panel) tagsByUID(accounts []pool.Status) map[string][]string {
 	out := map[string][]string{}
-	for _, st := range p.cfg.Pool.List() {
+	if accounts == nil {
+		accounts = p.cfg.Pool.List()
+	}
+	for _, st := range accounts {
 		a := p.cfg.Pool.AuthByUID(st.UID)
 		if a == nil {
 			continue

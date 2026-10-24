@@ -210,6 +210,31 @@ func isPromptTooLongStatus(status int) bool {
 var alreadyCheckinMarkers = []string{"已签到", "already"}
 var badParamsMarkerCode = `"code":11101`
 
+// lowerMarkers 各 marker 组的小写预计算表（init 一次）——Classify 每请求对每个
+// 常量 marker 执行 strings.ToLower 是错误风暴下的纯浪费（整 body 已 ToLower 一次，
+// marker 侧再逐个 ToLower 每组 × 每错误路径重复计算）。
+var (
+	lowerAccountFaultMarkers []string
+	lowerHardMarkers         []string
+	lowerSoftRateMarkers     []string
+	lowerPromptTooLong       []string
+)
+
+func init() {
+	for _, m := range accountFaultMarkers {
+		lowerAccountFaultMarkers = append(lowerAccountFaultMarkers, strings.ToLower(m))
+	}
+	for _, m := range hardMarkers {
+		lowerHardMarkers = append(lowerHardMarkers, strings.ToLower(m))
+	}
+	for _, m := range softRateMarkers {
+		lowerSoftRateMarkers = append(lowerSoftRateMarkers, strings.ToLower(m))
+	}
+	for _, m := range promptTooLongMarkers {
+		lowerPromptTooLong = append(lowerPromptTooLong, strings.ToLower(m))
+	}
+}
+
 // softRateResetLoc 上游 429 6004 文案中的重置时间固定按 UTC+8 解释（上游文案如此，
 // 与容器时区无关）。时区定义统一在 internal/cst。
 var softRateResetLoc = cst.Loc
@@ -656,8 +681,8 @@ func Classify(status int, body string) ErrKind {
 			return ErrSessionDead
 		}
 	}
-	for _, m := range accountFaultMarkers {
-		if strings.Contains(lower, strings.ToLower(m)) || strings.Contains(body, m) {
+	for i, m := range accountFaultMarkers {
+		if strings.Contains(lower, lowerAccountFaultMarkers[i]) || strings.Contains(body, m) {
 			return ErrAccountFault
 		}
 	}
@@ -684,13 +709,13 @@ func Classify(status int, body string) ErrKind {
 	if status == http.StatusTooManyRequests {
 		return ErrSoftRate
 	}
-	for _, m := range hardMarkers {
-		if strings.Contains(lower, strings.ToLower(m)) || strings.Contains(body, m) {
+	for i, m := range hardMarkers {
+		if strings.Contains(lower, lowerHardMarkers[i]) || strings.Contains(body, m) {
 			return ErrHardCredit
 		}
 	}
-	for _, m := range softRateMarkers {
-		if strings.Contains(lower, strings.ToLower(m)) || strings.Contains(body, m) {
+	for i, m := range softRateMarkers {
+		if strings.Contains(lower, lowerSoftRateMarkers[i]) || strings.Contains(body, m) {
 			return ErrSoftRate
 		}
 	}
@@ -698,8 +723,8 @@ func Classify(status int, body string) ErrKind {
 	// 之前——请求级语义最具体（上下文超限），须先于宽泛的状态码兜底（404 兜底会
 	// 误归 ErrNotFound 只冷却不透传；ErrClient 只换号，浪费健康号配额）。
 	if isPromptTooLongStatus(status) {
-		for _, m := range promptTooLongMarkers {
-			if strings.Contains(body, m) || (m != strings.ToLower(m) && strings.Contains(lower, strings.ToLower(m))) {
+		for i, m := range promptTooLongMarkers {
+			if strings.Contains(body, m) || strings.Contains(lower, lowerPromptTooLong[i]) {
 				return ErrPromptTooLong
 			}
 		}

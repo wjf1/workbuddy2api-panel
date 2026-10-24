@@ -160,6 +160,18 @@ func (r *Recorder) Begin() {
 }
 
 // Record 记录一个请求完成事件并写入归档队列。
+// reverseEvents 取 src 最新 n 条并反转为「新在前」（尾插存储的读侧适配）。
+func reverseEvents(src []Event, n int) []Event {
+	if len(src) > n {
+		src = src[len(src)-n:]
+	}
+	out := make([]Event, len(src))
+	for i, e := range src {
+		out[len(src)-1-i] = e
+	}
+	return out
+}
+
 func (r *Recorder) Record(e Event) {
 	if r == nil {
 		return
@@ -186,9 +198,12 @@ func (r *Recorder) Record(e Event) {
 		r.httpSuccess++
 	}
 	r.durationSum += e.DurationMs
-	r.recent = append([]Event{e}, r.recent...)
-	if len(r.recent) > recentLimit {
-		r.recent = r.recent[:recentLimit]
+	// 尾插（O(1) 摊销）：此前头插 append([]Event{e}, r.recent...) 每请求分配并
+	// 搬移整个切片（~100 条 × 每条 ~200B）。读侧反转恢复「新在前」语义。
+	r.recent = append(r.recent, e)
+	if len(r.recent) > recentLimit*2 {
+		// 一次性修剪到 recentLimit（留余量减少修剪频率；读侧只取最新 recentLimit 条）。
+		r.recent = append(r.recent[:0], r.recent[len(r.recent)-recentLimit:]...)
 	}
 	r.mu.Unlock()
 	if r.archive != nil {
@@ -207,7 +222,8 @@ func (r *Recorder) Snapshot() Snapshot {
 		Completed: r.completed,
 		InFlight:  r.inFlight,
 		Succeeded: r.succeeded,
-		Recent:    append([]Event(nil), r.recent...),
+		// 尾插存储 → 反转为「新在前」（与既有 JSON 契约一致）。
+		Recent: reverseEvents(r.recent, recentLimit),
 	}
 	if r.completed > 0 {
 		s.Failed = r.completed - r.succeeded
