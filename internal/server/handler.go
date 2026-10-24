@@ -307,8 +307,15 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	// (域, 模型) 的最近探索时刻（键 "realm|model"）。与 accounts[].model_costs
 	// 行对照即可读出「探索→毕业」全链路（单一事实来源，不做双表示）。零回归只增键。
 	exploreEvents, exploreLast := h.cfg.Pool.CostExploreStatus()
+	// api_key 为空（未启用鉴权，公开监听风险面）时脱敏 accounts：全量账号列表
+	// （uid/昵称/模型成本台账）对任何能连到端口的人可见。计数汇总保留（够
+	// 负载均衡/探活用），逐账号明细只对配了 key 的部署透出。
+	accounts := h.cfg.Pool.List()
+	if h.loadLive().APIKey == "" {
+		accounts = nil
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"accounts":       h.cfg.Pool.List(),
+		"accounts":       accounts,
 		"total":          total,
 		"healthy":        healthy,
 		"cooling":        cooling,
@@ -357,6 +364,20 @@ func (h *Handler) upstreamQueueStatusPayload() any {
 		out["retry_after"] = int(info.RetryAfter.Seconds())
 	}
 	return out
+}
+
+// sanitizePassthroughHeader 入站透传头白名单：8-128 个可打印 ASCII（0x21-0x7E）。
+// 空串/超短/超长/含空白控制字符 → 返回空（调用方走生成/兜底路径）。
+func sanitizePassthroughHeader(v string) string {
+	if len(v) < 8 || len(v) > 128 {
+		return ""
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < 0x21 || v[i] > 0x7E {
+			return ""
+		}
+	}
+	return v
 }
 
 // countsMapFrom 把 CountsDetailed 五元组打包成 /status 的域分组建模。
@@ -931,8 +952,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	//     粘性 key 进程内稳定生成；粘性 key 也空时走轮级兜底（TurnKey/TurnRequestID），
 	//     无 user 消息时退化成本请求级随机——轮转内捕获一次即共享；
 	//   - messageID 在 ChatHeaders 内每条消息生成（消息级独立，无需外部可见）。
+	// 入站透传头白名单校验：客户端可控的任意串原样出站既是非官方指纹，异常值
+	// （超长/控制字符）还可能让每次出站变 transport error 触发无谓轮转罚号。
+	// 合法形态：8-128 个可打印 ASCII 字符；不合法一律丢弃走网关生成路径。
 	chatMeta := upstream.ChatMeta{ConversationID: session.ResolveConversationID(body)}
-	if v := r.Header.Get("X-Conversation-Request-ID"); v != "" {
+	if v := sanitizePassthroughHeader(r.Header.Get("X-Conversation-Request-ID")); v != "" {
 		chatMeta.ConversationRequestID = v
 	} else if turnKey != "" && sessKey != "" {
 		// 轮级复合键：sessKey 入键防跨会话同轮文本互撞（#170 统一轮级）。
@@ -947,7 +971,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 无会话键也无轮级键：请求级随机（轮转内捕获一次即共享）。
 		chatMeta.ConversationRequestID = session.TurnRequestID("")
 	}
-	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
+	chatMeta.TraceID = sanitizePassthroughHeader(r.Header.Get("X-Trace-ID"))
 
 	for i := 0; i < h.cfg.MaxRotate; i++ {
 		// 上游排队门控（queuegate.go）：门控激活期内**不发上游请求**直接回 429——

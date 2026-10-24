@@ -14,6 +14,7 @@
 package upstream
 
 import (
+	"context"
 	"io"
 	"log"
 	"os"
@@ -72,6 +73,57 @@ func (c *Client) dumpUpstream(rc io.ReadCloser, prepared []byte, a *auth.Auth) i
 // dumpName 用「时间-域-账号前 8 位」拼文件名：可排序、不落完整 UID。
 // 用 O_EXCL 打开，同毫秒撞名时后续那次直接失败（记 WARN 后不 dump），
 // 而不是覆盖前一份证据。
+// dumpRetentionDays dump 文件保留窗口：dump 内容含完整用户提示词与上游响应
+// （敏感数据），无限期留存既是磁盘增长点也是留存风险。启动时与每日一次清理。
+const dumpRetentionDays = 7
+
+// CleanDumpDir 清理超过保留窗口的 dump 文件（启动时与后台每日各一次）。
+// 文件名带毫秒时间戳前缀（dumpName），按前缀字典序即时间序——解析失败/无时间戳
+// 前缀的文件不动（可能是用户手放的对照样本）。
+func (c *Client) CleanDumpDir() {
+	if c.DumpDir == "" {
+		return
+	}
+	entries, err := os.ReadDir(c.DumpDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().AddDate(0, 0, -dumpRetentionDays).Format("20060102-150405")
+	removed := 0
+	for _, e := range entries {
+		name := e.Name()
+		if len(name) < 15 || name[:15] >= cutoff {
+			continue // 无时间戳前缀（<15 字符）或仍在窗口内
+		}
+		if os.Remove(filepath.Join(c.DumpDir, name)) == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		log.Printf("[upstream] dump 保留清理：删除 %d 个超过 %d 天的文件（%s）", removed, dumpRetentionDays, c.DumpDir)
+	}
+}
+
+// StartDumpCleaner 后台每日清理（随 ctx 退出）。
+func (c *Client) StartDumpCleaner(ctx context.Context) {
+	if c.DumpDir == "" {
+		return
+	}
+	c.CleanDumpDir() // 启动即清一次
+	go func() {
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				c.CleanDumpDir()
+			}
+		}
+	}()
+}
+
 func dumpName(a *auth.Auth) string {
 	tag := "unknown"
 	if a != nil {

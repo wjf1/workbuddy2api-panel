@@ -406,6 +406,11 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// dump 保留清理（7 天窗口，启动即清 + 每日一次）：dump 内容含完整提示词与
+	// 响应，无限期留存既是磁盘增长点也是敏感数据留存风险。
+	up.StartDumpCleaner(ctx)
+	defer stop()
 	go sch.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
 	// 回收站过期清理（启动即清一次 + 每小时巡检）与每日定时备份循环。
