@@ -8,14 +8,15 @@ import (
 	"testing"
 )
 
-// TestCreditFloorDefault 键缺席 → 默认 0（保底关闭，行为与引入前一致）。
+// TestCreditFloorDefault 键缺席 → 默认 150（1.17.1 起：A 机验证值固化为出厂默认，
+// 每号留够免费模型额度；显式 0 可回退关闭）。
 func TestCreditFloorDefault(t *testing.T) {
 	c := Default()
 	if err := c.normalize(); err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if c.Pool.CreditFloor != 0 {
-		t.Errorf("credit_floor=%d want 0 (default off)", c.Pool.CreditFloor)
+	if c.Pool.CreditFloor != 150 {
+		t.Errorf("credit_floor=%d want 150 (factory default)", c.Pool.CreditFloor)
 	}
 }
 

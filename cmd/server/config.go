@@ -347,6 +347,9 @@ func Default() *Config {
 	c.Logging.RequestArchiveMaxMB = 100
 	// auths.strict_lease 缺省 true（同 Schedule 开关逻辑：键缺席保留默认，显式 false 才关）。
 	c.Auths.StrictLease = true
+	// 积分保底默认 150（1.17.1 起：A 机验证值——每号永远留够免费模型额度，防收费
+	// 模型打穿后 402 硬冷却连免费都不可用；显式 0 可回退关闭）。
+	c.Pool.CreditFloor = 150
 	// 批量判死告警缺省值（webhook_url 缺省空 = 仅横幅；数值 <=0 由 alert.SetConfig 归一，
 	// 这里显式写默认便于配置页展示与文档对齐）。
 	c.Notify.MassKillAccounts = 3
@@ -379,11 +382,14 @@ func Default() *Config {
 	c.Schedule.KeepaliveEnabled = true
 	c.Schedule.BlackcatEnabled = true
 	c.Schedule.BalanceRefreshEnabled = true
-	c.Schedule.BalanceRefreshMinutes = 5
-	// M5 抖动默认 20 分钟（0 = 关闭齐射）；M7 保活默认 daily（兼容，README 推荐 smart）；
-	// M8 探活默认关闭（probe_dead_hours 空——探死请求本身是上游可观测特征）。
+	// 余额刷新默认 10 分钟（1.17.1 起：A 机验证值——小时级趋势粒度下 5 分钟过度，
+	// 上游可见调用频率减半；显式 5 可回退）。
+	c.Schedule.BalanceRefreshMinutes = 10
+	// M5 抖动默认 20 分钟（0 = 关闭齐射）；M7 保活默认 smart（1.17.1 起：RT 恒 60 天
+	// 滚动，每日全量强刷 ≈97% 冗余且构成齐射特征——A 机生产验证值固化为出厂默认；
+	// 显式 "daily" 可回退旧行为）；M8 探活默认关闭（probe_dead_hours 空）。
 	c.Schedule.JitterMinutes = 20
-	c.Schedule.KeepaliveMode = "daily"
+	c.Schedule.KeepaliveMode = "smart"
 	c.Schedule.SmartKeepaliveDays = 14
 	c.Upstream.TimeoutSeconds = 120
 	// HeaderTimeoutSeconds/IdleTimeoutSeconds 默认 0（未设置态），回落见 normalize()。
@@ -747,9 +753,10 @@ func (c *Config) normalize() error {
 		}
 		c.Pool.ModelFallback = clean
 	}
-	// M7 keepalive_mode 非法值回落 daily（用户手写错别字不至于静默变成 smart/daily 之外的第三态）。
+	// M7 keepalive_mode 非法值回落出厂默认 smart（用户手写错别字不至于静默变成
+	// 第三态；显式 "daily" 仍可回退旧行为）。
 	if c.Schedule.KeepaliveMode != "daily" && c.Schedule.KeepaliveMode != "smart" {
-		c.Schedule.KeepaliveMode = "daily"
+		c.Schedule.KeepaliveMode = "smart"
 	}
 	if c.Schedule.SmartKeepaliveDays <= 0 {
 		c.Schedule.SmartKeepaliveDays = 14
@@ -760,7 +767,7 @@ func (c *Config) normalize() error {
 	// 余额后台刷新：启用时 minutes<=0 回落默认 5；关闭时 interval 保持 0（不启动）。
 	if c.Schedule.BalanceRefreshEnabled {
 		if c.Schedule.BalanceRefreshMinutes <= 0 {
-			c.Schedule.BalanceRefreshMinutes = 5
+			c.Schedule.BalanceRefreshMinutes = 10
 		}
 		c.BalanceRefreshInterval = time.Duration(c.Schedule.BalanceRefreshMinutes) * time.Minute
 	}

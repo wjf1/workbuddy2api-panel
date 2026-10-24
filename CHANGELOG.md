@@ -4,6 +4,27 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.17.1-panel] - 2026-10-24
+
+本版为**出厂默认配置对齐**：把 A 机生产验证过的运维值固化为 `Default()` 出厂默认与 `config.example.json` 参考配置（「默认是否最优」评估的落地）。
+
+### 变更（⚠ 默认值变更，升级即生效于「未显式配置」的部署）
+
+- **`schedule.keepalive_mode` 出厂默认 `daily` → `smart`**：RT 恒 60 天滚动，每日全量强刷 ≈97% 冗余且构成齐射特征（10-23 批量吊销的可疑形态）。未显式配置的部署升级后自动进入 smart（只刷 14 天内临期号）；显式 `"daily"` 可回退。normalize 的非法值回落同步对齐出厂默认。
+- **`schedule.balance_refresh_minutes` 出厂默认 `5` → `10`**：小时级趋势粒度下 5 分钟过度采样，上游可见调用频率减半。未显式配置的部署升级后生效。
+- **`pool.credit_floor` 出厂默认 `0` → `150`**：每号永远留够免费模型额度，防收费模型打穿后 402 硬冷却连免费都不可用。**未显式配置的部署升级后保底从关闭变为开启**——不想要请显式 `"credit_floor": 0`。已显式配置的部署（如 A 机 150）无变化。
+
+### 显式说明
+
+- `prompt.mode` 出厂默认本就是 `passthrough`（对齐上游），与生产一致，不变。
+- 其余全部配置项（任务时点 / 抖动 / 冷却熔断参数 / sticky / backup / trash / notify / strict_lease）与生产生效值一致，未动。
+- **A 机生产无需升级**（三项已显式配置为相同值，1.17.1 无其他行为变化）。
+
+### 验证
+
+- `go test ./... -count=1` 全绿（25 包）；`TestCreditFloorDefault` / `TestBalanceRefreshDefaults` 随默认值更新（含显式回退用例：5 分钟 / 0 保底仍合法）。
+- `config.example.json` 三值对齐。
+
 ## [1.17.0-panel] - 2026-10-24
 
 本版为**路由与护栏能力版**（对标 `ardeyouxipianyi/workbuddy2api-hub` 与同源上游 `misakano7545/workbuddy2api-panel` 的 P1 清单，落地四项；一项依赖上游接口实测顺延）。

@@ -624,42 +624,50 @@ func TestWriteDefault(t *testing.T) {
 }
 
 func TestBalanceRefreshDefaults(t *testing.T) {
-	// 缺省：启用 + 30 分钟
+	// 缺省：启用 + 10 分钟（1.17.1 起出厂默认）
 	c := Default()
 	if err := c.normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if !c.Schedule.BalanceRefreshEnabled || c.BalanceRefreshInterval != 5*time.Minute {
+	if !c.Schedule.BalanceRefreshEnabled || c.BalanceRefreshInterval != 10*time.Minute {
 		t.Errorf("default balance refresh: enabled=%v interval=%v", c.Schedule.BalanceRefreshEnabled, c.BalanceRefreshInterval)
 	}
-	// 显式配置 10 分钟
+	// 显式配置 5 分钟（回退旧行为仍合法）
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
-	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_minutes":10}}`), 0o600)
+	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_minutes":5}}`), 0o600)
 	c2, err := Load(fp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c2.BalanceRefreshInterval != 10*time.Minute {
-		t.Errorf("interval=%v want 10m", c2.BalanceRefreshInterval)
+	if c2.BalanceRefreshInterval != 5*time.Minute {
+		t.Errorf("interval=%v want 5m", c2.BalanceRefreshInterval)
 	}
-	// 显式关闭：interval 归零（不启动）
-	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_enabled":false}}`), 0o600)
+	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_minutes":10}}`), 0o600)
 	c3, err := Load(fp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c3.BalanceRefreshInterval != 0 {
-		t.Errorf("disabled interval=%v want 0", c3.BalanceRefreshInterval)
+	if c3.BalanceRefreshInterval != 10*time.Minute {
+		t.Errorf("interval=%v want 10m", c3.BalanceRefreshInterval)
 	}
-	// 启用但 minutes<=0 → 回落默认 30
-	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_minutes":-5}}`), 0o600)
+	// 显式关闭：interval 归零（不启动）
+	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_enabled":false}}`), 0o600)
 	c4, err := Load(fp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c4.BalanceRefreshInterval != 5*time.Minute {
-		t.Errorf("fallback interval=%v want 30m", c4.BalanceRefreshInterval)
+	if c4.BalanceRefreshInterval != 0 {
+		t.Errorf("disabled interval=%v want 0", c4.BalanceRefreshInterval)
+	}
+	// 启用但 minutes<=0 → 回落默认 10（1.17.1 起出厂默认）
+	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_minutes":-5}}`), 0o600)
+	c5, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c5.BalanceRefreshInterval != 10*time.Minute {
+		t.Errorf("fallback interval=%v want 10m", c5.BalanceRefreshInterval)
 	}
 }
 
