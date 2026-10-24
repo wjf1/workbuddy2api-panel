@@ -4,6 +4,40 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.18.0-panel] - 2026-10-24
+
+本版为**正确性与热路径加固**：全面代码审查（后端核心链路 / 支撑模块 / 前端单文件三路并行）后的第一批落地——P0 全部正确性问题 + P1 局部性能三项。
+
+### 修复（正确性）
+
+- **SSE 写出竞态补齐**（最严重，1.16.1 引入）：注释行透传与 `[DONE]` 收尾此前未走 `wmu` 互斥，与心跳 goroutine 并发写同一 ResponseWriter 是数据竞争；Anthropic 路径下 w 是 `anthropicStreamWriter`，并发 `Write` 同时 append 共享 buf 直接踩内存。
+- **`data:` 无空格形态**：SSE 规范允许 `data:` 后不带空格——此前该形态落入注释分支原样透传（绕过白名单、不计帧数），随后被误判空流补写伪造 error 帧（正文+假错误并发给客户端）。
+- **双层心跳抑制**：`upstream.heartbeatSuppressor` 约定接口——anthropicStreamWriter 实现后 StreamHint 层不再起心跳 goroutine（其 `: ping` 写给转换 writer 会被丢弃，纯白跑且徒增并发面）。
+- **`chatPaths` 空集兜底 panic → 防御性 error**：生产请求路径不得断连。
+- **web_search 多轮观测累加**：trace.stat 此前被每轮覆盖，归档只反映最后一轮（前几轮 token/credit/attempts 丢失）。
+- **state 落盘改锁外 IO**：saveLocked（持锁 Marshal+fsync+rename）拆为 persistState——磁盘被实时扫描拖慢时不再阻塞选号与状态查询（credithistory 死锁同款残留的最后清理）；写盘失败 dirty 复位自动重试。
+- **账号删除清理趋势历史**：Remove/SyncToDir 顺带清 creditHist——30 天裁剪只发生在该号下一次采样，已删号永不采样、点位无限滞留。
+- **余额轮询齐射**：RunBalanceRefreshNow 加 semaphore=4 并发上限 + 号间 200-600ms 随机延迟（M5 抖动消了任务时点齐射，漏了轮询内齐射）。
+- **探活可取消 + 异步**：不可取消的 time.Sleep 同步阻塞余额刷新循环与保活退避重试（死号多时一探几分钟）。
+- **抖动键加任务种类**：默认配置签到与旅行同为 [9,21] 点，共用 uid|day 键时同号两任务同秒双请求——「每号双请求齐射」特征未消净。
+- **备份时点 CST**：UTC 容器上 backup.hour=3 此前按宿主本地时判，实际 CST 11 点才跑。
+- **前端 3 处回落值补 esc**（日志频道/队列状态/fmtClock 失败原样返回）+ 两处授权页 `open()` 加 `'noopener'`（window.open 不享受隐式 noopener，授权页可拿 window.opener）。
+
+### 性能
+
+- overview 轮询消第二次全池 List 深拷贝（tagsByUID 复用已取快照）。
+- reqlog.Record 头插改尾插（O(1) 摊销，此前每请求搬移 ~100 条×~200B）；读侧反转保持 JSON 契约。
+- Classify 四组 marker 循环改 init 预计算小写表（错误风暴下每路径重算 ToLower 的纯浪费消除）。
+
+### 审查留档（后续迭代）
+
+- **v1.18.x 候选**（见 HANDOFF §4）：body 每请求 5+ 次全量 JSON 解析的收敛（与 chatCompletions 拆分一起做）、出站每轮转 3 个 parse+marshal 周期、每帧双份 JSON 解析；usage 时区统一 CST（涉存量桶键迁移，单独评估）；/status 在 api_key 为空时的账号拓扑脱敏；dump 目录保留策略；护栏触达率/保活退避水位/抖动分布的可观测透出。
+- **P2 重构清单**：chatCompletions 868 行拆五块（六个 fail-fast 4xx 分支是同一模板 5 份复制）、client.go 2553 行按域拆五文件、autotask 双口径三处散落收敛、config Default/normalize 双写漂移、前端 30 个全局变量与双授权流重复。
+
+### 验证
+
+- `go test ./... -count=1` 全绿（25 包）；`go build` / `go vet` 干净；`node --check` 与前端断言通过。
+
 ## [1.17.1-panel] - 2026-10-24
 
 本版为**出厂默认配置对齐**：把 A 机生产验证过的运维值固化为 `Default()` 出厂默认与 `config.example.json` 参考配置（「默认是否最优」评估的落地）。
