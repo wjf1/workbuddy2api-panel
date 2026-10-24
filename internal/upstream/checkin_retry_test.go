@@ -112,3 +112,30 @@ func TestUserResourceDetailedRetriesTransient500(t *testing.T) {
 		t.Fatalf("calls=%d want 2（1 次失败 + 1 次重试）", n)
 	}
 }
+
+// TestIsAlreadyCheckinRejectsProcessingReceipt（hub #596 对齐回归钉子）：上游
+// 「200 + code 10001 + 请求处理中，请勿重复操作」是**明确失败回执**，不得命中
+// 幂等成功判定——误判会让账号当天实际未签到却被记成 already。markers 只认
+// 「已签到 / already」两类真实幂等文案。
+func TestIsAlreadyCheckinRejectsProcessingReceipt(t *testing.T) {
+	processing := &Error{Kind: ErrClient, Status: 200, Msg: `{"code":10001,"msg":"请求处理中，请勿重复操作"}`}
+	if IsAlreadyCheckin(processing) {
+		t.Fatal("「请求处理中」失败回执不得判为幂等成功")
+	}
+	// 变体：上游英文文案形态（同样不含 already 字样之外的幂等语义）。
+	busy := &Error{Kind: ErrClient, Status: 200, Msg: `{"code":10001,"msg":"too many requests, please retry"}`}
+	if IsAlreadyCheckin(busy) {
+		t.Fatal("通用限流/繁忙回执不得判为幂等成功")
+	}
+	// 正例仍命中：真实幂等文案两类。
+	if !IsAlreadyCheckin(&Error{Kind: ErrClient, Status: 200, Msg: `{"code":10001,"msg":"您今天已签到"}`}) {
+		t.Fatal("「已签到」幂等文案应命中")
+	}
+	if !IsAlreadyCheckin(&Error{Kind: ErrClient, Status: 200, Msg: `{"code":10001,"msg":"already checked in today"}`}) {
+		t.Fatal("already 幂等文案应命中")
+	}
+	// 网络层错误不在此识别（既有契约）。
+	if IsAlreadyCheckin(errors.New("dial tcp: i/o timeout")) {
+		t.Fatal("网络层错误不得判为幂等成功")
+	}
+}

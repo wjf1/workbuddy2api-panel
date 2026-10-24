@@ -19,6 +19,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -167,6 +169,14 @@ type anthropicStreamWriter struct {
 	usage        map[string]any
 	// dsml 正文伪工具标记的流式过滤器（标记可能跨帧，holdback 处理）。
 	dsml *dsmlStreamFilter
+
+	// SSE 心跳（对齐 hub）：长思考模型推理期无输出时客户端/中间代理会读超时断连。
+	// 旁路 goroutine 定期发 Anthropic 官方 ping 事件（SDK 规范忽略），写侧经 wmu
+	// 与 event() 互斥。上游 OpenAI 帧经 StreamHint 写给本 writer 时夹带的 `: ping`
+	// 注释帧会被 handleFrame 丢弃（不带 data: 前缀，到不了客户端），故心跳由本层发。
+	wmu       sync.Mutex
+	hbStop    chan struct{}
+	hbStarted bool
 }
 
 type anthropicToolState struct {
@@ -510,6 +520,7 @@ func (s *anthropicStreamWriter) emitBlocks(blocks []any) {
 //   - 200 流正常收尾（无论 [DONE] 是否到达）：补发 message_delta/stop；
 //   - 非 200（上游/分类错误 JSON）：整体转换为 Anthropic 错误体。
 func (s *anthropicStreamWriter) finish() {
+	s.stopHeartbeat() // writer 生命周期终点：先停心跳再收尾（endWith 还要写帧，走 event 无碍）
 	if s.status != 0 && s.status != http.StatusOK {
 		s.writeConvertedError()
 		return
@@ -556,11 +567,19 @@ func (s *anthropicStreamWriter) ensureSSEHeaders() {
 }
 
 // event 写一条 Anthropic SSE 事件（event: name + data: json）并 flush。
+// 经 wmu 与心跳 goroutine 互斥（客户端写只有这两个来源，原子帧不撕裂）。
 func (s *anthropicStreamWriter) event(name string, payload map[string]any) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return
 	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	s.eventLocked(name, raw)
+}
+
+// eventLocked 实际写出（调用方必须持有 s.wmu）。
+func (s *anthropicStreamWriter) eventLocked(name string, raw []byte) {
 	s.ensureSSEHeaders()
 	if !s.headerWritten {
 		s.headerWritten = true
@@ -569,6 +588,52 @@ func (s *anthropicStreamWriter) event(name string, payload map[string]any) {
 	_, _ = io.WriteString(s.w, "event: "+name+"\ndata: "+string(raw)+"\n\n")
 	if s.flusher != nil {
 		s.flusher.Flush()
+	}
+	// 首帧已写出（200 头已落）→ 启动空闲心跳（幂等）。
+	s.startHeartbeat()
+}
+
+// anthropicPingInterval 流式空闲心跳间隔（与 upstream 侧 sseHeartbeatInterval 同语义同值）。
+// 包级变量仅供测试缩短间隔。
+var anthropicPingInterval = 15 * time.Second
+
+// startHeartbeat 启动空闲心跳：每 15s 发一条官方 ping 事件（Anthropic SDK 规范忽略）。
+// 首帧写出后启动（此时 200 头已发，ping 只走数据面）。幂等；finish 时停止。
+// 注意上游 OpenAI 帧经 StreamHint 写给本 writer 时若夹带 `: ping` 注释帧会被
+// handleFrame 丢弃（不带 data: 前缀，到不了客户端），故心跳必须由本层自己发。
+func (s *anthropicStreamWriter) startHeartbeat() {
+	if s.hbStarted {
+		return
+	}
+	s.hbStarted = true
+	s.hbStop = make(chan struct{})
+	go func() {
+		t := time.NewTicker(anthropicPingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.hbStop:
+				return
+			case <-t.C:
+				raw, err := json.Marshal(map[string]any{"type": "ping"})
+				if err != nil {
+					continue
+				}
+				s.wmu.Lock()
+				if !s.ended {
+					s.eventLocked("ping", raw)
+				}
+				s.wmu.Unlock()
+			}
+		}
+	}()
+}
+
+// stopHeartbeat 停止心跳 goroutine（finish 时调用；幂等）。
+func (s *anthropicStreamWriter) stopHeartbeat() {
+	if s.hbStop != nil {
+		close(s.hbStop)
+		s.hbStop = nil
 	}
 }
 

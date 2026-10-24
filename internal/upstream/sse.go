@@ -10,8 +10,15 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// sseHeartbeatInterval 流式透传的空闲心跳间隔：距上一次写出超过该时长即写一条
+// SSE 注释帧 `: ping`（规范保留语法，客户端忽略），防止长思考模型推理期间的
+// 读空闲被客户端 / 中间代理判超时断连。包级变量仅供测试缩短间隔。
+var sseHeartbeatInterval = 15 * time.Second
 
 // errEmptyStream 上游返回 200 但没有有效 SSE 数据帧（空流/只有注释/[DONE]）。
 // 用哨兵错误替代裸 fmt.Errorf：StreamHint 的调用方（handler 流式路径）需要区分
@@ -530,6 +537,39 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	// 一律补 chatcmpl-wb2api 哨兵，造成同流 id 分裂）。全流无真实 id → 才出现哨兵。
 	firstID := ""
 
+	// SSE 心跳（对齐 hub）：长思考模型推理 30s+ 无输出时，客户端或中间代理会因
+	// 读超时断连（表现为「对话中途断开」）。由旁路 goroutine 定期写 SSE 注释帧
+	// `: ping\n\n`——规范保留语法，EventSource / OpenAI SDK 的 SSE 解析器一律忽略，
+	// 仅保活链路。写侧经 wmu 与主循环互斥（注释帧原子写出不撕裂）；lastWriteAt
+	// 记录最近写出时刻，帧密集时 watchdog 跳过 tick（不给活跃流加噪音）。
+	// 客户端已断连时 watchdog 写失败静默——主循环下一次写会拿到错误走断连处置。
+	var wmu sync.Mutex
+	lastWriteAt := &atomic.Int64{}
+	touchWrite := func() { lastWriteAt.Store(time.Now().UnixNano()) }
+	hbDone := make(chan struct{})
+	defer close(hbDone)
+	go func() {
+		t := time.NewTicker(sseHeartbeatInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-hbDone:
+				return
+			case <-t.C:
+				if time.Since(time.Unix(0, lastWriteAt.Load())) < sseHeartbeatInterval {
+					continue // 活跃流：帧已密集，无需心跳
+				}
+				wmu.Lock()
+				_, _ = io.WriteString(w, ": ping\n\n")
+				if fl != nil {
+					fl.Flush()
+				}
+				wmu.Unlock()
+				touchWrite()
+			}
+		}
+	}()
+
 	// writeRaw 原样写出一帧（绕过 normalizeFrame）并 flush。上游 error 帧（error-passthrough）
 	// 与空流错误帧需保留 error 字段，不能被白名单剥掉，故经此写出。
 	// gateway_hint：上游 error 帧透出前按 hintFn 附加 error.gateway_hint 字段
@@ -539,13 +579,16 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 		if hint := frameGatewayHint(hintFn, payload); hint != "" {
 			payload = attachHintToErrorFrame(payload, hint)
 		}
-		if _, werr := io.WriteString(w, "data: "+payload+"\n\n"); werr != nil {
-			return werr
-		}
-		if fl != nil {
+		wmu.Lock()
+		_, werr := io.WriteString(w, "data: "+payload+"\n\n")
+		if werr == nil && fl != nil {
 			fl.Flush()
 		}
-		return nil
+		wmu.Unlock()
+		if werr == nil {
+			touchWrite()
+		}
+		return werr
 	}
 
 	// writeFrame 把 payload 按规范白名单重建后以 data: 帧写出并 flush。
@@ -577,29 +620,34 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 			}
 			// 先按 index 收敛 tool_calls name（每 index 仅首片保留，后续分片删 name 键），再规范化透传。
 			stripToolCallNames(obj, toolCallSeen)
-			// id 续传：首帧非空真实 id 缓存；后续帧缺 id / 空 id 一律用缓存值，
-			// 有自己 id 的帧保持原样（不同流分裂的帧允许各自 id）。
+			// id 续传：首帧非空真实 id 缓存；后续帧一律覆写为缓存值，整流保持
+			// 「一条响应一个 id」（OpenAI 流式规范）。此前口径是「缺 id 才补、
+			// 带不同 id 的帧保留原样」，但上游个别模型/线路确实存在流中 id 漂移
+			// 的形态（hub 实测 #607：客户端按 chunk id 管理流状态，id 变化会让
+			// 界面卡在「生成中」），对齐官方语义强制统一。error 帧走 writeRaw
+			// 原样透传，不经过这里。
 			if firstID == "" {
 				if v, ok := obj["id"].(string); ok && v != "" {
 					firstID = v
 				}
 			} else {
-				if v, ok := obj["id"].(string); !ok || v == "" {
-					obj["id"] = firstID
-				}
+				obj["id"] = firstID
 			}
 			if raw, err := json.Marshal(normalizeFrame(obj)); err == nil {
 				payload = string(raw)
 			}
 			valid = 1
 		}
-		if _, werr := io.WriteString(w, "data: "+payload+"\n\n"); werr != nil {
-			return 0, werr
-		}
-		if fl != nil {
+		wmu.Lock()
+		_, werr := io.WriteString(w, "data: "+payload+"\n\n")
+		if werr == nil && fl != nil {
 			fl.Flush()
 		}
-		return valid, nil
+		wmu.Unlock()
+		if werr == nil {
+			touchWrite()
+		}
+		return valid, werr
 	}
 
 	br := bufio.NewReaderSize(r, 64*1024)
