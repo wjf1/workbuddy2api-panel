@@ -88,6 +88,9 @@ type Pool struct {
 	// lastPersistOK / lastPersistErr 落盘健康（persistFails 此前只活在日志里）。
 	floorBlocks     atomic.Uint64
 	dailyLimitBlocks atomic.Uint64
+	// lastFallbackWarn 兜底选中 WARN 的节流时刻（time.Time 存 atomic.Value 太重，
+	// 用 UnixNano int64；零值 = 从未打过）。
+	lastFallbackWarn atomic.Int64
 	lastPersistOK   atomic.Int64 // Unix 秒；0 = 尚未写过
 	lastPersistErr  atomic.Value // string
 	// 余额趋势历史（v1.17.0 ③）：uid → 小时桶采样序列，独立文件落盘（观测数据）。

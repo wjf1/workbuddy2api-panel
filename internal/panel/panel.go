@@ -821,7 +821,7 @@ func (p *Panel) checkinAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go p.cfg.Scheduler.RunCheckinNow()
-	log.Printf("panel: 手动全量签到已触发（含猫猫旅行）")
+	log.Printf("panel: 手动全量签到已触发（签到 + 余额 + 连登管家；旅行为独立排程）")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 

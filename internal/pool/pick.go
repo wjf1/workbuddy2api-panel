@@ -335,7 +335,14 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 	if best == nil {
 		return nil
 	}
-	log.Printf("WARN: [pool] fallback_earliest_expiry acct=%s until=%s kind=%s", logfmt.Label(best.a.UID, best.a.Nickname), best.expiry(now).Format(time.RFC3339), best.fallbackKind(now))
+	// 兜底命中 WARN 节流（5 分钟一条）：池降级期（全池冷却+持续流量）每条 chat
+	// 请求都会走到这里，逐条打日志是刷屏形态；状态本身经 pick 计数与 /status
+	// 可见，日志只需提示「正在兜底」这一事实。
+	if nowN := now.UnixNano(); nowN-p.lastFallbackWarn.Load() > int64(5*time.Minute) {
+		if p.lastFallbackWarn.CompareAndSwap(p.lastFallbackWarn.Load(), nowN) {
+			log.Printf("WARN: [pool] fallback_earliest_expiry acct=%s until=%s kind=%s（同类日志 5 分钟内节流）", logfmt.Label(best.a.UID, best.a.Nickname), best.expiry(now).Format(time.RFC3339), best.fallbackKind(now))
+		}
+	}
 	best.lastUsed = time.Now()
 	// 兜底同样是「选中」，必须与 pick() 正常路径、粘性命中路径（PickByUIDForModel）
 	// 一样推进 usedSeq/pickSeq：否则被兜底反复选中的账号 usedSeq 恒为 0，在 pick 的

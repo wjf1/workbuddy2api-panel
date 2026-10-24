@@ -322,19 +322,19 @@ func main() {
 	// 闭包执行时 pn 已完成装配（首次保存必然发生在面板可用之后）。
 	var pn *panel.Panel
 	pn = panel.New(panel.Config{
-		Pool:        p,
-		Alert:       alertMgr,
+		Pool:          p,
+		Alert:         alertMgr,
 		OnLoginRotate: rotRec.Reset,
-		Usage:       rec,
-		RequestLog:  requestLog,
-		Upstream:    up,
-		Scheduler:   sch,
-		AuthDir:     cfg.AuthDir,
-		APIKey:      cfg.APIKey,
-		RedisMode:   redisMode,
-		StickyCount: sessCount,
-		Version:     appVersion,
-		Live:        live,
+		Usage:         rec,
+		RequestLog:    requestLog,
+		Upstream:      up,
+		Scheduler:     sch,
+		AuthDir:       cfg.AuthDir,
+		APIKey:        cfg.APIKey,
+		RedisMode:     redisMode,
+		StickyCount:   sessCount,
+		Version:       appVersion,
+		Live:          live,
 		// 回收站与备份目录：均落 state 文件同目录（data/，Docker 已挂载的持久化卷），
 		// 容器销毁不丢已删除凭证 / 备份。
 		TrashDir:           stateSibling(cfg.StateFile, "trash"),
@@ -373,19 +373,19 @@ func main() {
 
 	h := server.NewHandler(server.Config{
 		GetKeepaliveStats: func() any { return sch.KeepaliveStats() },
-		Pool:         p,
-		Upstream:     up,
-		APIKey:       cfg.APIKey,
-		Session:      sessRouter,
-		StickyCount:  sessCount,
-		RedisMode:    redisMode,
-		SoftCooldown: cfg.SoftRateDur,
-		Panel:        pn,
-		Live:         live,
-		Usage:        rec,
-		RequestLog:   requestLog,
-		PromptMode:   cfg.Prompt.Mode,
-		PromptText:   cfg.PromptText,
+		Pool:              p,
+		Upstream:          up,
+		APIKey:            cfg.APIKey,
+		Session:           sessRouter,
+		StickyCount:       sessCount,
+		RedisMode:         redisMode,
+		SoftCooldown:      cfg.SoftRateDur,
+		Panel:             pn,
+		Live:              live,
+		Usage:             rec,
+		RequestLog:        requestLog,
+		PromptMode:        cfg.Prompt.Mode,
+		PromptText:        cfg.PromptText,
 		// 来源记录开关经 livecfg 热生效；此处同时填静态字段，供 Live 为 nil 的
 		// 裸用/测试路径拿到同一缺省值。
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
@@ -554,6 +554,9 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		return nil, fmt.Errorf("parse submitted config: %w", err)
 	}
 	merged := mergeConfigMaps(cur, incoming)
+	// 旧配置解析（供重启字段 diff：只列「本次真正变化」的装配期字段，此前恒返回
+	// 全清单——用户改一个热生效项也被告知十几项要重启，提示被稀释成噪声）。
+	oldCfg, _ := ParseConfig(oldRaw)
 
 	// 2) 校验（与启动同一套 Default+normalize），失败直接返回、不落盘。
 	newCfg, err := ParseConfig(mergedJSON(merged))
@@ -641,36 +644,44 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	sch.SetKeepaliveSmart(newCfg.Schedule.KeepaliveMode == "smart", newCfg.Schedule.SmartKeepaliveDays)
 	sch.SetProbeDeadHours(newCfg.Schedule.ProbeDeadHours)
 
-	return restartRequiredFields(newCfg), nil
+	return restartRequiredDiff(oldCfg, newCfg), nil
 }
 
-// restartRequiredFields 返回本次改动中无法热生效、需要重启进程的字段名。
-// 恒返回完整清单中的"与当前进程装配期依赖相关"的项——面板据此提示用户。
-func restartRequiredFields(c *Config) []string {
+// restartRequiredDiff 逐字段比较新旧配置，只列出**真正变化**的装配期字段（此前
+// restartRequiredFields 恒返回全清单）。字段清单同旧函数 + 补漏：prompt.mode/file、
+// upstream.client_version/cli_version/client_name/device_token*、upstream.dump_dir
+// （装配期捕获且无热应用路径的字段）。
+func restartRequiredDiff(oldC, newC *Config) []string {
 	var out []string
-	// 这些字段在进程内被监听地址/HTTP client/目录句柄等装配期对象捕获。
-	if c.Listen != "" {
-		out = append(out, "listen")
+	add := func(changed bool, name string) {
+		if changed {
+			out = append(out, name)
+		}
 	}
-	if c.AuthDir != "" {
-		out = append(out, "auth_dir")
-	}
-	if c.StateFile != "" {
-		out = append(out, "state_file")
-	}
-	out = append(out, "upstream.timeout_seconds", "upstream.header_timeout_seconds", "upstream.idle_timeout_seconds")
-	// upstream.user_agent 在装配期被写进出站 client（main.go 的 up.UserAgent = ...），
-	// 之后不再读取——不在 livecfg 热快照里，也无法热改。此前漏列，导致面板改完
-	// 显示"已保存"却不提示需要重启，用户以为没生效（issue #102 附带发现 2）。
-	out = append(out, "upstream.user_agent")
-	if c.Upstash.URL != "" || c.Upstash.Token != "" {
-		out = append(out, "upstash")
-	}
-	out = append(out, "session_sticky.ttl", "session_sticky.gc_interval")
-	out = append(out, "logging.request_archive_enabled", "logging.request_retention_days", "logging.request_archive_max_mb")
-	out = append(out, "server.read_timeout")
-	// auths.strict_lease 只在启动 Acquire 时读一次，热改无意义。
-	out = append(out, "auths.strict_lease")
+	add(oldC.Listen != newC.Listen, "listen")
+	add(oldC.AuthDir != newC.AuthDir, "auth_dir")
+	add(oldC.StateFile != newC.StateFile, "state_file")
+	add(oldC.Upstream.TimeoutSeconds != newC.Upstream.TimeoutSeconds, "upstream.timeout_seconds")
+	add(oldC.Upstream.HeaderTimeoutSeconds != newC.Upstream.HeaderTimeoutSeconds, "upstream.header_timeout_seconds")
+	add(oldC.Upstream.IdleTimeoutSeconds != newC.Upstream.IdleTimeoutSeconds, "upstream.idle_timeout_seconds")
+	add(oldC.Upstream.UserAgent != newC.Upstream.UserAgent, "upstream.user_agent")
+	add(oldC.Upstream.ClientVersion != newC.Upstream.ClientVersion, "upstream.client_version")
+	add(oldC.Upstream.CliVersion != newC.Upstream.CliVersion, "upstream.cli_version")
+	add(oldC.Upstream.ClientName != newC.Upstream.ClientName, "upstream.client_name")
+	add(oldC.Upstream.DeviceToken != newC.Upstream.DeviceToken, "upstream.device_token")
+	add(oldC.Upstream.DeviceTokenFile != newC.Upstream.DeviceTokenFile, "upstream.device_token_file")
+	add(oldC.Upstream.DumpDir != newC.Upstream.DumpDir, "upstream.dump_dir")
+	add(oldC.Upstream.DumpMaxBytes != newC.Upstream.DumpMaxBytes, "upstream.dump_max_bytes")
+	add(oldC.Upstash.URL != newC.Upstash.URL || oldC.Upstash.Token != newC.Upstash.Token, "upstash")
+	add(oldC.SessionTTL != newC.SessionTTL, "session_sticky.ttl")
+	add(oldC.SessionGCInterval != newC.SessionGCInterval, "session_sticky.gc_interval")
+	add(oldC.Logging.RequestArchiveEnabled != newC.Logging.RequestArchiveEnabled, "logging.request_archive_enabled")
+	add(oldC.Logging.RequestRetentionDays != newC.Logging.RequestRetentionDays, "logging.request_retention_days")
+	add(oldC.Logging.RequestArchiveMaxMB != newC.Logging.RequestArchiveMaxMB, "logging.request_archive_max_mb")
+	add(oldC.ServerReadTimeoutDur != newC.ServerReadTimeoutDur, "server.read_timeout")
+	add(oldC.Auths.StrictLease != newC.Auths.StrictLease, "auths.strict_lease")
+	add(oldC.Prompt.Mode != newC.Prompt.Mode, "prompt.mode")
+	add(oldC.Prompt.File != newC.Prompt.File, "prompt.file")
 	return out
 }
 

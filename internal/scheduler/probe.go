@@ -71,8 +71,8 @@ func (s *Scheduler) runProbeDead(ctx context.Context) int {
 // probeOne 单号探测：refresh 成功即复活。
 func (s *Scheduler) probeOne(st pool.Status, a *auth.Auth) {
 	if err := s.cfg.Upstream.RefreshToken(a, "probe"); err != nil {
-		// 失败静默：死号探测失败是预期态，不刷日志不计数（NoteSessionDead 不碰）。
-		log.Printf("probe %s: 仍失效（%v）", logfmt.Label(st.UID, st.Nickname), err)
+		// 失败静默：死号探测失败是预期态（长期全失效时每号每小时一行是固定噪声，
+		// 收尾已有「本小时探测 N 个死号」汇总行，这里不再逐号打）。
 		return
 	}
 	// 上游接受了刷新：会话已恢复（此前误吊销解除）。仅清禁用与 12153 计数，
