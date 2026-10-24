@@ -531,7 +531,9 @@ function renderQueueBox(d) {
 /* fmtClock ISO 串 → 本地 HH:MM:SS（解析失败原样返回，不抛）。 */
 function fmtClock(iso) {
   const t = Date.parse(iso);
-  if (isNaN(t)) return iso;
+  // 解析失败返回占位符：此前原样返回 iso，拼入 killList.innerHTML 时未转义
+  // （后端字段注入面）；'—' 同时避免把长错误串当时刻展示。
+  if (isNaN(t)) return '—';
   const dt = new Date(t);
   return String(dt.getHours()).padStart(2, '0') + ':' +
     String(dt.getMinutes()).padStart(2, '0') + ':' + String(dt.getSeconds()).padStart(2, '0');
@@ -941,7 +943,7 @@ async function loadLogs() {
       ? entries.map(e => {
         const lvl = /error|失败|错误/.test(e.text) ? ' e' : /warn|冷却|熔断/.test(e.text) ? ' w' : '';
         const t = e.ts ? new Date(e.ts).toLocaleTimeString('zh-CN', { hour12: false }) : '';
-        const ch = logCh === 'all' ? '<i class="lch c-' + esc(e.ch) + '">' + ({ task: '任务', chat: '对话', sys: '系统' }[e.ch] || e.ch) + '</i>' : '';
+        const ch = logCh === 'all' ? '<i class="lch c-' + esc(e.ch) + '">' + ({ task: '任务', chat: '对话', sys: '系统' }[e.ch] || esc(e.ch)) + '</i>' : '';
         return '<span class="ln' + lvl + '">' + ch + esc(t + ' ' + e.text) + '</span>';
       }).join('')
       : '<span style="color:var(--ink-3)">暂无日志</span>';
@@ -1332,7 +1334,7 @@ async function pollLogin() {
 function closeAdd() { stopPoll(); loginState = null; $('addVeil').classList.remove('on'); }
 $('btnCloseAdd').onclick = closeAdd;
 $('btnStartLogin').onclick = startAddLogin;
-$('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank');
+$('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank', 'noopener');
 $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textContent)
   .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
 
@@ -1407,7 +1409,7 @@ function closeRelogin() {
 }
 $('btnCloseRelogin').onclick = closeRelogin;
 $('btnStartRelogin').onclick = startRelogin;
-$('btnOpenReloginUrl').onclick = () => open($('reloginUrl').textContent, '_blank');
+$('btnOpenReloginUrl').onclick = () => open($('reloginUrl').textContent, '_blank', 'noopener');
 $('btnCopyReloginUrl').onclick = () => navigator.clipboard.writeText($('reloginUrl').textContent)
   .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
 $('importFile').onchange = async () => {
@@ -2220,7 +2222,8 @@ function qrowHTML(it) {
   const isSchool = it.kind === 'school';
   const title = isSchool ? '开学季闭环' : (GROWTH_TITLES[it.code] || it.code);
   const dotCls = it.status === 'scan' ? 'wait' : it.status === 'running' ? 'run' : it.status === 'error' ? 'err' : it.status === 'skipped' ? 'skip' : it.status === 'done' ? 'done' : 'wait';
-  const stWord = it.status === 'scan' ? '待执行' : (ST_WORDS[it.status] || it.status);
+  // 回落值包 esc：it.status 是后端字段，此前未映射值直接拼进 innerHTML。
+  const stWord = it.status === 'scan' ? '待执行' : (ST_WORDS[it.status] || esc(it.status));
   return '<div class="qrow" title="' + esc(it.message || '') + '">' +
     '<span class="code">' + esc(it.code) + '</span>' +
     '<span class="name"><span class="t">' + esc(title) + '</span>' + (isSchool ? '<span class="tag mute">开学季</span>' : '') + '</span>' +
