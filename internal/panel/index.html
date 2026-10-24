@@ -311,8 +311,13 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 .rate-limit.model-unavailable { border-color: var(--line); background: var(--surface-2); color: var(--ink-3); }
 .rate-limit b { color: var(--ink); font-family: var(--mono); font-weight: 600; }
 .rate-limit span { color: var(--ink-2); }
-.acts { display: flex; gap: 5px; justify-content: flex-end; white-space: nowrap; }
+/* 操作列左对齐：不同状态的行按钮集合不同（暂停选号 / 重登+解冻 / 仅解冻），右对齐
+   会让「签到」的起始位置逐行漂移，竖着看整列错位。左对齐后 签到/余额/任务/标签/
+   变体按钮（重登·解冻·暂停选号）各占稳定竖列；「移除」用 margin-left:auto 单独
+   钉在本列最右，各行同一位置（破坏性操作固定 + 与其余按钮自然分隔）。 */
+.acts { display: flex; gap: 5px; justify-content: flex-start; white-space: nowrap; }
 .acts button { padding: 3.5px 8px; font-size: 12.5px; white-space: nowrap; flex: none; }
+.acts button[data-a="remove"] { margin-left: auto; }
 
 .empty { padding: 40px 20px; text-align: center; color: var(--ink-3); }
 .empty .big { font-size: 14px; color: var(--ink-2); margin-bottom: 6px; }
