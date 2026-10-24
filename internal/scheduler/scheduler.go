@@ -590,7 +590,7 @@ func (s *Scheduler) runCheckinScheduled(ctx context.Context) {
 	expiringSoon := s.ExpiringSoonWindow()
 	start := time.Now()
 	for _, st := range s.cfg.Pool.List() {
-		if !s.sleepJitter(ctx, st.UID, st.Nickname, start) {
+		if !s.sleepJitterKind(ctx, st.UID, st.Nickname, "checkin", start) {
 			return // 优雅停机
 		}
 		s.checkinOne(st, expiringSoon)
@@ -625,7 +625,7 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 		if a == nil || a.AccessTokenValue() == "" {
 			continue
 		}
-		wait := s.jitterWaitFor(st.UID, start)
+		wait := s.jitterWaitFor(st.UID, "activity", start)
 		if !first && wait < activityAccountDelay {
 			wait = activityAccountDelay
 		}
@@ -738,7 +738,7 @@ func (s *Scheduler) runKeepaliveScheduled(ctx context.Context) {
 			skipped++
 			continue
 		}
-		if !s.sleepJitter(ctx, st.UID, st.Nickname, start) {
+		if !s.sleepJitterKind(ctx, st.UID, st.Nickname, "keepalive", start) {
 			return
 		}
 		s.keepaliveOne(st, a)

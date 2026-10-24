@@ -56,12 +56,13 @@ func (s *Scheduler) jitterMin() int {
 
 // jitterWaitFor 返回 uid 从 start 起应等待的时长：offset - elapsed（保证每号
 // 在任务起点的第 offset 秒执行，避免顺序累计漂移）；不为负。jitter 关闭返回 0。
-func (s *Scheduler) jitterWaitFor(uid string, start time.Time) time.Duration {
+// kind 透传任务种类（同号不同任务不同偏移点，见 jitterOffsetKind）。
+func (s *Scheduler) jitterWaitFor(uid, kind string, start time.Time) time.Duration {
 	j := s.jitterMin()
 	if j <= 0 {
 		return 0
 	}
-	wait := jitterOffset(uid, cst.Now().Format("2006-01-02"), j) - time.Since(start)
+	wait := jitterOffsetKind(uid, cst.Now().Format("2006-01-02"), kind, j) - time.Since(start)
 	if wait <= 0 {
 		return 0
 	}
@@ -71,7 +72,12 @@ func (s *Scheduler) jitterWaitFor(uid string, start time.Time) time.Duration {
 // sleepJitter 等到 uid 的抖动偏移点（相对 start）；ctx 取消返回 false。
 // 偏移 > 0 时打一行派发日志（排查「任务几点跑的」时对得上号）。
 func (s *Scheduler) sleepJitter(ctx context.Context, uid, nickname string, start time.Time) bool {
-	wait := s.jitterWaitFor(uid, start)
+	return s.sleepJitterKind(ctx, uid, nickname, "", start)
+}
+
+// sleepJitterKind 带任务种类的抖动等待（kind 见 jitterOffsetKind）。
+func (s *Scheduler) sleepJitterKind(ctx context.Context, uid, nickname, kind string, start time.Time) bool {
+	wait := s.jitterWaitFor(uid, kind, start)
 	if wait > 30*time.Second {
 		log.Printf("jitter %s: 延迟 %s 后执行（打散整点齐射）", logfmt.Label(uid, nickname), wait.Round(time.Second))
 	}

@@ -80,7 +80,7 @@ func (s *Scheduler) runTravelScheduled(ctx context.Context) {
 		if a.IsGlobal() {
 			continue // D4 门控：global 无 CN 任务体系，不发起任何上游调用
 		}
-		wait := s.jitterWaitFor(st.UID, start)
+		wait := s.jitterWaitFor(st.UID, "travel", start)
 		if wait < travelAccountDelay {
 			wait = travelAccountDelay
 		}
