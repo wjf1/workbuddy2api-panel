@@ -162,9 +162,22 @@ button.danger { color: var(--bad); }
 button.danger:hover:not(:disabled) { border-color: var(--bad); }
 button.xs { padding: 3.5px 9px; font-size: 12.5px; border-radius: 6px; white-space: nowrap; }
 /* select.xs：header 里的紧凑选择框。通用 input/select 规则是 width:100%（表单页用），
-   header 里若不收窄会把同行 note 挤到换行——收成内容宽并压小外观，与 button.xs 同款。 */
-select.xs { width: auto; padding: 3.5px 9px; font-size: 12.5px; border-radius: 6px; }
+   header 里若不收窄会把同行 note 挤到换行——收成内容宽并压小外观，与 button.xs 同款。
+   上下内边距比 button.xs 多 1px：select 的内容盒由原生选项行高决定，同字号下比
+   button/input 矮 2px，补齐后三种控件严格同高（实测 27.7px）。 */
+select.xs { width: auto; padding: 4.5px 9px; font-size: 12.5px; border-radius: 6px; }
 button.icon { padding: 7px 9px; }
+/* input.xs：与 select.xs / button.xs 同规格的紧凑输入框（账号池头部搜索框用）。
+   三种控件同高同字号，头部工具栏不再高矮不齐。 */
+input.xs { width: auto; padding: 3.5px 9px; font-size: 12.5px; border-radius: 6px; }
+#accFilterQ { width: 170px; flex: none; }
+/* 空状态注记不占 flex gap 位：#accNote 平时为空串，占位会让「全部标签」与
+   「全部签到」之间凭空多出一截间隙（间隙大小随 note 有无跳动）。 */
+#accNote:empty { display: none; }
+/* 账号池视图卡片头部允许换行：860px 断点只降级了表格列，头部工具栏此前没有
+   换行能力，窄屏下搜索/筛选/批量按钮整排被 .box 的 overflow:hidden 裁掉
+   （实测 820px 视口溢出 319px，右侧按钮不可点）。 */
+#view-accounts .box > header { flex-wrap: wrap; }
 input, select {
   font: inherit; color: var(--ink); background: var(--surface-2);
   border: 1px solid var(--line); border-radius: 7px; padding: 7px 11px; width: 100%;
@@ -728,13 +741,13 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <header>
           <h3>账号池</h3>
           <span class="grow"></span>
-          <input id="accFilterQ" type="search" placeholder="筛选：昵称 / uid" style="width:150px;margin-right:6px" title="按昵称或 uid 过滤账号列表">
-          <select id="accFilterSt" style="margin-right:6px" title="按账号状态过滤">
+          <input id="accFilterQ" class="xs" type="search" placeholder="筛选：昵称 / uid" title="按昵称或 uid 过滤账号列表">
+          <select id="accFilterSt" class="xs" title="按账号状态过滤">
             <option value="">全部状态</option>
             <option value="dead">待重登 / 封号（失效号）</option>
             <option value="ok">可用正常</option>
           </select>
-          <select id="accFilterTag" style="margin-right:6px" title="按标签过滤账号列表"><option value="">全部标签</option></select>
+          <select id="accFilterTag" class="xs" title="按标签过滤账号列表"><option value="">全部标签</option></select>
           <span class="note" id="accNote"></span>
           <button class="xs" id="btnCheckinAll" title="立即对全部账号执行一次签到：签到 + 刷新余额（余额恢复的冷却账号自动解冻），随后自动兑换连登已解锁档位、用完抽奖次数。等同提前跑一次每日定时签到（默认 9 / 21 点）。">全部签到</button>
           <button class="xs" id="btnTravelAll" title="立即推进猫猫旅行：没领猫的自动同意协议并领养、在家的派出旅行、已到达的领取奖励。等同提前跑一次每日定时旅行（默认 9 / 21 点）。">旅行巡检</button>
@@ -1428,7 +1441,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     <footer>
       <button id="btnTrashPurgeAll" class="xs ghost danger" title="彻底删除回收站内全部凭证，不可恢复">清空回收站</button>
       <span class="grow"></span>
-      <button id="btnCloseTrash">关闭</button>
+      <button id="btnCloseTrash" class="xs">关闭</button>
     </footer>
   </div>
 </div>

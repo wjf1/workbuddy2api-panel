@@ -621,7 +621,7 @@ function renderTrend() {
       return '<circle cx="' + X(p.t).toFixed(1) + '" cy="' + Y(p.c).toFixed(1) + '" r="2.2" fill="var(--ok, #3a9)"><title>' + fmtT(p.t) + ' | 全池 ' + v + ' 分</title></circle>';
     }).join('') +
     '</svg>' +
-    '<div class="hint" style="margin-top:4px;display:flex;justify-content:space-between">' +
+    '<div class="hint" style="margin-top:4px;display:flex;justify-content:space-between;font-variant-numeric:tabular-nums">' +
     '<span>' + fmtT(t0) + '</span><span>区间 ' + fmtV(vMin) + ' ~ ' + fmtV(vMax) + ' 分 · ' + pts.length + ' 个小时点</span><span>' + fmtT(t1) + '</span></div>';
   note.textContent = d.days + ' 天窗口 · ' + (d.series || []).length + ' 号';
 }
