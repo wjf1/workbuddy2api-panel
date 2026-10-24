@@ -490,7 +490,14 @@ type StreamOption func(*streamOptions)
 type streamOptions struct {
 	onErrorFrame func(payload string)
 	echoModel    string
+	// noHeartbeat 禁用本层 SSE 心跳（供上层自带心跳的转换 writer 用——Anthropic
+	// 路径的 anthropicStreamWriter 会把注释帧丢弃，本层心跳纯属白跑且徒增并发面）。
+	noHeartbeat bool
 }
+
+// heartbeatSuppressor 由自带心跳的 ResponseWriter 实现以禁用 StreamHint 层心跳
+// （方法名小写：约定接口，不进公共 API 面）。
+type heartbeatSuppressor interface{ heartbeatSuppressed() bool }
 
 // WithModelEcho 强制所有出站帧的顶层 model 字段为 name（模型映射 models.aliases）。
 //
@@ -548,27 +555,34 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	touchWrite := func() { lastWriteAt.Store(time.Now().UnixNano()) }
 	hbDone := make(chan struct{})
 	defer close(hbDone)
-	go func() {
-		t := time.NewTicker(sseHeartbeatInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-hbDone:
-				return
-			case <-t.C:
-				if time.Since(time.Unix(0, lastWriteAt.Load())) < sseHeartbeatInterval {
-					continue // 活跃流：帧已密集，无需心跳
+	if hp, ok := w.(heartbeatSuppressor); ok && hp.heartbeatSuppressed() {
+		o.noHeartbeat = true
+	}
+	if !o.noHeartbeat {
+		// 上层自带心跳时（如 anthropicStreamWriter 的官方 ping 事件）不起 goroutine：
+		// 本层 `: ping` 写给转换 writer 会被其 handleFrame 丢弃，纯白跑且徒增并发面。
+		go func() {
+			t := time.NewTicker(sseHeartbeatInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-hbDone:
+					return
+				case <-t.C:
+					if time.Since(time.Unix(0, lastWriteAt.Load())) < sseHeartbeatInterval {
+						continue // 活跃流：帧已密集，无需心跳
+					}
+					wmu.Lock()
+					_, _ = io.WriteString(w, ": ping\n\n")
+					if fl != nil {
+						fl.Flush()
+					}
+					wmu.Unlock()
+					touchWrite()
 				}
-				wmu.Lock()
-				_, _ = io.WriteString(w, ": ping\n\n")
-				if fl != nil {
-					fl.Flush()
-				}
-				wmu.Unlock()
-				touchWrite()
 			}
-		}
-	}()
+		}()
+	}
 
 	// writeRaw 原样写出一帧（绕过 normalizeFrame）并 flush。上游 error 帧（error-passthrough）
 	// 与空流错误帧需保留 error 字段，不能被白名单剥掉，故经此写出。
@@ -657,24 +671,34 @@ readLoop:
 		line, err := br.ReadString('\n')
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
-		case strings.HasPrefix(trimmed, "data: [DONE]"):
+		case sseDoneFrame(trimmed):
 			// 上游显式结束：停止读取，DONE 之后的任何数据（含垃圾帧）一律不再透传。
 			// [DONE] 统一在循环结束后写出，保证恰好一个。
 			break readLoop
-		case strings.HasPrefix(trimmed, "data: "):
-			n, werr := writeFrame(strings.TrimPrefix(trimmed, "data: "))
+		case strings.HasPrefix(trimmed, "data:"):
+			// SSE 规范允许 `data:` 后不带空格（剥前缀后吃掉至多一个可选空格）——
+			// 此前只认 `data: ` 形态，无空格流会落入注释分支原样透传：绕过白名单、
+			// 不计 validFrames，随后被误判空流补写伪造 error 帧（正文+假错误并发给客户端）。
+			n, werr := writeFrame(strings.TrimPrefix(strings.TrimPrefix(trimmed, "data:"), " "))
 			validFrames += n
 			if werr != nil {
 				return werr
 			}
 		case trimmed != "":
-			// 注释/其他行：原样透传
-			if _, werr := io.WriteString(w, line); werr != nil {
-				return werr
-			}
-			if fl != nil {
+			// 注释/其他行：原样透传。写侧必须经 wmu——心跳 goroutine 可能并发写
+			// 同一 ResponseWriter（1.16.1 心跳引入时的遗留竞态：writeRaw/writeFrame
+			// 加了锁，本分支漏了；Anthropic 路径下 w 是 anthropicStreamWriter，
+			// 并发 Write 会同时 append 共享 buf 踩内存）。
+			wmu.Lock()
+			_, werr := io.WriteString(w, line)
+			if werr == nil && fl != nil {
 				fl.Flush()
 			}
+			wmu.Unlock()
+			if werr != nil {
+				return werr
+			}
+			touchWrite()
 		}
 		// 空行（帧分隔）吞掉：本函数自产 "\n\n"
 		if err != nil {
@@ -691,17 +715,27 @@ readLoop:
 	if validFrames == 0 {
 		_ = writeRaw(`{"error":{"message":"empty upstream stream","type":"upstream_error","code":"upstream_parse"}}`)
 	}
-	// 保证恰好写一个 [DONE]（上游漏发时兜底补上）。
-	if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
-		return err
-	}
-	if fl != nil {
+	// 保证恰好写一个 [DONE]（上游漏发时兜底补上）。同走 wmu：此刻心跳
+	// goroutine 仍在运行（hbDone 的 defer close 要等本函数返回），裸写存在并发窗口。
+	wmu.Lock()
+	_, werr := io.WriteString(w, "data: [DONE]\n\n")
+	if werr == nil && fl != nil {
 		fl.Flush()
+	}
+	wmu.Unlock()
+	if werr != nil {
+		return werr
 	}
 	if validFrames == 0 {
 		return errEmptyStream
 	}
 	return nil
+}
+
+// sseDoneFrame 判定一行是否为 [DONE] 结束帧（`data: [DONE]` 与 `data:[DONE]`
+// 两种规范形态——冒号后空格可选）。
+func sseDoneFrame(line string) bool {
+	return line == "data: [DONE]" || line == "data:[DONE]"
 }
 
 // frameGatewayHint 取 error 帧的 gateway_hint（hintFn 缺失/异常返回空串 → 不附加）。

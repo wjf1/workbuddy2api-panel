@@ -1526,7 +1526,9 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 		stream := c.dumpUpstream(monitorBody(resp.Body, c.IdleTimeout, cancel), prepared, a)
 		return stream, resp.StatusCode, nil, nil
 	}
-	panic("unreachable: chatPaths is never empty") // for range 空集时编译器仍要求兜底 return；chatPaths 恒非空（构造保证），永不触达
+	// for range 空集时编译器要求兜底 return。chatPaths 由构造保证非空，但这是生产
+	// 请求路径——配置异常改空时不得 panic 断连，防御性错误让调用方走轮转处置。
+	return nil, 0, nil, fmt.Errorf("chat paths empty (client construction bug or config corruption)")
 }
 
 // ModelInfo 动态模型信息（含 maxInputTokens/maxOutputTokens + 上游模型对象全字段）。

@@ -629,6 +629,11 @@ func (s *anthropicStreamWriter) startHeartbeat() {
 	}()
 }
 
+// heartbeatSuppressed 实现 upstream.heartbeatSuppressor 约定接口：本层自带官方
+// ping 事件心跳，StreamHint 层的 `: ping` 注释帧会被 handleFrame 丢弃——抑制其
+// 白跑（消除双层心跳冗余）。
+func (s *anthropicStreamWriter) heartbeatSuppressed() bool { return true }
+
 // stopHeartbeat 停止心跳 goroutine（finish 时调用；幂等）。
 func (s *anthropicStreamWriter) stopHeartbeat() {
 	if s.hbStop != nil {

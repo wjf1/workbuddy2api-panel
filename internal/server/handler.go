@@ -689,6 +689,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 口径一致（别名 INFO 行记录 客户端名 -> 真实名，两行合看即全链路）。
 	st := newChatStat(time.Now(), body, peek.Stream)
 	if tr := requestTraceFrom(r); tr != nil {
+		// web_search 多轮编排：同一 trace 的前几轮 stat 此前被直接覆盖，归档事件
+		// 只反映最后一轮（前几轮 token/credit/attempts 丢失）。改为累加合并——
+		// 用量与尝试数是多轮总和；最终状态（outcome/status/ttfb）以最后一轮为准。
+		if prev := tr.stat; prev != nil {
+			st.attempts += prev.attempts
+			st.promptTokens += prev.promptTokens
+			st.completionTokens += prev.completionTokens
+			st.totalTokens += prev.totalTokens
+			st.credit += prev.credit
+			st.hasCredit = st.hasCredit || prev.hasCredit
+		}
 		tr.stat = st
 		// 来源在 ServeHTTP 入口采集（此时才知道开关与请求头），此处转交给统计对象，
 		// 让 stdout 流水行与归档事件共用同一份来源值，两处不会漂移。
