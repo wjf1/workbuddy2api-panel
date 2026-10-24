@@ -11,7 +11,7 @@
 :root {
   --bg: #0c0e14; --surface: #14171f; --surface-2: #1a1e28; --raise: #202531;
   --line: #262c3a; --line-soft: #1e232e;
-  --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #6b7488;
+  --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #85909f;
   --accent: #5b7cfa; --accent-ink: #ffffff; --accent-soft: rgba(91,124,250,.13);
   --ok: #3ddc97; --ok-soft: rgba(61,220,151,.12);
   --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
@@ -23,7 +23,7 @@
 [data-theme="light"] {
   --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f8f9fb; --raise: #ffffff;
   --line: #e2e5ec; --line-soft: #eceef3;
-  --ink: #14171f; --ink-2: #545c6e; --ink-3: #8b93a5;
+  --ink: #14171f; --ink-2: #545c6e; --ink-3: #6f7889;
   --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
   --ok: #0f9d63; --ok-soft: rgba(15,157,99,.1);
   --warn: #b47611; --warn-soft: rgba(180,118,17,.11);
@@ -207,6 +207,20 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 /* ── 账号表（签名元素：健康色条 + 积分量条）───────────────────────── */
 .tbl-wrap { overflow-x: auto; }
 .acc { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
+
+/* 窄屏列优先级降级（≤860px）：非关键列隐藏替代横向滚动——账号表保 账号/状态/
+   积分/最近成功/操作；请求记录表保 时间/结果/模型/账号/耗时。恢复宽度自动回归。 */
+@media (max-width: 860px) {
+  #accTable, .acc.req { min-width: 0; }
+  #accTable th:nth-child(5), #accTable td:nth-child(5),
+  #accTable th:nth-child(6), #accTable td:nth-child(6),
+  #accTable th:nth-child(7), #accTable td:nth-child(7) { display: none; }
+  .acc.req th:nth-child(5), .acc.req td:nth-child(5),
+  .acc.req th:nth-child(6), .acc.req td:nth-child(6),
+  .acc.req th:nth-child(8), .acc.req td:nth-child(8),
+  .acc.req th:nth-child(9), .acc.req td:nth-child(9),
+  .acc.req th:nth-child(10), .acc.req td:nth-child(10) { display: none; }
+}
 .acc th {
   text-align: left; font-weight: 500; font-size: 11.5px; color: var(--ink-3);
   padding: 9px 11px; border-bottom: 1px solid var(--line); white-space: nowrap;
@@ -729,7 +743,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnProbeDead" hidden title="对「待重登」（会话失效）类禁用账号做一轮 token 刷新探测：若上游侧的吊销已解除（误吊销/临时故障恢复），账号会自动复活。失败静默。默认关闭定时探测，此为手动触发。">探测死号</button>
         </header>
         <div class="tbl-wrap">
-        <table class="acc">
+        <table class="acc" id="accTable">
           <thead><tr>
             <th class="mark" aria-hidden="true"></th>
             <th>账号</th><th>状态</th><th>积分</th>

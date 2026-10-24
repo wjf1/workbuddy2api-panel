@@ -7,6 +7,21 @@ const LS_KEY = 'wb2api.key', LS_THEME = 'wb2api.theme';
 function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 存不了就算了 */ } }
 let pollLastOKAt = 0; // 最近一次轮询成功时刻（离线指示用）
+
+/* ── Esc 关闭弹窗（注册表模式）──────────────────────────────────────
+   有清理逻辑的弹窗（定时器/轮询/选中态）注册专属 close 函数，其余默认 remove
+   class；keyVeil 带 data-lock（鉴权锁，密钥没填不能 Esc 关）。声明置顶：文件
+   中段的注册调用（btnCloseAdd 等绑定处）先于本段执行，const 会 TDZ。 */
+const veilClosers = new Map(); // veilId -> closeFn
+function registerVeilCloser(id, fn) { veilClosers.set(id, fn); }
+addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const on = document.querySelector('.veil.on');
+  if (!on || on.dataset.lock) return;
+  const fn = veilClosers.get(on.id);
+  if (fn) fn();
+  else on.classList.remove('on');
+});
 let theme = lsGet(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
@@ -1345,6 +1360,7 @@ function closeAdd() {
   $('addVeil').classList.remove('on');
 }
 $('btnCloseAdd').onclick = closeAdd;
+registerVeilCloser('addVeil', closeAdd);
 $('btnStartLogin').onclick = startAddLogin;
 $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank', 'noopener');
 $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textContent)
@@ -1421,6 +1437,7 @@ function closeRelogin() {
   $('reloginVeil').classList.remove('on');
 }
 $('btnCloseRelogin').onclick = closeRelogin;
+registerVeilCloser('reloginVeil', closeRelogin);
 $('btnStartRelogin').onclick = startRelogin;
 $('btnOpenReloginUrl').onclick = () => open($('reloginUrl').textContent, '_blank', 'noopener');
 $('btnCopyReloginUrl').onclick = () => navigator.clipboard.writeText($('reloginUrl').textContent)
@@ -1841,6 +1858,7 @@ function openTasks(uid) {
 }
 function closeTasks() { $('taskVeil').classList.remove('on'); taskUID = null; }
 $('btnCloseTask').onclick = closeTasks;
+registerVeilCloser('taskVeil', closeTasks);
 $('btnTaskReload').onclick = loadTasks;
 
 // 全部接受：把该账号未接受的任务一次性报名（幂等，跳过已接受/已领取）。

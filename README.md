@@ -80,7 +80,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 🏷️ **账号标签与预警** | 账号多标签（落盘随导出/导入往返）+ 列表按标签 / 关键字筛选；积分低于「积分保底线」的账号自动进面板预警横幅（与选号保底共用阈值，零上游请求） |
 | 🤖 **Anthropic 协议兼容** | `POST /v1/messages`（+ `POST /v1/messages/count_tokens`）：Claude Code / ZCode 等 Anthropic 协议客户端直连；流式 SSE 事件序列（`message_start` / `content_block_*` / `message_delta` / `message_stop`）与非流式均支持，错误体同为 Anthropic 形状；`x-api-key` 与 `Authorization: Bearer` 双凭证任一命中；`messages` 内联的中途 `system` 消息（ZCode / Claude Code 形态）同样接受（1.15.2 起） |
 | 🌐 **服务端 web_search（网关自执行）** | 客户端声明 `web_search_*` 工具时，检索由**网关代替上游执行**（so.com 抓取解析），回吐 `server_tool_use` / `web_search_tool_result` 块并支持一轮内多轮检索（`max_uses` 预算，缺省 8；耗尽自动撤工具 + 限额提示）；正文未引用来源时自动补 `Sources:` 列表；伪工具调用文本（全角竖线 DSML 标记 / `<tool_call>` 伪 XML）在流式与非流式路径一致清洗，不漏进正文 |
-| 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题），账号运维 / cockpit 兼容账号导入导出 / 模型档位查询 / 在线改配置（热生效）/ 运行日志 / 积分任务，见 [Web 管理面板](#-web-管理面板) |
+| 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题，弹窗 Esc 关闭、窄屏列自动降级、WCAG 对比度），账号运维 / cockpit 兼容账号导入导出 / 模型档位查询 / 在线改配置（热生效）/ 运行日志 / 积分任务，见 [Web 管理面板](#-web-管理面板) |
 
 ## 🎯 成长任务一键完成（17/18）
 
