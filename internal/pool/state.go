@@ -4,6 +4,7 @@ package pool
 
 import (
 	"log"
+	"strconv"
 	"sort"
 	"strings"
 	"time"
@@ -392,6 +393,10 @@ func (p *Pool) PickByUIDForModel(uid, model string) *auth.Auth {
 	// 后下次会话重新绑定。
 	// 日志频次：天然每请求至多一条——首次返回 nil 即解绑，后续轮转不再调入本路径
 	// （无需额外节流）；粘性续期中每个新请求一条，恰好是「余额仍在线下」的持续提醒。
+	// 每日限额护栏（粘性路径）：与 pick 同判据——达限的粘性号返回 nil 触发重新分配。
+	if p.dailyLimitBlockedForRealmModel(e, model, e.a.Realm(), now) {
+		return nil
+	}
 	if p.floorBlockedForRealmModel(e, model, e.a.Realm(), now) {
 		log.Printf("WARN: [pool] credit floor: sticky acct=%s model=%s credits=%d < floor=%d, unbind (paid model held out)",
 			logfmt.Label(e.a.UID, e.a.Nickname), model, e.credits, p.creditFloor)
@@ -517,6 +522,97 @@ func (p *Pool) List() []Status {
 	}
 	return out
 }
+// RecordDailyUsage 累计每日限额计数（护栏记账，v1.17.0 ⑤）：CST 日键翻转即清零
+// （跨日自然解封，无需定时任务）。creditMilli = 积分消耗 ×1000。
+func (p *Pool) RecordDailyUsage(uid, model string, tokens, creditMilli int64) {
+	if tokens <= 0 && creditMilli <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byUID[uid]
+	if !ok {
+		return
+	}
+	day := cst.Day(time.Now())
+	if e.dailyDay != day {
+		e.dailyDay = day
+		e.dailyTokens = 0
+		e.dailyCreditMilli = 0
+		e.modelDailyTokens = nil
+	}
+	e.dailyTokens += tokens
+	e.dailyCreditMilli += creditMilli
+	if model != "" && tokens > 0 {
+		if e.modelDailyTokens == nil {
+			e.modelDailyTokens = map[string]int64{}
+		}
+		e.modelDailyTokens[model] += tokens
+	}
+	p.dirty.Store(true)
+}
+
+// dailyLimitBlockedForRealmModel 每日限额护栏谓词（与 floorBlocked 同层、同口径，
+// v1.17.0 ⑤）。三条独立判定（任一命中即拦）：
+//   - 每日 Token 限额：该号当日 token 总量达限 → 不接任何模型；
+//   - 每日积分限额：当日积分消耗达限 → 只放行免费模型（复用 floorBlocked 的
+//     收费判据：本地实测台账优先、目录倍率兜底；免费/未知放行——与保底同哲学）；
+//   - 按模型每日 Token 限额：该号该模型当日 token 达限 → 只拦该模型。
+// 限额 0 = 关闭（默认）。跨日由 RecordDailyUsage 的日期键翻转清零；
+// 读取侧对「日期键非今天」的 entry 一律视为零值（定时任务不跑也有解封保证）。
+// 调用方必须已持有 p.mu。
+func (p *Pool) dailyLimitBlockedForRealmModel(e *entry, model, realm string, now time.Time) bool {
+	day := cst.Day(now)
+	today := e.dailyDay == day
+	dT, dC, mT := e.dailyTokens, e.dailyCreditMilli, int64(0)
+	if !today {
+		dT, dC = 0, 0
+	} else if model != "" {
+		mT = e.modelDailyTokens[model]
+	}
+	// 每日 Token 限额。
+	if p.dailyTokenLimit > 0 && dT >= p.dailyTokenLimit {
+		return true
+	}
+	// 按模型每日 Token 限额。
+	if model != "" && p.modelDailyTokenLimit > 0 && mT >= p.modelDailyTokenLimit {
+		return true
+	}
+	// 每日积分限额：达限后只放行免费模型（收费判据与 floorBlocked 完全一致）。
+	if p.dailyCreditLimitMilli > 0 && dC >= p.dailyCreditLimitMilli && model != "" {
+		return p.chargeableModel(e, model, realm, now)
+	}
+	return false
+}
+
+// chargeableModel 收费判定（floorBlockedForRealmModel 的判据复用：实测台账优先、
+// 目录倍率兜底；免费/未知放行）。调用方必须已持有 p.mu。
+func (p *Pool) chargeableModel(e *entry, model, realm string, now time.Time) bool {
+	if mc, ok := e.modelCostOf(model, now); ok {
+		return mc.CostPer1k > 0
+	}
+	if p.modelRateOf == nil {
+		return false
+	}
+	rate := p.modelRateOf(realm, model)
+	if rate == "" {
+		return false
+	}
+	v, err := strconv.ParseFloat(rate, 64)
+	return err == nil && v > 0
+}
+
+// SetDailyLimits 注入每日限额护栏参数（main 从 config 解析后调用；热应用）。
+// 非正值保留原值（关闭语义 0 显式传 0 时以 newCfg 为准——由 main 直接传新值，
+// 这里 <=0 一律置 0 关闭）。
+func (p *Pool) SetDailyLimits(tokenLimit, creditLimitMilli, modelTokenLimit int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dailyTokenLimit = tokenLimit
+	p.dailyCreditLimitMilli = creditLimitMilli
+	p.modelDailyTokenLimit = modelTokenLimit
+}
+
 // SetTier 写入会员档位（计费摘要读取结果）。失败不写结论由调用方保证：
 // 只有摘要请求成功才调用本方法。节流（一天一次）经 TierNeedsFetch。
 func (p *Pool) SetTier(uid string, paid bool, pkg string) {
@@ -584,6 +680,10 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		// 禁用账号透出禁用原因（运维看不到为什么死）+ 死因分类（面板「待重登」分组）。
 		st.DisabledReason = e.reason
 		st.DeadKind = deadKindOf(e.reason)
+	}
+	// 每日限额计数透出（面板达限徽章）。
+	if e.dailyDay == cst.Day(now) {
+		st.DailyTokens = e.dailyTokens
 	}
 	// 会员档位：读过才透出（不猜）。
 	if !e.tierFetchedAt.IsZero() {

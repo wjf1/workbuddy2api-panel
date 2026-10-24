@@ -61,6 +61,8 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 |---|---|
 | 🔑 **OAuth 一键登录** | `login.sh` 设备授权流程，自动落盘凭证并重启容器加载新账号 |
 | 🔄 **多账号池** | 快过期积分加权 + 成本分层 + 加权随机选号，Top-5 候选 + 防惊群 |
+| ⚖️ **每日限额护栏（1.17.0）** | 单号当日 Token 限量 / 当日积分限量 / 单模型当日 Token 限量三条护栏（各独立开关，CST 0 点自动解封，计数随状态持久化）；达限号自动切号、积分达限只接免费模型（免费/付费判定与「积分保底」同口径） |
+| 🔀 **模型降级路由（1.17.0）** | `pool.model_fallback`：请求模型撞 6004 模型级限流时同号改用配置的等价模型继续服务（冷却记在原模型名下、降级不写持久状态、冷却到期自动回原模型）；全池该模型都在冷却时先降级再报错 |
 | 🛡️ **熔断与冷却** | 429 软冷却 600s 起指数退避（封顶 `soft_rate_max`）、404 固定 60s 短冷却、402 硬冷却至次日 04:00、连续失败熔断、在途租约限流 |
 | 🚦 **上游排队保护（1.15.5）** | 上游免费档排队（业务码 `6020 queue.waiting` / `6021 queue.full`）是**服务端队列水位**，与账号、模型都无关 → 归类为 `ErrUpstreamQueue`：**账号零惩罚、轮转 fail-fast**（命中处即终止轮转），门控激活期内后续请求**不发上游直接回 429 `upstream_queue_busy`**（不放大请求、不烧号），时长采信上游 `retry_after`（钳 15s–2m），任一请求成功即自动解除；面板与 `/status` 透出 `upstream_queue` 并显示「上游队列忙」横幅 |
 | 🧲 **会话粘性** | 同一会话（`conversation_id`）尽量绑定同一账号，TTL 滚动续期，失败自动解绑，可镜像 Redis 防重启丢失 |
@@ -74,6 +76,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 📊 **可观测** | 每请求一行表格日志（TTFB / token 速率 / uid）；`/healthz` 带 `service` 身份标识可接负载均衡 / 宿主探活 |
 | 💾 **状态持久化** | 池状态本地原子落盘 + Upstash Redis 异步镜像（可选），重启择新恢复 |
 | ♻️ **回收站与定时备份** | 「移除账号」软删除进 `data/trash/`（默认保留 30 天，可恢复 / 彻底删除 / 过期自动清理）；每日整点自动备份 `auths/` + 池状态为 zip（保留 N 份轮转，**不含 config.json**），面板内可手动备份与下载 |
+| 📈 **余额趋势与会员档位（1.17.0）** | 账号池「余额趋势」box：全池积分总和按小时采样 SVG 曲线（30 天窗口，观察「号在不在被薅」与消耗速率）；账号行昵称旁显示会员档位胶囊（计费摘要一天一次，失败不写结论） |
 | 🏷️ **账号标签与预警** | 账号多标签（落盘随导出/导入往返）+ 列表按标签 / 关键字筛选；积分低于「积分保底线」的账号自动进面板预警横幅（与选号保底共用阈值，零上游请求） |
 | 🤖 **Anthropic 协议兼容** | `POST /v1/messages`（+ `POST /v1/messages/count_tokens`）：Claude Code / ZCode 等 Anthropic 协议客户端直连；流式 SSE 事件序列（`message_start` / `content_block_*` / `message_delta` / `message_stop`）与非流式均支持，错误体同为 Anthropic 形状；`x-api-key` 与 `Authorization: Bearer` 双凭证任一命中；`messages` 内联的中途 `system` 消息（ZCode / Claude Code 形态）同样接受（1.15.2 起） |
 | 🌐 **服务端 web_search（网关自执行）** | 客户端声明 `web_search_*` 工具时，检索由**网关代替上游执行**（so.com 抓取解析），回吐 `server_tool_use` / `web_search_tool_result` 块并支持一轮内多轮检索（`max_uses` 预算，缺省 8；耗尽自动撤工具 + 限额提示）；正文未引用来源时自动补 `Sources:` 列表；伪工具调用文本（全角竖线 DSML 标记 / `<tool_call>` 伪 XML）在流式与非流式路径一致清洗，不漏进正文 |
@@ -416,6 +419,8 @@ curl -sN http://localhost:7863/v1/messages \
 | `schedule.keepalive_enabled` | `true` | token 保活总开关 |
 | `schedule.blackcat_enabled` | `true` | 夜猫子总开关 |
 | `schedule.include_disabled_in_tasks` | `false` | 让**保号类**四任务（签到 / 活跃上报 / token 保活 / 余额刷新）对**已禁用**账号也执行——「禁用」只关选号，不停保号。`false`（默认）保持「禁用的跳过」 |
+| `pool.model_fallback` | 空 | 模型降级路由表（1.17.0）：`{"请求模型": "等价模型"}`，6004 模型级限流时同号换等价模型重试；热生效 |
+| `pool.daily_token_limit` / `pool.daily_credit_limit` / `pool.model_daily_token_limit` | `0` | 每日限额护栏三条（1.17.0，各自独立开关）：单号日 Token / 单号日积分（达限只接免费）/ 单号单模型日 Token；CST 0 点自动解封；热生效 |
 | `schedule.jitter_minutes` | `20` | 定时保号任务时点抖动窗口（分钟，1.16.0）：每号按 `hash(uid+日期)` 分散到 `[0, N)` 执行，消除整点齐射风控特征；`0` = 关闭。**热生效**；手动按钮不受影响 |
 | `schedule.keepalive_mode` | `daily` | token 保活模式（1.16.0）：`daily` 每日全量强刷（现状语义）；`smart` 只刷 `ExpiresAt` 距今 < `smart_keepalive_days` 的号（RT 恒 60 天滚动，推荐生产开启）。**热生效** |
 | `schedule.smart_keepalive_days` | `14` | smart 保活阈值（天）；手动「全部保活」不受影响 |

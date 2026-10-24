@@ -280,6 +280,15 @@ type Config struct {
 		// 模型。只对 6004 生效；降级是「同账号换模型」，冷却记在原模型名下；降级
 		// 不写持久状态，冷却到期自动回原模型。空/缺省 = 不降级。热生效。
 		ModelFallback map[string]string `json:"model_fallback"`
+
+		// —— 每日限额护栏（v1.17.0 ⑤，hub 同语义精简版；计数按 CST 日键跨日自动清零）——
+		// DailyTokenLimit 单号当日 token 总量上限：达限该号当日不接单（0 = 关闭）。
+		// DailyCreditLimit 单号当日积分消耗上限：达限该号当日只接免费模型（0 = 关闭）。
+		// ModelDailyTokenLimit 单号单模型当日 token 上限：达限只拦该模型（0 = 关闭）。
+		// 三条均按本地实测请求记账（RecordDailyUsage），面板配置页热生效。
+		DailyTokenLimit      int64 `json:"daily_token_limit"`
+		DailyCreditLimit     int64 `json:"daily_credit_limit"`
+		ModelDailyTokenLimit int64 `json:"model_daily_token_limit"`
 	} `json:"pool"`
 
 	SessionSticky struct {

@@ -75,6 +75,14 @@ type Pool struct {
 	// 为 LRU 兜底/防惊群提供与 time.Now() 精度无关的严格全序（Windows ~0.5ms 精度下
 	// lastUsed 墙钟会全等）。仅 pick 写锁路径读写，无需 atomic。
 	pickSeq uint64
+	// 每日限额护栏参数（v1.17.0 ⑤，SetDailyLimits 热注入；0 = 关闭）：
+	//   dailyTokenLimit        单号当日 token 总量上限；
+	//   dailyCreditLimitMilli  单号当日积分消耗上限（×1000，达限只放免费模型）；
+	//   modelDailyTokenLimit   单号单模型当日 token 上限（只拦该模型）。
+	// 计数按 CST 日键存 entry，跨日自动清零；请求路径读谓词（pick/粘性/兜底三处）。
+	dailyTokenLimit       int64
+	dailyCreditLimitMilli int64
+	modelDailyTokenLimit  int64
 	// 余额趋势历史（v1.17.0 ③）：uid → 小时桶采样序列，独立文件落盘（观测数据）。
 	// creditHistDirty 原子脏标记：采样置位、落盘清除（flusher 周期 + Close 兜底）。
 	creditHist      map[string][]creditPoint

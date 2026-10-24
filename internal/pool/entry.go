@@ -98,6 +98,8 @@ type Status struct {
 	MemberPkg  string `json:"member_pkg,omitempty"`
 	// MemberTierFetchedAt 档位读取时刻（面板 tooltip 展示）。
 	MemberTierFetchedAt time.Time `json:"member_tier_fetched_at,omitempty"`
+	// DailyTokens 当日已用 token（护栏计数，CST 日口径；面板达限徽章用）。
+	DailyTokens int64 `json:"daily_tokens,omitempty"`
 	// Paused 暂停选号：退出选号候选（与 disabled 一样不参与选号），但**照常参与**
 	// 签到 / 活跃上报 / 保活 / 余额刷新四类保号任务。与 disabled 正交——disabled 是
 	// 「授权/session 终态，需人工 revive」，paused 是「运维临时让位」（多号轮换场景），
@@ -205,6 +207,12 @@ type entry struct {
 	tierFetchedAt time.Time
 	tierPaid      bool
 	tierPkg       string
+	// 每日限额计数（v1.17.0 ⑤护栏）：CST 日期键，跨日自动清零（键不匹配即视为 0）。
+	// creditMilli = 积分消耗 ×1000（float 累计防精度损失）。
+	dailyDay         string
+	dailyTokens      int64
+	dailyCreditMilli int64
+	modelDailyTokens map[string]int64
 	successCount             int64      // 累计成功
 	errTotal                 int64      // 累计错误（供成功率权重 successRate = successCount/(successCount+errTotal)，不清零）
 	lastErr                  time.Time  // 最近一次错误时间
@@ -458,6 +466,12 @@ type stateAccount struct {
 	// SessionDeadFails 连续 12153 计数（判定 session 死亡的进度）。持久化以保留
 	// 「重启后连续计数继续累计」。
 	SessionDeadFails int `json:"session_dead_fails"`
+	// 每日限额计数（v1.17.0 ⑤）：随 state.json 持久化，重启不重置限额（CST 日键
+	// 翻转清零——恢复后日期不同即自然归零）。
+	DailyDay          string           `json:"daily_day,omitempty"`
+	DailyTokens       int64            `json:"daily_tokens,omitempty"`
+	DailyCreditMilli  int64            `json:"daily_credit_milli,omitempty"`
+	ModelDailyTokens  map[string]int64 `json:"model_daily_tokens,omitempty"`
 	// ConsecutiveFails 连续失败计数（连败降权进度，见 entry.consecutiveFails）。
 	ConsecutiveFails int `json:"consecutive_fails"`
 	// DegradeUntil 连败降权截止（issue #114）。仅未过期才持久化（落盘/恢复均惰性

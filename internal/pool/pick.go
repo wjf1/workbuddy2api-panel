@@ -69,6 +69,9 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		if floorBlocked(e) {
 			continue // 积分保底：触底号不接实测收费模型（tier 0/1 不受限）
 		}
+		if p.dailyLimitBlockedForRealmModel(e, reqModel, realm, now) {
+			continue // 每日限额护栏：Token/积分/按模型任一达限（v1.17.0 ⑤）
+		}
 		if p.inFlightFull(e) {
 			continue // 在途占满：跳过（max=0 不限时不触发）
 		}
@@ -312,6 +315,9 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 		}
 		if p.floorBlockedForRealmModel(e, model, realm, now) {
 			continue // 积分保底：触底号不接收费模型（兜底路径同判据）
+		}
+		if p.dailyLimitBlockedForRealmModel(e, model, realm, now) {
+			continue // 每日限额护栏：兜底路径同样遵守（否则达限号被捞回来继续接单）
 		}
 		if p.inFlightFull(e) {
 			continue

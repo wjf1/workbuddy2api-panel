@@ -996,6 +996,21 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <div class="hr"></div>
             <div class="grid2">
               <div>
+                <label class="fld"><span class="lb">每日 Token 限额（单号，0 = 关闭）</span>
+                  <input name="daily_token_limit" type="number" min="0" placeholder="0">
+                  <span class="hint">单号当日 token 总量达限即不接单（CST 0 点解封），请求自动切其他号</span></label>
+                <label class="fld"><span class="lb">每日积分限额（单号，0 = 关闭）</span>
+                  <input name="daily_credit_limit" type="number" min="0" placeholder="0">
+                  <span class="hint">单号当日积分消耗达限后当日只接免费模型</span></label>
+                <label class="fld"><span class="lb">按模型每日 Token 限额（0 = 关闭）</span>
+                  <input name="model_daily_token_limit" type="number" min="0" placeholder="0">
+                  <span class="hint">单号在单个模型上当日 token 达限后只禁该模型，同号其他模型照常</span></label>
+              </div>
+              <div class="hint" style="font-size:12px">三条护栏互相独立、按 CST 自然日 0 点解封，计数只来自真实请求记账（失败尝试不计）。仅请求路径生效，定时任务不受影响。免费 / 付费以本地实测台账与上游目录倍率判定，未知模型按放行（与「积分保底」同口径）。</div>
+            </div>
+            <div class="hr"></div>
+            <div class="grid2">
+              <div>
                 <label class="fld"><span class="lb">任务时点抖动（分钟）</span>
                   <input name="jitter_minutes" type="number" min="0" placeholder="20">
                   <span class="hint">定时签到/保活等任务每号分散到 [0, N) 分钟内执行（按 uid+日期稳定散列），消除整点齐射风控特征；0 = 关闭。手动按钮不受影响</span></label>

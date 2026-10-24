@@ -4,6 +4,27 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.17.0-panel] - 2026-10-24
+
+本版为**路由与护栏能力版**（对标 `ardeyouxipianyi/workbuddy2api-hub` 与同源上游 `misakano7545/workbuddy2api-panel` 的 P1 清单，落地四项；一项依赖上游接口实测顺延）。
+
+### 新增
+
+- **模型降级路由 `pool.model_fallback`**（misakano PR #52 同语义）：请求模型在 6004 模型级限流时改用配置的等价模型继续服务。两个触发点——①上游 6004 响应后：冷却按**原模型**记账，**同账号**换等价模型重试（降级是换模型不是换号）；②选不到号兜底：全池该模型都在冷却时先降级再报 503（否则最需要的场景走不到降级）。`curModel`（实际用途）与 `bareModel`（冷却记账）分离——误记等价模型会把降级目标也冷却掉；`fallbackTried` 防 A→B→A 循环；降级不写持久状态，冷却到期自动回原模型。热生效。测试 4 例（同账号重试+冷却归属 / 兜底 / 防循环 / 未配置零回归）。
+- **每日限额护栏三件套**（hub 同语义精简版）：`pool.daily_token_limit`（单号当日 token 总量达限不接单）/ `pool.daily_credit_limit`（当日积分消耗达限只接免费模型）/ `pool.model_daily_token_limit`（单模型当日 token 达限只拦该模型）。计数按 CST 日键随请求记账（失败尝试不计），**跨日自动清零解封**（无需定时任务）；随 state.json 持久化（重启不重置）；选号三路径（普通轮换 / 粘性 / 全冷却兜底）统一生效，免费/付费判定与「积分保底」同口径（实测台账优先、目录倍率兜底、未知放行）。热生效。测试 3 例。
+- **余额趋势视图**（misakano PR #49 同方向轻量自实现）：`SetCreditsDetailed` 按小时桶采样（同桶覆盖、30 天窗口），独立文件 `data/credits-history.json`（safefile 原子写、不进 state.json 关键路径）；面板账号池新增「余额趋势」box——全池积分总和 SVG 曲线（区间/点数/起止标注、悬停看每小时值），前端 5 分钟缓存。**锁纪律**：采样只改内存 + 原子脏标记，落盘由 flusher 周期（5 分钟节流）与 Close 兜底在**锁外**执行——实测持锁写盘与 flusher 的 saveLocked 互撞放大等待（死锁形态），教训已注释。测试 2 例。
+- **会员档位显示**（hub #621 同语义）：新增 `upstream.UserResourceSummary`（get-user-resource-summary 双路径，解析宽松——`IsPaidUser`/`SubscriptionPackageName` 任意嵌套层级大小写不敏感）；余额刷新循环内顺带拉取（**CST 一天一次**节流，避免高频轮询成为上游可观测特征），失败保留旧值不写结论；面板账号行昵称旁胶囊（paid = 套餐名、free = Free、未读不显示）。测试 1 例。
+
+### 顺延（v1.17.1 待办）
+
+- **模型目录动态同步上游 /v3/config**：依赖对上游接口响应形态的实测验证（宣告字段与风控指纹关联，不可盲并），单独迭代。
+
+### 验证
+
+- **单测**：`go test ./... -count=1` 全绿（25 包），新增 10 测试例（fallback 4 / 护栏 3 / 趋势 2 / 档位 1）。
+- **构建**：`go build ./...` / `go vet ./...` 干净；`node --check` 与前端断言通过。
+- 配置增量：`pool.model_fallback` / `pool.daily_token_limit` / `pool.daily_credit_limit` / `pool.model_daily_token_limit`（均热生效，`config.example.json` 同步）。
+
 ## [1.16.1-panel] - 2026-10-24
 
 本版为**流式稳定性加固**：对标 `ardeyouxipianyi/workbuddy2api-hub`（v1.7.33）与同源上游 `misakano7545/workbuddy2api-panel` 后的精选迭代，只取四项小成本高收益修复；两项核对确认我方已有防护（记录结论防未来回归），一项核对发现 hub 修的能力我方早已具备。

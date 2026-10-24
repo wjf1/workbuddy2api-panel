@@ -36,7 +36,7 @@ import (
 )
 
 // appVersion 网关版本（fork 版：面板 + 任务体系），透出到 /panel/api/overview。
-const appVersion = "1.16.1-panel"
+const appVersion = "1.17.0-panel"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
@@ -114,6 +114,8 @@ func main() {
 	p.SetSoftRateMax(cfg.SoftRateMaxDur)                 // 软冷却指数退避封顶（soft_rate_max，默认 2h）
 	p.SetCostExploreInterval(cfg.CostExploreIntervalDur) // costTier 探索窗口（issue #136，默认 30m；0 关停）
 	p.SetCreditFloor(cfg.Pool.CreditFloor)               // 积分保底（默认 0 = 关闭）
+	// 每日限额护栏（v1.17.0 ⑤）：积分上限换算 milli（内部 ×1000 防精度损失）。
+	p.SetDailyLimits(cfg.Pool.DailyTokenLimit, cfg.Pool.DailyCreditLimit*1000, cfg.Pool.ModelDailyTokenLimit)
 	p.SetWeights(cfg.Pool.IdleWeightPerHour, cfg.Pool.IdleWeightMax)
 	p.SetPreferExpiring(cfg.Pool.PreferExpiring)
 
@@ -627,6 +629,8 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		MassKillWindowMin: newCfg.Notify.MassKillWindowMin,
 		CooldownMin:       newCfg.Notify.CooldownMin,
 	})
+	// 每日限额护栏热生效。
+	p.SetDailyLimits(newCfg.Pool.DailyTokenLimit, newCfg.Pool.DailyCreditLimit*1000, newCfg.Pool.ModelDailyTokenLimit)
 	// M5/M7/M8 配置热生效。
 	sch.SetJitterMinutes(newCfg.Schedule.JitterMinutes)
 	sch.SetKeepaliveSmart(newCfg.Schedule.KeepaliveMode == "smart", newCfg.Schedule.SmartKeepaliveDays)

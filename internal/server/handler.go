@@ -843,6 +843,19 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		h.cfg.Pool.RecordTokenUsage(uid, delta)
+		// 每日限额护栏记账（v1.17.0 ⑤）：token 总量 + 积分消耗（×1000 milli）。
+		// 只在有 token 观测时计（失败尝试不喂限额，与 usage 口径一致）。
+		if delta.HasTotalTokens || delta.HasPromptTokens || delta.HasCompletionTokens {
+			tok := delta.TotalTokens
+			if !delta.HasTotalTokens {
+				tok = delta.PromptTokens + delta.CompletionTokens
+			}
+			creditMilli := int64(0)
+			if hasCredit && credit > 0 {
+				creditMilli = int64(credit * 1000)
+			}
+			h.cfg.Pool.RecordDailyUsage(uid, delta.Model, tok, creditMilli)
+		}
 
 		// 用量时序记录。ok 以「上游是否给了 usage」判定：空 delta 意味着这次尝试
 		// 没拿到任何 token 统计（传输错误 / >=400 / 解析失败），计为失败尝试。
