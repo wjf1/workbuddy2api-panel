@@ -1407,8 +1407,10 @@ func TestAPIKeyAuth(t *testing.T) {
 func TestStatusEndpoint(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", Nickname: "nick", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetCredits("u1", 42, 0)
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	// 配置 key 的部署：accounts 全量透出（1.18.1 起未配 key 的部署脱敏 accounts）。
+	h := NewHandler(Config{Pool: p, Upstream: upstream.New(), APIKey: "sk-test"})
 	req := httptest.NewRequest("GET", "/status", nil)
+	req.Header.Set("Authorization", "Bearer sk-test")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -1417,6 +1419,20 @@ func TestStatusEndpoint(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, `"uid":"u1"`) || !strings.Contains(body, `"credits":42`) {
 		t.Errorf("body=%s", body)
+	}
+	// 未配 key：accounts 脱敏为 null（计数汇总保留）——uid/昵称/成本台账不得
+	// 对任何能连到端口的人可见。
+	h2 := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	rec2 := httptest.NewRecorder()
+	h2.ServeHTTP(rec2, httptest.NewRequest("GET", "/status", nil))
+	if rec2.Code != 200 {
+		t.Fatalf("no-key code=%d", rec2.Code)
+	}
+	if b2 := rec2.Body.String(); strings.Contains(b2, `"uid":"u1"`) || !strings.Contains(b2, `"accounts":null`) {
+		t.Errorf("no-key status must redact accounts: %s", b2)
+	}
+	if !strings.Contains(rec2.Body.String(), `"total":1`) {
+		t.Error("no-key status must keep summary counts")
 	}
 	if strings.Contains(body, "AccessToken") || strings.Contains(body, `"at"`) {
 		t.Error("token leaked in status output")
@@ -1475,9 +1491,11 @@ func TestStatusPortraitFields(t *testing.T) {
 	p.NoteSuccess("u1")
 	p.NoteError("u1") // 记录 last_err + err_total（累计，不冷却）
 	p.Cooldown("u1", pool.CoolSoft, time.Hour, "429 rate limit")
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	h := NewHandler(Config{Pool: p, Upstream: upstream.New(), APIKey: "sk-test"})
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
+	req := httptest.NewRequest("GET", "/status", nil)
+	req.Header.Set("Authorization", "Bearer sk-test")
+	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
 	}

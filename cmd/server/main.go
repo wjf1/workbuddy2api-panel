@@ -405,7 +405,6 @@ func main() {
 	pn.SetUpstreamQueue(h.UpstreamQueueStatus)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	// dump 保留清理（7 天窗口，启动即清 + 每日一次）：dump 内容含完整提示词与
 	// 响应，无限期留存既是磁盘增长点也是敏感数据留存风险。
