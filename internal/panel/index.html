@@ -692,6 +692,15 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="pad"><div id="alertList"></div></div>
       </div>
 
+      <div class="box" id="trendBox">
+        <header>
+          <h3>余额趋势<span class="hint">全池积分总和按小时采样（保留 30 天）——余额刷新任务运行期间每小时一个点；用于观察「号在不在被薅」与积分消耗速率</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="trendNote"></span>
+        </header>
+        <div class="pad"><div id="trendChart"></div></div>
+      </div>
+
       <div class="box" id="killBox" hidden>
         <header>
           <h3>批量会话判死<span class="hint">短时间内多个账号连续 session 判死被自动禁用——疑似上游批量吊销会话或凭证双活（另一实例在共享同一批账号）。这些账号任何刷新 / 保活 / 重导 JSON 都救不回来，请到账号池「待重登」逐个重新授权，并检查是否有第二实例在跑同一份 auths</span></h3>

@@ -103,6 +103,8 @@ func (p *Pool) startFlusher() {
 					p.saveLocked()
 				}
 				p.mu.Unlock()
+				// 余额趋势节流落盘（锁内拷贝、锁外写；节流窗口 5 分钟）。
+				p.flushCreditsHistory(false)
 			case <-stopCh:
 				return
 			}

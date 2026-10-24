@@ -99,6 +99,8 @@ func (p *Pool) SetCreditsDetailed(uid string, credits, total, expiring int64, ea
 		e.creditsExpiring = expiring
 		e.creditsEarliestExpiry = earliestAt
 		e.creditsEarliestRemaining = earliestRemaining
+		// 余额趋势采样（v1.17.0 ③）：小时桶去重，独立文件落盘（节流 5 分钟）。
+		p.recordCreditsPointLocked(uid, credits, now)
 		p.dirty.Store(true)
 	}
 }

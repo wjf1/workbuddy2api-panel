@@ -75,6 +75,12 @@ type Pool struct {
 	// 为 LRU 兜底/防惊群提供与 time.Now() 精度无关的严格全序（Windows ~0.5ms 精度下
 	// lastUsed 墙钟会全等）。仅 pick 写锁路径读写，无需 atomic。
 	pickSeq uint64
+	// 余额趋势历史（v1.17.0 ③）：uid → 小时桶采样序列，独立文件落盘（观测数据）。
+	// creditHistDirty 原子脏标记：采样置位、落盘清除（flusher 周期 + Close 兜底）。
+	creditHist      map[string][]creditPoint
+	creditHistPath  string
+	creditHistSaved time.Time
+	creditHistDirty atomic.Bool
 	// stopCh 关闭信号：Close 关闭它使 startFlusher 的后台 goroutine 退出。
 	// nil = 未启动 flusher（stateFp 为空时 New 不起 flusher）。
 	stopCh chan struct{}
@@ -110,6 +116,10 @@ func New(stateFp string) *Pool {
 		p.load()
 		p.startFlusher()
 	}
+	p.creditHistPath = creditHistPathFor(stateFp)
+	if stateFp != "" {
+		p.loadCreditsHistory()
+	}
 	return p
 }
 
@@ -124,6 +134,8 @@ func (p *Pool) Close() {
 		close(p.stopCh)
 	})
 	p.Flush()
+	// 余额趋势兜底：flusher 节流窗口内的尾部采样随退出强制落盘（消丢尾）。
+	p.flushCreditsHistory(true)
 }
 
 // SetOnDisabled 注入禁用回调（main 装配 alert.Manager.NoteDisabled；nil = 移除）。

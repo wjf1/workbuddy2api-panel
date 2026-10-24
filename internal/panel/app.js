@@ -338,7 +338,7 @@ function go(v) {
   if (v === 'logs') loadLogs();
   if (v === 'usage') loadUsage();
   if (v === 'packages') loadPackages();
-  if (v === 'accounts') loadExpiry();
+  if (v === 'accounts') { loadExpiry(); loadTrend(); }
   if (v === 'taskscenter') reattachQueueView();
 }
 document.querySelectorAll('.nav a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); history.replaceState(null, '', '#' + a.dataset.view); });
@@ -551,6 +551,55 @@ function renderAlertBox(d) {
   ).join('') +
   '<div class="hint" style="margin-top:6px">签到回血 / 手动「刷新」余额后自动解除；调整阈值见配置页「积分保底」。</div>';
   box.hidden = false;
+}
+
+/* ── 余额趋势（v1.17.0 ③）────────────────────────────────────────── */
+/* 全池积分总和按小时采样（30 天），SVG 单曲线；数据 5 分钟缓存——5s 轮询
+   不重复拉取（趋势是小时级观测，无需高频）。 */
+let trendData = null, trendFetchedAt = 0;
+async function loadTrend(force) {
+  const now = Date.now();
+  if (!force && trendData && now - trendFetchedAt < 300000) return;
+  try {
+    trendData = await api('credits_trend');
+    trendFetchedAt = now;
+    renderTrend();
+  } catch (e) { /* 趋势是观测增强，失败静默（box 显示空） */ }
+}
+function renderTrend() {
+  const box = $('trendChart'), note = $('trendNote');
+  const d = trendData;
+  if (!d || !d.total || d.total.length < 2) {
+    box.innerHTML = '<div class="hint" style="padding:8px 0">暂无趋势数据——余额刷新任务运行一段时间后（≥2 个小时桶）出现曲线。</div>';
+    note.textContent = '';
+    return;
+  }
+  const pts = d.total;
+  const W = 800, H = 160, PAD = 6;
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+  let vMin = Infinity, vMax = -Infinity;
+  for (const p of pts) { if (p.c < vMin) vMin = p.c; if (p.c > vMax) vMax = p.c; }
+  if (vMax === vMin) { vMax = vMin + 1; }
+  const X = t => PAD + (t - t0) / Math.max(1, t1 - t0) * (W - PAD * 2);
+  const Y = v => H - PAD - (v - vMin) / (vMax - vMin) * (H - PAD * 2);
+  const path = pts.map((p, i) => (i ? 'L' : 'M') + X(p.t).toFixed(1) + ',' + Y(p.c).toFixed(1)).join(' ');
+  const area = path + ' L' + X(t1).toFixed(1) + ',' + (H - PAD) + ' L' + X(t0).toFixed(1) + ',' + (H - PAD) + ' Z';
+  const fmtT = t => { const dt = new Date(t * 1000); return (dt.getMonth() + 1) + '-' + dt.getDate() + ' ' + String(dt.getHours()).padStart(2, '0') + '时'; };
+  const fmtV = v => v >= 10000 ? (v / 10000).toFixed(1) + 'w' : String(v);
+  box.innerHTML =
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" role="img" aria-label="余额趋势">' +
+    '<path d="' + area + '" fill="var(--ok, #3a9)" opacity="0.08"/>' +
+    '<path d="' + path + '" fill="none" stroke="var(--ok, #3a9)" stroke-width="1.6"/>' +
+    pts.map((p, i) => {
+      // 稀疏采样 hover 点：最多 30 个（隔点抽稀）
+      if (pts.length > 30 && i % Math.ceil(pts.length / 30) !== 0) return '';
+      const v = fmtV(p.c);
+      return '<circle cx="' + X(p.t).toFixed(1) + '" cy="' + Y(p.c).toFixed(1) + '" r="2.2" fill="var(--ok, #3a9)"><title>' + fmtT(p.t) + ' | 全池 ' + v + ' 分</title></circle>';
+    }).join('') +
+    '</svg>' +
+    '<div class="hint" style="margin-top:4px;display:flex;justify-content:space-between">' +
+    '<span>' + fmtT(t0) + '</span><span>区间 ' + fmtV(vMin) + ' ~ ' + fmtV(vMax) + ' 分 · ' + pts.length + ' 个小时点</span><span>' + fmtT(t1) + '</span></div>';
+  note.textContent = d.days + ' 天窗口 · ' + (d.series || []).length + ' 号';
 }
 
 /* 批量会话判死横幅（M2）：overview.mass_kill（窗口内 ≥ 阈值个账号被自动禁用）。

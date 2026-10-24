@@ -258,6 +258,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/probe_dead_all", p.withAuth(p.probeDeadAll))
 	p.mux.HandleFunc("POST /panel/api/balance_all", p.withAuth(p.balanceAll))
 	p.mux.HandleFunc("GET /panel/api/packages", p.withAuth(p.packages))
+	p.mux.HandleFunc("GET /panel/api/credits_trend", p.withAuth(p.creditsTrend))
 	p.mux.HandleFunc("GET /panel/api/usage", p.withAuth(p.usage))
 	p.mux.HandleFunc("POST /panel/api/usage/save", p.withAuth(p.usageSave))
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
@@ -371,6 +372,12 @@ func (p *Panel) massKillPayload() any {
 		return nil
 	}
 	return p.cfg.Alert.Payload()
+}
+
+// creditsTrend 余额趋势（v1.17.0 ③）：池内按小时桶采样的余额历史（30 天），
+// total 为全池总和曲线，series 为每账号明细。纯内存读，零上游请求。
+func (p *Panel) creditsTrend(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, p.cfg.Pool.CreditsTrend())
 }
 
 // externalRotationsPayload 外部 RT 轮换横幅载荷（M6，未注入/无事件为 null）。
