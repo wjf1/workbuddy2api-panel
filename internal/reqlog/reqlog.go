@@ -267,6 +267,11 @@ type archiveWriter struct {
 	dropped   atomic.Uint64
 	lastErrMu sync.Mutex
 	lastErr   string
+	// statsCache：request_metrics 每 5s 轮询，此前每次 ReadDir+逐文件 Info 统计
+	// 字节——归档文件数不变时是纯重复 IO。30s 粒度缓存；写入路径使缓存失效。
+	statsCacheMu   sync.Mutex
+	statsCachedAt  time.Time
+	statsCachedVal ArchiveStats
 
 	file *os.File
 	buf  *bufio.Writer
@@ -547,16 +552,39 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 	// os.ReadDir 的字典序又会把装着最早事件的基准文件 requests-<day>.jsonl 排在
 	// requests-<day>.N.jsonl 之后；目录被整体拷贝 / 恢复备份后 mtime 更不可信。
 	var out []Event
+	// 早停优化（默认 limit=200，归档上限 100MB）：按文件名日期**倒序**遍历
+	// （requests-YYYYMMDD[.N].jsonl 字典序倒序=新文件在前），凑满 limit 且剩余
+	// 文件日期均早于已见最早事件时停止——面板轮询每次全量解析所有归档是纯浪费。
+	// 文件内顺序与跨文件 mtime 不可信（上方注释），但「更早日期的文件不可能含
+	// 更新事件」在无 From/To 筛选时成立（事件落盘日即文件日）；带时间筛选时不早停。
+	files := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasPrefix(name, "requests-") || !strings.HasSuffix(name, ".jsonl") {
 			continue
+		}
+		files = append(files, name)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+	timeFiltered := !filter.From.IsZero() || !filter.To.IsZero()
+	var earliest time.Time
+	for _, name := range files {
+		if timeFiltered && len(out) >= limit*3 {
+			break // 时间筛选下早停阈值放宽（跨文件时间交错的可能更大）
+		}
+		if fd := fileDayOf(name); !timeFiltered && len(out) >= limit && !earliest.IsZero() && !fd.IsZero() && fd.Before(dayOf(earliest)) {
+			break // 剩余文件都更早：不可能贡献更新的记录
 		}
 		rows, err := readFile(filepath.Join(w.cfg.Dir, name), filter)
 		if err != nil {
 			return out, err
 		}
 		out = append(out, rows...)
+		for _, e := range rows {
+			if earliest.IsZero() || e.Time.Before(earliest) {
+				earliest = e.Time
+			}
+		}
 	}
 	// 契约：按事件时间倒序返回最近 limit 条（同一时刻用 Stable 保留落盘先后）。
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
@@ -564,6 +592,25 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// fileDayOf 解析归档文件名中的日期部分（requests-2006-01-02[.N].jsonl → 当天零点；
+// 解析失败返回零值——零值 Before 任何时刻恒真，故早停判断同时要求非零）。
+func fileDayOf(name string) time.Time {
+	s := strings.TrimSuffix(strings.TrimPrefix(name, "requests-"), ".jsonl")
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		s = s[:i]
+	}
+	t, err := time.ParseInLocation("2006-01-02", s, time.Local)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+func dayOf(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
 
 func readFile(path string, filter Filter) ([]Event, error) {
@@ -620,6 +667,18 @@ func containsFold(haystack, needle string) bool {
 
 func (w *archiveWriter) stats() ArchiveStats {
 	s := ArchiveStats{Enabled: w.enabled(), Dir: w.cfg.Dir, DroppedWrites: w.dropped.Load(), LastError: w.errString()}
+	// 30s 缓存：磁盘统计部分（Files/Bytes）变化频率 = 轮转/清理频率，远低于轮询。
+	w.statsCacheMu.Lock()
+	if !w.statsCachedAt.IsZero() && time.Since(w.statsCachedAt) < 30*time.Second {
+		cached := w.statsCachedVal
+		w.statsCacheMu.Unlock()
+		// 实时字段（dropped/lastError）不缓存——用最新值覆盖缓存的统计体。
+		cached.DroppedWrites = s.DroppedWrites
+		cached.LastError = s.LastError
+		cached.Enabled = s.Enabled
+		return cached
+	}
+	w.statsCacheMu.Unlock()
 	if !s.Enabled {
 		return s
 	}
@@ -637,6 +696,9 @@ func (w *archiveWriter) stats() ArchiveStats {
 			s.Bytes += info.Size()
 		}
 	}
+	w.statsCacheMu.Lock()
+	w.statsCachedAt, w.statsCachedVal = time.Now(), s
+	w.statsCacheMu.Unlock()
 	return s
 }
 
