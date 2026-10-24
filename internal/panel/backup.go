@@ -18,6 +18,7 @@ import (
 	"archive/zip"
 	"context"
 	"fmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"log"
 	"net/http"
 	"os"
@@ -32,8 +33,8 @@ import (
 type backupSettings struct {
 	mu      sync.Mutex
 	enabled bool
-	hour    int  // 每日触发整点（本地时区，0-23）
-	keep    int  // 保留份数（<=0 = 不轮转）
+	hour    int    // 每日触发整点（本地时区，0-23）
+	keep    int    // 保留份数（<=0 = 不轮转）
 	lastDay string // 最近一次自动触发的本地日期 "20060102"（手动触发不记录）
 }
 
@@ -66,7 +67,9 @@ func (p *Panel) StartBackupLoop(ctx context.Context) {
 			return
 		case now := <-t.C:
 			enabled, hour, _ := p.backupSnapshot()
-			if !enabled || now.Hour() != hour {
+			// 备份时点按 CST 判定（与调度器 hours 同口径）：UTC 容器上
+			// backup.hour=3 此前按宿主本地 3 点判，实际 CST 11 点才跑。
+			if !enabled || cst.Now().Hour() != hour {
 				continue
 			}
 			today := now.Format("20060102")
@@ -246,9 +249,9 @@ func (p *Panel) backupList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type backupItem struct {
-		Name string `json:"name"`
-		Size int64  `json:"size"`
-		MTime int64 `json:"mtime"`
+		Name  string `json:"name"`
+		Size  int64  `json:"size"`
+		MTime int64  `json:"mtime"`
 	}
 	var items []backupItem
 	var times []time.Time

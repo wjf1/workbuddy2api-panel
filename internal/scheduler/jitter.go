@@ -26,6 +26,13 @@ import (
 // jitterOffset 计算账号在 day（CST YYYY-MM-DD）的抖动偏移，范围 [0, maxMin*60s)。
 // fnv32(uid|day) 稳定可复现：同号同日恒等，跨号均匀分散（fnv 雪崩足够）。
 func jitterOffset(uid, day string, maxMin int) time.Duration {
+	return jitterOffsetKind(uid, day, "", maxMin)
+}
+
+// jitterOffsetKind 带任务种类的抖动键：默认配置下签到与旅行同为 [9,21] 点，
+// 若共用 uid|day 键则同一账号两类任务在同一秒各发一组请求——「每号双请求
+// 齐射」特征并未消除。键加入 kind 后两类任务对同一账号落在不同偏移点。
+func jitterOffsetKind(uid, day, kind string, maxMin int) time.Duration {
 	if maxMin <= 0 || uid == "" {
 		return 0
 	}
@@ -33,6 +40,10 @@ func jitterOffset(uid, day string, maxMin int) time.Duration {
 	_, _ = h.Write([]byte(uid))
 	_, _ = h.Write([]byte("|"))
 	_, _ = h.Write([]byte(day))
+	if kind != "" {
+		_, _ = h.Write([]byte("|"))
+		_, _ = h.Write([]byte(kind))
+	}
 	return time.Duration(h.Sum32()%uint32(maxMin*60)) * time.Second
 }
 

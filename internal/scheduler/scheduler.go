@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -812,6 +813,11 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 	var wg sync.WaitGroup
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
+	// 并发上限 + 号间微延迟（200-600ms 随机）：此前全池 goroutine 瞬时齐射——M5
+	// 抖动消的是「任务时点齐射」，这里漏了「轮询内齐射」；每 10 分钟一次全池
+	// 同时打余额端点同样是上游可观测的批量特征。
+	sem := make(chan struct{}, 4)
+	first := true
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled && !includeDisabled {
 			continue
@@ -820,9 +826,15 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 		if a == nil {
 			continue
 		}
+		if !first {
+			time.Sleep(time.Duration(200+rand.Int64N(400)) * time.Millisecond)
+		}
+		first = false
 		wg.Add(1)
 		go func(a *auth.Auth, uid string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
 			if err != nil {
 				log.Printf("balance %s: %v", logfmt.Label(uid, a.Nickname), err)

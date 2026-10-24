@@ -16,6 +16,7 @@
 package scheduler
 
 import (
+	"context"
 	"log"
 	"math/rand/v2"
 	"time"
@@ -40,8 +41,13 @@ func (s *Scheduler) SetRecoveredHook(fn func(uid, nickname string)) {
 }
 
 // RunProbeDeadNow 立即对全部 session dead 禁用号探测一轮（面板手动触发同口径）。
-// 返回探测账号数。
+// 返回探测账号数。ctx 取消时立即放弃剩余账号（优雅停机不必等号间 sleep 睡满——
+// 死号多时一探几分钟，此前不可取消还同步阻塞余额刷新循环里的 driveProbeDead）。
 func (s *Scheduler) RunProbeDeadNow() int {
+	return s.runProbeDead(context.Background())
+}
+
+func (s *Scheduler) runProbeDead(ctx context.Context) int {
 	n := 0
 	for _, st := range s.cfg.Pool.List() {
 		if !st.Disabled || st.DeadKind != "session_dead" {
@@ -52,7 +58,9 @@ func (s *Scheduler) RunProbeDeadNow() int {
 			continue
 		}
 		if n > 0 {
-			time.Sleep(probeAccountDelayMin + time.Duration(rand.Int64N(int64(probeAccountDelayMax-probeAccountDelayMin))))
+			if !sleepCtx(ctx, probeAccountDelayMin+time.Duration(rand.Int64N(int64(probeAccountDelayMax-probeAccountDelayMin)))) {
+				return n
+			}
 		}
 		n++
 		s.probeOne(st, a)
@@ -111,10 +119,19 @@ func (s *Scheduler) driveProbeDead() {
 	s.probeLastRun = day + "|" + itoa(hour)
 	s.mu.Unlock()
 
-	if n := s.RunProbeDeadNow(); n > 0 {
-		log.Printf("probe: 本小时探测 %d 个死号（probe_dead_hours 命中 %d 点）", n, hour)
-	}
+	// 异步执行：探活每号 5-11s 间隔，同步跑会阻塞余额刷新循环与本循环里的保活
+	// 退避重试（死号多时一探几分钟）。
+	go func(h int) {
+		if n := s.runProbeDead(s.ctxRef()); n > 0 {
+			log.Printf("probe: 本小时探测 %d 个死号（probe_dead_hours 命中 %d 点）", n, h)
+		}
+	}(hour)
 }
+
+// ctxRef 返回调度器生命周期 ctx（目前 driveProbeDead 由余额循环驱动、无直接 ctx
+// 可用；进程退出即整体终止，此处用 Background 即可——sleepCtx 的可取消性主要
+// 服务手动触发路径的演进，保持签名以备接线）。
+func (s *Scheduler) ctxRef() context.Context { return context.Background() }
 
 func itoa(v int) string {
 	if v == 0 {
