@@ -434,7 +434,8 @@ function renderAccounts(list, filtered) {
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + '</div><div class="id">' + esc(short) + '</div>' + tagBadges + '</td>' +
+      '<td class="who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') +
+        (s.member_tier === 'paid' ? ' <span class="tag" style="font-size:10.5px" title="会员档位（' + esc(ago(s.member_tier_fetched_at)) + ' 读取）">' + esc(s.member_pkg || '付费') + '</span>' : (s.member_tier === 'free' ? ' <span class="tag" style="font-size:10.5px" title="会员档位（' + esc(ago(s.member_tier_fetched_at)) + ' 读取）">Free</span>' : '')) + '</div><div class="id">' + esc(short) + '</div>' + tagBadges + '</td>' +
       '<td>' + tag + sdTag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +

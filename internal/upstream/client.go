@@ -946,6 +946,9 @@ const (
 	billingMeterPath   = "/billing/meter/get-user-resource"    // global 首选（国际版无 /v2 前缀）
 	dailyCheckinPath   = "/billing/meter/daily-checkin"        // global 首选
 	billingMeterPathV2 = "/v2/billing/meter/get-user-resource" // CN 现状 / global fallback
+
+	billingSummaryPath   = "/billing/meter/get-user-resource-summary"   // 会员档位摘要 global 首选
+	billingSummaryPathV2 = "/v2/billing/meter/get-user-resource-summary" // CN 现状 / global fallback
 	dailyCheckinPathV2 = "/v2/billing/meter/daily-checkin"
 )
 
@@ -966,6 +969,67 @@ func (c *Client) checkinMeterPaths(a *auth.Auth) []string {
 		return []string{dailyCheckinPath, dailyCheckinPathV2}
 	}
 	return []string{dailyCheckinPathV2}
+}
+
+// summaryMeterPaths 会员档位摘要端点的双路径（与 checkinMeterPaths 同形态）。
+func (c *Client) summaryMeterPaths(a *auth.Auth) []string {
+	if c.globalOn(a) {
+		return []string{billingSummaryPath, billingSummaryPathV2}
+	}
+	return []string{billingSummaryPathV2}
+}
+
+// MemberTier 会员档位读出（hub #621 同语义）：paid = 计费摘要 IsPaidUser；
+// pkg = 套餐名（付费包名，免费侧可能为空）。调用方节流一天一次——摘要端点
+// 与余额同族，高频轮询是上游可观测特征。
+type MemberTier struct {
+	Paid  bool
+	Pkg   string
+}
+
+// UserResourceSummary 拉计费摘要（get-user-resource-summary）：IsPaidUser /
+// SubscriptionPackageName。解析宽松（嵌套位置容错——上游信封层级调整不碎）。
+// 供面板「会员类型」胶囊显示；失败返回错误由调用方决定保留旧值（不写结论）。
+func (c *Client) UserResourceSummary(a *auth.Auth) (MemberTier, error) {
+	data, err := c.billingMeterJSON(a, c.summaryMeterPaths(a), http.MethodPost, map[string]any{})
+	if err != nil {
+		return MemberTier{}, err
+	}
+	return parseMemberTier(data), nil
+}
+
+// parseMemberTier 在响应 JSON 里宽松查找 IsPaidUser / SubscriptionPackageName
+// （任意嵌套层级，键名大小写不敏感）。
+func parseMemberTier(data json.RawMessage) MemberTier {
+	var out MemberTier
+	var walk func(v any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			for k, vv := range t {
+				lk := strings.ToLower(k)
+				if lk == "ispaiduser" {
+					if b, ok := vv.(bool); ok {
+						out.Paid = b
+					}
+				} else if lk == "subscriptionpackagename" {
+					if sv, ok := vv.(string); ok && sv != "" {
+						out.Pkg = sv
+					}
+				}
+				walk(vv)
+			}
+		case []any:
+			for _, vv := range t {
+				walk(vv)
+			}
+		}
+	}
+	var root any
+	if json.Unmarshal(data, &root) == nil {
+		walk(root)
+	}
+	return out
 }
 
 func (c *Client) chatBase(a *auth.Auth) string {

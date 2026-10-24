@@ -517,6 +517,33 @@ func (p *Pool) List() []Status {
 	}
 	return out
 }
+// SetTier 写入会员档位（计费摘要读取结果）。失败不写结论由调用方保证：
+// 只有摘要请求成功才调用本方法。节流（一天一次）经 TierNeedsFetch。
+func (p *Pool) SetTier(uid string, paid bool, pkg string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byUID[uid]
+	if !ok {
+		return
+	}
+	e.tierFetchedAt = time.Now()
+	e.tierPaid = paid
+	e.tierPkg = pkg
+	p.dirty.Store(true)
+}
+
+// TierNeedsFetch 报告该账号是否需要拉取会员档位（CST 自然日一天一次；
+// 从未读取过 = 需要）。
+func (p *Pool) TierNeedsFetch(uid string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byUID[uid]
+	if !ok {
+		return false
+	}
+	return e.tierFetchedAt.IsZero() || cst.Day(e.tierFetchedAt) != cst.Day(time.Now())
+}
+
 func (p *Pool) statusOf(uid string, e *entry) Status {
 	now := time.Now()
 	st := Status{
@@ -557,6 +584,16 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		// 禁用账号透出禁用原因（运维看不到为什么死）+ 死因分类（面板「待重登」分组）。
 		st.DisabledReason = e.reason
 		st.DeadKind = deadKindOf(e.reason)
+	}
+	// 会员档位：读过才透出（不猜）。
+	if !e.tierFetchedAt.IsZero() {
+		if e.tierPaid {
+			st.MemberTier = "paid"
+		} else {
+			st.MemberTier = "free"
+		}
+		st.MemberPkg = e.tierPkg
+		st.MemberTierFetchedAt = e.tierFetchedAt
 	}
 	if st.Cooling {
 		// 冷却剩余秒数（向上取整，避免 0 显示为已到期）。

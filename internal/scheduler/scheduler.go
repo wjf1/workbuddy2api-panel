@@ -831,6 +831,18 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 			}
 			s.cfg.Pool.ReenableIfCredits(uid, remain, total)
 			s.cfg.Pool.SetCreditsDetailed(uid, remain, total, expiring, earliestAt, earliestRemaining)
+			// 会员档位（计费摘要，hub #621 同语义）：CST 一天一次；失败保留旧值
+			// 不写结论（401/非 0 code/网络错误绝不当成「免费」）。摘要端点与余额
+			// 同族，靠天节流避免高频轮询成为上游可观测特征。
+			if s.cfg.Pool.TierNeedsFetch(uid) {
+				if mt, terr := s.cfg.Upstream.UserResourceSummary(a); terr == nil {
+					s.cfg.Pool.SetTier(uid, mt.Paid, mt.Pkg)
+					log.Printf("member-tier %s: %s（%s）", logfmt.Label(uid, a.Nickname),
+						map[bool]string{true: "paid", false: "free"}[mt.Paid], mt.Pkg)
+				} else {
+					log.Printf("member-tier %s: 读取失败，保留旧值: %v", logfmt.Label(uid, a.Nickname), terr)
+				}
+			}
 		}(a, st.UID)
 	}
 	wg.Wait()

@@ -91,6 +91,13 @@ type Status struct {
 	// reason 是自由文本，前端不猜字符串——分类收口在 deadKindOf 一处。
 	// session_dead → 面板「待重登」分组（重登可救）；banned → 上游风控封号（重登大概率再封）。
 	DeadKind string `json:"dead_kind,omitempty"`
+	// MemberTier 会员档位（hub #621 同语义）：paid/free。空 = 从未成功读取（不猜）。
+	// MemberPkg 计费摘要的套餐名（付费包名；免费侧可能为空）。失败不写结论——
+	// 401/非 0 code/网络错误保留旧值与时间戳。
+	MemberTier string `json:"member_tier,omitempty"`
+	MemberPkg  string `json:"member_pkg,omitempty"`
+	// MemberTierFetchedAt 档位读取时刻（面板 tooltip 展示）。
+	MemberTierFetchedAt time.Time `json:"member_tier_fetched_at,omitempty"`
 	// Paused 暂停选号：退出选号候选（与 disabled 一样不参与选号），但**照常参与**
 	// 签到 / 活跃上报 / 保活 / 余额刷新四类保号任务。与 disabled 正交——disabled 是
 	// 「授权/session 终态，需人工 revive」，paused 是「运维临时让位」（多号轮换场景），
@@ -194,6 +201,10 @@ type entry struct {
 	creditsExpiring          int64
 	creditsEarliestExpiry    time.Time
 	creditsEarliestRemaining int64
+	// 会员档位（M-②）：计费摘要读取结果。失败不写结论（保留旧值）；节流一天一次。
+	tierFetchedAt time.Time
+	tierPaid      bool
+	tierPkg       string
 	successCount             int64      // 累计成功
 	errTotal                 int64      // 累计错误（供成功率权重 successRate = successCount/(successCount+errTotal)，不清零）
 	lastErr                  time.Time  // 最近一次错误时间
