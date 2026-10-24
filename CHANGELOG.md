@@ -4,6 +4,29 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.16.1-panel] - 2026-10-24
+
+本版为**流式稳定性加固**：对标 `ardeyouxipianyi/workbuddy2api-hub`（v1.7.33）与同源上游 `misakano7545/workbuddy2api-panel` 后的精选迭代，只取四项小成本高收益修复；两项核对确认我方已有防护（记录结论防未来回归），一项核对发现 hub 修的能力我方早已具备。
+
+### 新增
+
+- **SSE 空闲心跳（OpenAI 路径）**：长思考模型（hy3 / deepseek-v4-pro 等）推理 30 秒+无输出时，客户端或中间代理会因读超时断连（表现为「对话中途断开」）。`upstream.StreamHint` 起旁路 goroutine，距上一次写出超过 15 秒即写一条 SSE 注释帧 `: ping\n\n`——SSE 规范保留语法，EventSource / OpenAI SDK 的解析器一律忽略，仅保活链路。写侧经 mutex 与主循环互斥（注释帧原子完整不撕裂）；帧密集流跳过 tick（`lastWriteAt` 判定，不给活跃流加噪音）；客户端已断连时写失败静默（主循环下一次写正常走断连处置）。
+- **SSE 空闲心跳（Anthropic 路径）**：`/v1/messages` 流式经 `anthropicStreamWriter` 翻译，StreamHint 的注释帧会被其 `handleFrame` 丢弃（不带 `data: ` 前缀，到不了客户端）——故心跳必须由本层发：首帧写出后每 15 秒发一条 Anthropic 官方 `ping` 事件（SDK 规范忽略），`event()` 经 mutex 与心跳互斥，`finish()` 停止。zCode / Claude Code 的长推理会话不再中途掉线。
+
+### 修复
+
+- **流式 chunk id 整流统一**（hub #607 口径）：issue #35 已兜「缺 id 补哨兵」，但**带不同 id 的帧保留原样**——上游确有流内 id 漂移的实测形态，客户端按 chunk id 管理流状态时 id 变化会让界面卡在「生成中」。改为首帧捕获 id 后全帧强制覆写统一（OpenAI 流式规范：一条响应一个 id）；error 帧走 writeRaw 原样透传不受影响。
+- **签到幂等误判回归钉子**（hub #596 教训）：hub 实测上游 `200 + code 10001「请求处理中，请勿重复操作」`曾被判成签到成功。核对结论：我方 `IsAlreadyCheckin` 的 markers 只有「已签到 / already」两类真实幂等文案，**无此 bug**——补 6 断言回归测试钉住（失败回执 / 限流文案 / 幂等正例 / 网络层错误四类边界），防未来 markers 漂移。
+
+### 对标核对结论（不开发，记录防重复调研）
+
+- **模型冷却窗口跨重启恢复**（hub #638）：我方 `modelCooldowns` 自 1.15.6 起已持久化进 `state.json`，恢复时惰性过滤过期条目 + safefile 原子写 + `.bak` 回退 + `pool_test`「survive reload」覆盖——hub 修的正是我方已有能力，零缺口。
+
+### 验证
+
+- **单测**：`go test ./... -count=1` 全绿（25 包）。新增 `internal/upstream/sse_heartbeat_test`（id 整流 / 慢流心跳 / 活跃流无心跳 3 例）、`internal/server/anthropic_ping_test`（ping 事件与 finish 停止 / 高频事件与心跳并发不撕裂 2 例）、`checkin_retry_test` 追加回执判定 1 例。
+- 发布物与 v1.16.0 同流程：版本常量 `1.16.1-panel`、tag `v1.16.1`、CI 五平台产物。
+
 ## [1.16.0-panel] - 2026-10-24
 
 本版为**会话失效恢复与防复发**：针对 1.15.7 实案（2026-10-23 六账号 RT 链被上游批量吊销、只能人工重登、死号混在普通禁用里不可辨识、无任何告警）的系统性治理，按「可见 → 恢复 → 防复发」三层布防（设计文档 `docs/DESIGN-v1.16.0.md`）。
