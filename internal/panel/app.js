@@ -1,10 +1,16 @@
 'use strict';
 /* ── 状态 ─────────────────────────────────────────────────────────── */
 const LS_KEY = 'wb2api.key', LS_THEME = 'wb2api.theme';
-let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
+
+/* lsGet/lsSet：localStorage 安全包装——隐私模式/禁用存储的浏览器直接访问会抛
+   SecurityError 中断整份脚本（此前顶层多处的裸访问让面板整体白屏）。 */
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 存不了就算了 */ } }
+let pollLastOKAt = 0; // 最近一次轮询成功时刻（离线指示用）
+let theme = lsGet(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
-let logPin = true, loginState = null, loginTimer = null;
+let logPin = true, loginState = null, loginTimer = null, loginCloseTimer = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
 let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
@@ -33,7 +39,7 @@ function applyTheme() {
 addEventListener('change', applyTheme);
 $('btnTheme').onclick = () => {
   theme = effTheme() === 'light' ? 'dark' : 'light';
-  localStorage.setItem(LS_THEME, theme);
+  lsSet(LS_THEME, theme);
   applyTheme();
 };
 applyTheme();
@@ -41,7 +47,7 @@ applyTheme();
 /* ── 请求 ─────────────────────────────────────────────────────────── */
 async function api(path, opts = {}) {
   const h = Object.assign({}, opts.headers || {});
-  const k = localStorage.getItem(LS_KEY);
+  const k = lsGet(LS_KEY);
   if (k) h['Authorization'] = 'Bearer ' + k;
   if (opts.body) h['Content-Type'] = 'application/json';
   const r = await fetch('/panel/api/' + path, Object.assign({}, opts, { headers: h }));
@@ -308,7 +314,7 @@ function openKey() { $('keyVeil').classList.add('on'); setTimeout(() => $('keyIn
 $('btnKey').onclick = async () => {
   const v = $('keyInput').value.trim();
   if (!v) return;
-  localStorage.setItem(LS_KEY, v);
+  lsSet(LS_KEY, v);
   try {
     await api('overview');
     $('keyErr').hidden = true;
@@ -465,6 +471,7 @@ function renderAccounts(list, filtered) {
 async function loadOverview(quiet) {
   try {
     const d = await api('overview');
+    markPoll(true);
     overviewData = d;
     $('sTotal').textContent = d.total;
     $('sHealthy').textContent = d.healthy;
@@ -493,7 +500,7 @@ async function loadOverview(quiet) {
     const raw = d.accounts || [];
     const shown = accApply(raw);
     renderAccounts(shown, shown.length !== raw.length);
-  } catch (e) { if (!quiet) toast(e.message, 'err'); }
+  } catch (e) { markPoll(false); if (!quiet) toast(e.message, 'err'); }
 }
 
 /* 标签筛选下拉选项：从 overview.tags 汇总去重（保序），保留当前选中项。 */
@@ -696,26 +703,26 @@ $('accBody').addEventListener('click', async ev => {
   finally { b.disabled = false; loadOverview(true); }
 });
 
-$('btnCheckinAll').onclick = async () => {
-  try { await api('checkin_all', { method: 'POST' }); toast('全部签到已开始，结果见日志', 'ok'); }
-  catch (e) { toast(e.message, 'err'); }
-};
-$('btnKeepaliveAll').onclick = async () => {
-  try { await api('keepalive_all', { method: 'POST' }); toast('全部保活已开始，结果见日志', 'ok'); }
-  catch (e) { toast(e.message, 'err'); }
-};
-$('btnTravelAll').onclick = async () => {
-  try { await api('travel_all', { method: 'POST' }); toast('旅行巡检已开始（含领养链路），结果见日志', 'ok'); }
-  catch (e) { toast(e.message, 'err'); }
-};
-$('btnActivityAll').onclick = async () => {
-  try { await api('activity_all', { method: 'POST' }); toast('活跃上报已开始，结果见日志', 'ok'); }
-  catch (e) { toast(e.message, 'err'); }
-};
-$('btnProbeDead').onclick = async () => {
-  try { await api('probe_dead_all', { method: 'POST' }); toast('死号探活已开始，结果见日志', 'ok'); }
-  catch (e) { toast(e.message, 'err'); }
-};
+$('btnCheckinAll').onclick = () => busyBtn($('btnCheckinAll'), '签到中…', async () => {
+  await api('checkin_all', { method: 'POST' });
+  return '全部签到已开始，结果见日志';
+});
+$('btnKeepaliveAll').onclick = () => busyBtn($('btnKeepaliveAll'), '保活中…', async () => {
+  await api('keepalive_all', { method: 'POST' });
+  return '全部保活已开始，结果见日志';
+});
+$('btnTravelAll').onclick = () => busyBtn($('btnTravelAll'), '巡检中…', async () => {
+  await api('travel_all', { method: 'POST' });
+  return '旅行巡检已开始（含领养链路），结果见日志';
+});
+$('btnActivityAll').onclick = () => busyBtn($('btnActivityAll'), '上报中…', async () => {
+  await api('activity_all', { method: 'POST' });
+  return '活跃上报已开始，结果见日志';
+});
+$('btnProbeDead').onclick = () => busyBtn($('btnProbeDead'), '探测中…', async () => {
+  await api('probe_dead_all', { method: 'POST' });
+  return '死号探活已开始，结果见日志';
+});
 
 /* ── 模型 ─────────────────────────────────────────────────────────── */
 /* 实测上限标注：scripts/probe_max_tokens.py --panel-out 写入探测结果，
@@ -1265,7 +1272,7 @@ $('cfgForm').onsubmit = async ev => {
     toast(n ? '配置已保存，其中 ' + n + ' 项需重启进程生效' : '配置已保存并立即生效', 'ok');
     // 密钥可能已改：本次会话沿用新值，避免下一次轮询被 401。
     const k = $('cfgKey').value.trim();
-    if (k) localStorage.setItem(LS_KEY, k);
+    if (k) lsSet(LS_KEY, k);
     loadConfig();
     loadOverview(true);
   } catch (e) { toast('保存失败：' + e.message, 'err'); }
@@ -1322,7 +1329,7 @@ async function pollLogin() {
       $('addReady').hidden = true;
       $('addDone').hidden = false;
       $('addDone').textContent = '已添加 ' + (r.nickname || r.uid) + (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中';
-      setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
+      loginCloseTimer = setTimeout(() => { loginCloseTimer = null; closeAdd(); loadOverview(true); }, 1600);
     }
   } catch (e) {
     stopPoll();
@@ -1331,7 +1338,12 @@ async function pollLogin() {
     $('addErr').textContent = e.message + '（关闭后重新添加）';
   }
 }
-function closeAdd() { stopPoll(); loginState = null; $('addVeil').classList.remove('on'); }
+function closeAdd() {
+  stopPoll();
+  if (loginCloseTimer) { clearTimeout(loginCloseTimer); loginCloseTimer = null; } // 手动关闭清定时器：防旧定时器误关下一次打开的弹窗
+  loginState = null;
+  $('addVeil').classList.remove('on');
+}
 $('btnCloseAdd').onclick = closeAdd;
 $('btnStartLogin').onclick = startAddLogin;
 $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank', 'noopener');
@@ -1341,7 +1353,7 @@ $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textCo
 /* ── 死号一键重登（复用「添加账号」的设备授权流）───────────────────── */
 /* loginPoll 完成后 SaveAtomic 覆盖 auths/workbuddy-<uid>.json + Pool.Add(upsert)
    + Pool.Revive（全清禁用/冷却/计数），对死号重登同 uid 即「覆盖凭证 + 复活」。 */
-let reloginUid = null, reloginState = null, reloginTimer = null;
+let reloginUid = null, reloginState = null, reloginTimer = null, reloginCloseTimer = null;
 function openRelogin(uid) {
   const acc = ((overviewData && overviewData.accounts) || []).find(s => s.uid === uid) || {};
   reloginUid = uid;
@@ -1386,7 +1398,7 @@ async function pollRelogin() {
     if (reloginUid && r.uid === reloginUid) {
       $('reloginDone').hidden = false;
       $('reloginDone').textContent = '重登成功：' + (r.nickname || r.uid) + ' 已覆盖新凭证并复活（账号已可用）';
-      setTimeout(() => { closeRelogin(); loadOverview(true); }, 1600);
+      reloginCloseTimer = setTimeout(() => { reloginCloseTimer = null; closeRelogin(); loadOverview(true); }, 1600);
     } else {
       // 登成了另一个账号：凭证已作为新账号入池（后端 upsert + Revive），但目标死号仍待重登。
       $('reloginErr').hidden = false;
@@ -1405,6 +1417,7 @@ async function pollRelogin() {
 function closeRelogin() {
   stopReloginPoll();
   reloginState = null; reloginUid = null;
+  if (reloginCloseTimer) { clearTimeout(reloginCloseTimer); reloginCloseTimer = null; } // 同 closeAdd
   $('reloginVeil').classList.remove('on');
 }
 $('btnCloseRelogin').onclick = closeRelogin;
@@ -1419,7 +1432,7 @@ $('importFile').onchange = async () => {
   const fd = new FormData();
   for (const f of files) fd.append('file', f);
   const h = {};
-  const k = localStorage.getItem(LS_KEY);
+  const k = lsGet(LS_KEY);
   if (k) h['Authorization'] = 'Bearer ' + k;
   try {
     const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
@@ -1558,7 +1571,7 @@ $('btnDoExport').onclick = async () => {
 };
 async function fetchExportJson(qs) {
   const h = {};
-  const k = localStorage.getItem(LS_KEY);
+  const k = lsGet(LS_KEY);
   if (k) h['Authorization'] = 'Bearer ' + k;
   const r = await fetch('/panel/api/export/cockpit' + qs, { headers: h });
   if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
@@ -1709,7 +1722,7 @@ $('backupList').addEventListener('click', async ev => {
   if (!b) return;
   try {
     const h = {};
-    const k = localStorage.getItem(LS_KEY);
+    const k = lsGet(LS_KEY);
     if (k) h['Authorization'] = 'Bearer ' + k;
     const r = await fetch('/panel/api/backup/' + encodeURIComponent(b.dataset.ba) + '/download', { headers: h });
     if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
@@ -1735,11 +1748,43 @@ $('btnRefresh').onclick = async () => {
   if (view === 'logs') loadLogs();
 };
 
+/* busyBtn：批量按钮防双击包装——点击期间禁用并显示进行中文案，结束恢复。
+   此前五个批量按钮无任何在途防护，双击即重复 POST（packages 还是逐账号实时
+   查上游的昂贵调用）。 */
+function busyBtn(btn, doing, fn) {
+  if (btn.disabled) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = doing;
+  Promise.resolve()
+    .then(fn)
+    .then(msg => { if (msg) toast(msg, 'ok'); })
+    .catch(e => toast(e.message, 'err'))
+    .finally(() => { btn.disabled = false; btn.textContent = orig; });
+}
+
 /* ── 轮询 ─────────────────────────────────────────────────────────── */
 function refreshVisible() {
+  // 用 Promise.race 包装：loadXxx 内部 catch 吞错（quiet 轮询），但网络层 fetch
+  // 失败会让函数 reject 吗？——不会（内部 catch）。改为探活式：直接打一个最轻
+  // 请求判定连通性成本高；务实方案——loadOverview 成功路径里调 markPoll(true)
+  // （见 loadOverview 的 overviewData 赋值处），这里只兜 logs/taskscenter 视图。
   if (view === 'accounts') loadOverview(true);
   else if (view === 'logs') loadLogs();
   else if (view === 'taskscenter') reattachQueueView();
+}
+/* 连续失败计数（离线指示）：后端不可达时轮询静默失败，界面仍显示上次的
+   「服务正常」——加离线态与「上次成功 Ns 前」，网关挂掉一眼可见。 */
+let pollFails = 0;
+function markPoll(ok) {
+  if (ok) { pollFails = 0; pollLastOKAt = Date.now(); return; }
+  pollFails++;
+  if (pollFails >= 2) {
+    const ns = pollLastOKAt ? Math.round((Date.now() - pollLastOKAt) / 1000) : '?';
+    $('navState').textContent = '连接断开（上次成功 ' + ns + ' 秒前）';
+    const p = $('navPulse');
+    if (p) p.className = 'pulse bad';
+  }
 }
 function start() {
   loadOverview(true);
@@ -3252,7 +3297,7 @@ if ($('pkDetail')) $('pkDetail').addEventListener('click', ev => {
    与 [PK_DEFAULT_DETAIL_LIMIT, renderPackages)），顶层 localStorage/$ 语句落进
    切片区会让无 DOM 桩的求值环境 ReferenceError——上游测试的切片边界不动。 */
 const LS_PK_SORT = 'pkSortMode';
-let pkSortMode = localStorage.getItem(LS_PK_SORT) || 'end_asc';
+let pkSortMode = lsGet(LS_PK_SORT) || 'end_asc';
 const PK_SORT_LABELS = { end_asc: '按到期升序 · 近的在前', size_desc: '按面额降序' };
 // 排序切换时重排明细需要 detailLimit（上游折叠配置），loadPackages 拉到后缓存。
 let lastDetailLimit = PK_DEFAULT_DETAIL_LIMIT;
@@ -3262,11 +3307,11 @@ if ($('pkSort')) {
   $('pkSort').value = pkSortMode;
   if ($('pkSort').value !== pkSortMode) {        // localStorage 里存了废弃值：回落默认
     pkSortMode = 'end_asc';
-    localStorage.setItem(LS_PK_SORT, pkSortMode);   // 不用 removeItem：harness 桩无此方法
+    lsSet(LS_PK_SORT, pkSortMode);   // 不用 removeItem：harness 桩无此方法
   }
   $('pkSort').onchange = () => {
     pkSortMode = $('pkSort').value;
-    localStorage.setItem(LS_PK_SORT, pkSortMode);
+    lsSet(LS_PK_SORT, pkSortMode);
     if (lastPackages) renderPackages(lastPackages, lastDetailLimit);   // 数据在内存，直接重排
   };
 }
