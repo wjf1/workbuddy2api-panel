@@ -795,6 +795,33 @@ func (s *Scheduler) driveKeepaliveBackoff() int {
 	return len(due)
 }
 
+// KeepaliveStats 保活可观测快照（/status 透出）。
+type KeepaliveStats struct {
+	Smart      bool `json:"smart"`       // smart 模式开关
+	SmartDays  int  `json:"smart_days"`  // 阈值（天）
+	BackoffNum int  `json:"backoff_num"` // 退避表规模（等待重试的账号数）
+}
+
+// Stats 返回保活可观测快照。
+func (s *Scheduler) KeepaliveStats() KeepaliveStats {
+	smart, _ := s.kaSnapshot()
+	s.kaMu.Lock()
+	n := len(s.kaBackoff)
+	s.kaMu.Unlock()
+	days := s.smartDaysSnapshot()
+	return KeepaliveStats{Smart: smart, SmartDays: days, BackoffNum: n}
+}
+
+// smartDaysSnapshot 读阈值天数。
+func (s *Scheduler) smartDaysSnapshot() int {
+	s.schedMu.Lock()
+	defer s.schedMu.Unlock()
+	if s.smartDays <= 0 {
+		return 14
+	}
+	return s.smartDays
+}
+
 // kaBackTries 读取当前退避次数（日志用）。
 func (s *Scheduler) kaBackTries(uid string) int {
 	s.kaMu.Lock()

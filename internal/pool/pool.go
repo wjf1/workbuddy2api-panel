@@ -83,6 +83,13 @@ type Pool struct {
 	dailyTokenLimit       int64
 	dailyCreditLimitMilli int64
 	modelDailyTokenLimit  int64
+	// 可观测计数器（v1.18.1 ②，/status 透出）：floorBlocks / dailyLimitBlocks
+	// 为 pick 主路径的拦截命中数（选号不可见是此前审查发现的盲区）；
+	// lastPersistOK / lastPersistErr 落盘健康（persistFails 此前只活在日志里）。
+	floorBlocks     atomic.Uint64
+	dailyLimitBlocks atomic.Uint64
+	lastPersistOK   atomic.Int64 // Unix 秒；0 = 尚未写过
+	lastPersistErr  atomic.Value // string
 	// 余额趋势历史（v1.17.0 ③）：uid → 小时桶采样序列，独立文件落盘（观测数据）。
 	// creditHistDirty 原子脏标记：采样置位、落盘清除（flusher 周期 + Close 兜底）。
 	creditHist      map[string][]creditPoint

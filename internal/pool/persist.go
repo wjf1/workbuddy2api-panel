@@ -145,6 +145,7 @@ func (p *Pool) persistState() {
 	raw, err := json.MarshalIndent(sf, "", "  ")
 	if err != nil {
 		p.notePersistFail(err)
+		p.lastPersistErr.Store(err.Error())
 		p.dirty.Store(true)
 		return
 	}
@@ -155,9 +156,11 @@ func (p *Pool) persistState() {
 	// 有效内容留成 .bak —— 读到坏文件时兜底，冷却/停牌状态不至于一次掉电全丢。
 	if err := safefile.WriteKeep(p.stateFp, raw, 0o600); err != nil {
 		p.notePersistFail(err)
+		p.lastPersistErr.Store(err.Error())
 		p.dirty.Store(true) // 失败复位：下一轮 flusher 重试（此前要等下次状态变更）
 		return
 	}
+	p.lastPersistOK.Store(time.Now().Unix())
 	p.mu.Lock()
 	recovered := p.persistFails > 0
 	p.persistFails = 0

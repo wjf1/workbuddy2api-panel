@@ -372,6 +372,7 @@ func main() {
 	}
 
 	h := server.NewHandler(server.Config{
+		GetKeepaliveStats: func() any { return sch.KeepaliveStats() },
 		Pool:         p,
 		Upstream:     up,
 		APIKey:       cfg.APIKey,

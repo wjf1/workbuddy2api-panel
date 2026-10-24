@@ -67,10 +67,12 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 			continue
 		}
 		if floorBlocked(e) {
-			continue // 积分保底：触底号不接实测收费模型（tier 0/1 不受限）
+			p.floorBlocks.Add(1) // 可观测：保底拦截命中（此前 pick 路径完全静默）
+			continue             // 积分保底：触底号不接实测收费模型（tier 0/1 不受限）
 		}
 		if p.dailyLimitBlockedForRealmModel(e, reqModel, realm, now) {
-			continue // 每日限额护栏：Token/积分/按模型任一达限（v1.17.0 ⑤）
+			p.dailyLimitBlocks.Add(1) // 可观测：护栏拦截命中
+			continue                  // 每日限额护栏：Token/积分/按模型任一达限（v1.17.0 ⑤）
 		}
 		if p.inFlightFull(e) {
 			continue // 在途占满：跳过（max=0 不限时不触发）

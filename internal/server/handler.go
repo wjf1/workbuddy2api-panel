@@ -37,6 +37,11 @@ type Config struct {
 	MaxRotate int    // 单请求最多换号次数，默认 3
 	// Session 会话粘性路由器（可选；nil = 关闭粘性，纯 Pick 轮换）。
 	Session *session.Router
+	// GetKeepaliveStats 返回保活可观测快照（供 /status；nil 时该键为 null）。
+	// 闭包注入而非直接依赖 scheduler 包：server 与 scheduler 保持解耦（与
+	// StickyCount 同模式）。
+	GetKeepaliveStats func() any
+
 	// StickyCount 返回当前粘性会话绑定数（供 /status）；nil 时报告 0。
 	StickyCount func() int
 	// RedisMode 观测字段（"upstash" / "noop"），供 /status 透出。
@@ -336,6 +341,21 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		// upstream_queue 上游排队门控快照（激活时给出 until/code/position/size/
 		// retry_after，未激活为 null）。排队与账号无关，独立字段避免与冷却混淆。
 		"upstream_queue": h.upstreamQueueStatusPayload(),
+		// 护栏拦截计数（v1.18.1 可观测）：保底/每日限额在 pick 主路径此前完全静默。
+		"guards": h.cfg.Pool.Guards(),
+		// state.json 落盘健康：last_ok（Unix 秒，0=未写过）+ last_error（空=无错）。
+		"persist_health": func() map[string]any {
+			okAt, lastErr := h.cfg.Pool.PersistHealth()
+			return map[string]any{"last_ok": okAt, "last_error": lastErr}
+		}(),
+		// keepalive 可观测：smart 开关/阈值/退避表规模（面板装配注入 GetKeepaliveStats；
+		// nil 时省略该键——handler 不直接依赖 scheduler 包，避免分层穿透）。
+		"keepalive": func() any {
+			if h.cfg.GetKeepaliveStats == nil {
+				return nil
+			}
+			return h.cfg.GetKeepaliveStats()
+		}(),
 		// cost_explore 事件与 per-model 时间戳（时间值由 encoding/json 写 RFC3339）。
 		"cost_explore": map[string]any{
 			"events_total": exploreEvents,

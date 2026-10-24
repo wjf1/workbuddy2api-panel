@@ -613,6 +613,27 @@ func (p *Pool) SetDailyLimits(tokenLimit, creditLimitMilli, modelTokenLimit int6
 	p.modelDailyTokenLimit = modelTokenLimit
 }
 
+// GuardCounters 护栏可观测计数（/status 透出）。
+type GuardCounters struct {
+	FloorBlocks      uint64 `json:"floor_blocks"`
+	DailyLimitBlocks uint64 `json:"daily_limit_blocks"`
+}
+
+// Guards 返回护栏拦截命中计数。
+func (p *Pool) Guards() GuardCounters {
+	return GuardCounters{FloorBlocks: p.floorBlocks.Load(), DailyLimitBlocks: p.dailyLimitBlocks.Load()}
+}
+
+// PersistHealth 落盘健康（/status 透出）：最近一次成功落盘的 Unix 秒（0=尚未
+// 写过）与最近一次错误（空串=无错）。state.json 持续失败时面板可见。
+func (p *Pool) PersistHealth() (lastOK int64, lastErr string) {
+	lastOK = p.lastPersistOK.Load()
+	if v, ok := p.lastPersistErr.Load().(string); ok {
+		lastErr = v
+	}
+	return
+}
+
 // SetTier 写入会员档位（计费摘要读取结果）。失败不写结论由调用方保证：
 // 只有摘要请求成功才调用本方法。节流（一天一次）经 TierNeedsFetch。
 func (p *Pool) SetTier(uid string, paid bool, pkg string) {
