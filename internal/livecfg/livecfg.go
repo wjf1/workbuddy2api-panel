@@ -22,6 +22,13 @@ type Snapshot struct {
 	RecordClientInfo     bool                // 请求日志是否记录调用来源（客户端 IP / UA）
 	HiddenModels         map[string]struct{} // 精确隐藏的模型 id（已归一化为 "cn:x"/"global:x" 全量形式）；nil = 不隐藏
 	ModelAliases         map[string]string   // 客户端名 → 真实模型名（键已归一化小写；"cn:x"/"global:x" 前缀键只在该域生效，裸名键两域都生效）；nil = 不映射
+	// ModelFallback 模型降级路由表（pool.model_fallback）：key = 请求模型（裸名），
+	// value = 6004 模型级限流时改用的等价模型。空/nil = 不降级（老行为）。
+	// 语义：等价模型是同一底层能力的不同计价档（如 deepseek-v4.1-flash →
+	// deepseek-v4-flash），贵/便宜的那个被限流时改用另一个继续服务。只对 6004 生效
+	// （11102 换模型救不了、账号级 429/5xx 换模型无意义）；降级不写持久状态，
+	// 冷却到期自动回原模型。热生效。
+	ModelFallback map[string]string
 }
 
 // Holder 原子持有当前快照。

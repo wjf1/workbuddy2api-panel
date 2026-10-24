@@ -274,6 +274,12 @@ type Config struct {
 		// tier 0（免费）/ tier 1（无观测）不受限；签到回血越过 floor 自动恢复。
 		// 默认 0 = 关闭；负值钳 0。
 		CreditFloor int64 `json:"credit_floor"`
+
+		// ModelFallback 模型降级路由表（misakano PR #52 同语义）：key = 请求模型
+		// （裸名，如 "deepseek-v4.1-flash"），value = 6004 模型级限流时改用的等价
+		// 模型。只对 6004 生效；降级是「同账号换模型」，冷却记在原模型名下；降级
+		// 不写持久状态，冷却到期自动回原模型。空/缺省 = 不降级。热生效。
+		ModelFallback map[string]string `json:"model_fallback"`
 	} `json:"pool"`
 
 	SessionSticky struct {
@@ -719,6 +725,18 @@ func (c *Config) normalize() error {
 	}
 	if len(c.Schedule.GrowthHours) == 0 {
 		c.Schedule.GrowthHours = []int{1}
+	}
+	// model_fallback：剔除自指 / 空目标 / 空键条目（降级链路里自指会被 fallbackTo
+	// 拦掉，这里在配置层就地清洗，避免脏键静默躺在配置里）。
+	if len(c.Pool.ModelFallback) > 0 {
+		clean := make(map[string]string, len(c.Pool.ModelFallback))
+		for k, v := range c.Pool.ModelFallback {
+			if k == "" || v == "" || k == v {
+				continue
+			}
+			clean[k] = v
+		}
+		c.Pool.ModelFallback = clean
 	}
 	// M7 keepalive_mode 非法值回落 daily（用户手写错别字不至于静默变成 smart/daily 之外的第三态）。
 	if c.Schedule.KeepaliveMode != "daily" && c.Schedule.KeepaliveMode != "smart" {

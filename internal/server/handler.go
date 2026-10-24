@@ -132,6 +132,26 @@ func (h *Handler) modelAlias(realm, bare string) (string, bool) {
 	return target, ok
 }
 
+// modelFallbackTo 查模型降级路由表（pool.model_fallback，misakano PR #52 同语义）：
+// cur 模型命中等价模型 → 返回目标；未配置 / 目标与当前相同 → 空串。
+// 查找键先原样再小写（配置键容忍大小写书写差异），只对裸名（无前缀）生效。
+func (h *Handler) modelFallbackTo(cur string) string {
+	if cur == "" {
+		return ""
+	}
+	m := h.loadLive().ModelFallback
+	if len(m) == 0 {
+		return ""
+	}
+	if to, ok := m[cur]; ok && to != "" && to != cur {
+		return to
+	}
+	if to, ok := m[strings.ToLower(cur)]; ok && to != "" && to != cur {
+		return to
+	}
+	return ""
+}
+
 // softCooldown 返回当前生效的软冷却基数（热改优先，<=0 回退默认）。
 func (h *Handler) softCooldown() time.Duration {
 	if d := h.loadLive().SoftCooldown; d > 0 {
@@ -752,6 +772,39 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			unbindSticky()
 		}
 	}
+	// 模型降级（pool.model_fallback，misakano PR #52 同语义）：curModel 是**本轮
+	// 实际使用**的模型，初值 = bareModel；某账号在本轮模型上被 6004 模型级限流、
+	// 且配置了等价模型时，本账号换用等价模型重试（curModel 改指向等价模型）。
+	//
+	// ⚠️ 为什么必须与 bareModel 分开：降级后二者指向**不同模型**，而它们要喂给不同
+	// 用途——实际用途（选号 / 出站 body / 模型感知冷却豁免）→ curModel；冷却记账
+	// （applyErrorPolicy 的 6004 分支）→ bareModel（**限流的是原模型**！误记成等价
+	// 模型会把好好的等价模型也冷却掉，降级就白做了）。
+	//
+	// fallbackTried 记录本请求已试过的降级目标，防 A→B→A 循环（与 tried 按账号
+	// 去重正交：降级是「同账号换模型」）。降级不写持久状态，冷却到期自动回原模型。
+	curModel := bareModel
+	fallbackTried := map[string]bool{}
+	applyFallback := func(to string) bool {
+		if to == "" || fallbackTried[to] {
+			return false
+		}
+		fallbackTried[to] = true
+		log.Printf("INFO: [server] model fallback: %s -> %s (6004 model rate limit)", curModel, to)
+		curModel = to
+		// 出站 body 重写：上游必须收到等价模型名。与 models.aliases 同一手法
+		// （解析 → 改顶层 model → 重序列化）。解析失败时不动 body——那说明请求体
+		// 本就不是合法 JSON，后续会按原样失败。
+		var obj map[string]any
+		if json.Unmarshal(body, &obj) == nil {
+			obj["model"] = to
+			if nb, merr := json.Marshal(obj); merr == nil {
+				body = nb
+			}
+		}
+		return true
+	}
+
 	// ttfb 首 token 等待（仅流式有观测；非流式传 0 = 无观测，速率不扣减）。
 	// 显式入参而不是读 st.ttfb：后者在流式分支里是**调用之后**才赋值的，
 	// 靠顺序传递会让将来重排代码时静默把速率算回旧的错口径。
@@ -889,7 +942,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
 		var acct *auth.Auth
 		if stickyUID != "" {
-			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, bareModel)
+			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, curModel)
 			if acct == nil || (realm != "" && acct.Realm() != realm) {
 				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑，
 				// 本次回落普通轮换。
@@ -900,16 +953,25 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if acct == nil {
 			// 模型感知 + realm 感知选号：模型非空时启用 6004 模型级冷却豁免
 			// （healthyForModel），realm 谓词过滤跨域账号。
-			acct = h.cfg.Pool.PickExcludingForRealm(tried, bareModel, realm)
+			acct = h.cfg.Pool.PickExcludingForRealm(tried, curModel, realm)
 		}
 		if acct == nil {
+			// 模型降级兜底：全池该模型都处于 6004 冷却时 PickExcludingForRealm 返回
+			// nil——若只在上游返回 6004 后降级，这里会**先报 503、根本走不到降级**，
+			// 恰好在最需要降级的场景（全池被限流）失效。选不到号时也尝试换模型：
+			// 锁定等价模型后重新进入下一轮选号（fallbackTried 防循环，MaxRotate 内）。
+			if to := h.modelFallbackTo(curModel); to != "" {
+				if applyFallback(to) {
+					continue
+				}
+			}
 			st.status = http.StatusServiceUnavailable
 			// 记下"是不是模型级阻塞"。选号返回 nil 有两种完全不同的成因：
 			//   (a) 池子真的没有可用号（账号级冷却/在途占满/积分保底）；
 			//   (b) 号都在，但每个号都对这个模型处于模型级冷却（11102/6004）。
 			// 两者此前都报 no_healthy_account，导致「模型不可用」被读成「号全挂了」。
 			// 在这里取一次快照，供下方错误构造区分（issue #102 附带发现 1）。
-			modelBlock = h.cfg.Pool.ModelBlocked(bareModel)
+			modelBlock = h.cfg.Pool.ModelBlocked(curModel)
 			break
 		}
 		st.uid = acct.UID
@@ -1111,6 +1173,22 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
 			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+			// 模型降级（仅 6004 模型级限流）：等价模型是同一底层能力的不同计价档，
+			// 贵/便宜的那个被限流时改用另一个继续服务。**同账号**换模型（不换号，
+			// 换模型比换号代价小）；冷却已按 bareModel（原模型）记上——误记成等价
+			// 模型会把好好的等价模型也冷却掉，降级白做。11102 换模型救不了（等价
+			// 模型可能同样没有）、账号级 429/5xx 换模型无意义，均不走此分支。
+			if kind == upstream.ErrSoftRate && upstream.IsModelRateLimit(string(respBody)) {
+				if to := h.modelFallbackTo(curModel); to != "" {
+					if applyFallback(to) {
+						// 同账号重试：把该账号从 tried 移除（降级是「换模型」不是
+						// 「换号」，同一账号仍应有机会）；sticky 保持（本请求内不重绑）。
+						delete(tried, acct.UID)
+						releaseHeld()
+						continue
+					}
+				}
+			}
 			fail(acct.UID)
 			// 上游排队 fail-fast（优先于 WAF/rotateBackoff）：6020/6021 是上游服务端
 			// 队列水位，换账号、换模型都不会绕过（实测两模型回同一排队码）——继续轮转
