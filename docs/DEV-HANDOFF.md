@@ -40,22 +40,22 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `0f9e896` | `git log --oneline -1` |
+| HEAD | `936750a` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 108 文件 / 33,486 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 105 文件 / 884 个 Test 函数 | 同上 |
-| `go test ./...` | **23 包全绿，约 11 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
+| 非测试代码 | 108 文件 / 33,501 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 108 文件 / 894 个 Test 函数 | 同上 |
+| `go test ./...` | **26 包全绿，0 个 no test files，约 11 秒**（scheduler 占 7.7s，panel 2.2s，其余 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
 | 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 989 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 888 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
-| 最慢包 | `internal/scheduler` 约 7.3s（其余均 < 2s） | 见测试输出 |
+| 最慢包 | `internal/scheduler` 约 7.7s，`internal/panel` 2.2s（其余均 < 2s） | 见测试输出 |
 
-### 目录职责（19 个 internal 包）
+### 目录职责（21 个 internal 包）
 
 ```
-cmd/server      入口：配置加载 / 装配 / HTTP Server（main.go 711 行，含 config.go 855 行）
+cmd/server      入口：配置加载 / 装配 / HTTP Server（main.go 741 行，含 config.go 888 行）
 cmd/login       账号扫码登录 CLI        cmd/credit  积分查询 CLI
-cmd/signin      签到 CLI（无测试）      cmd/trial   试用/资格判定 CLI（无测试）
+cmd/signin      签到 CLI                cmd/trial   试用/资格判定 CLI
 internal/
   server        HTTP 入口与协议层：OpenAI 兼容 /v1/* + Anthropic 兼容 /v1/messages
                 handler.go(1962) 是主链路；anthropic*.go 是协议翻译；logging.go 请求流水
@@ -70,6 +70,7 @@ internal/
   livecfg       配置热加载（atomic 快照）        redisstore Redis 镜像（可 Noop）
   safefile      fsync+rename 原子落盘            logfmt 日志标签化（纯字符串 helper）
   logx          分级日志门面：保形 slog Handler（WARN:/ERR: 前缀，不写 level=）
+  cst           固定 UTC+8：上游「自然日」的唯一定义（日界不跟宿主时区走）
   alert         告警 webhook                     prompt 提示词改写    websearch 搜索
 ```
 
@@ -106,6 +107,8 @@ internal/
 | `9fee070` | 装配契约测试：main 的 `MultiWriter(stderr, ring)` 搬进测试，断言 logx 输出的频道/文本/无 `level=` | `go test ./internal/panel -run TestLogxOutput -v` |
 | `513840c` | 抽出前端纯函数层 `internal/panel/logic.js`（14 个函数：esc/ago/dur/parseAPITime/fmtLocalDateTime/fmtK/fmtBytes/fmtTok/fmtMs/fmtRate/trimFixed/fmtCredit/fmtCreditRatio/fmtModelRate）；app.js 3506→3438 行；新增 `/panel/logic.js` 路由，`index.html` 先加载它再加载 app.js | `go test ./internal/panel -run TestIndexLoadsLogicBeforeApp`；`node --check internal/panel/app.js` |
 | `0f9e896` | 前端行为断言：`logic_test.js` 60 条（零依赖，node 直接跑）+ Go 侧 `TestLogicJSBehavior`/`TestWBLogicDestructureMatches`/`TestLogicJSNeedsNoDOM`；三处反证实测 | `go test ./internal/panel -run 'TestLogic\|TestWBLogic\|TestIndexLoadsLogic' -v` |
+| `356498c` | 补齐 `cmd/credit`/`cmd/trial`/`cmd/signin` 三个工具的纯函数测试（此前零测试）：`packageRemainUsed`+不变量、`billingBaseFor`、`classifyTrial`、`isAlready`/`short`/`trunc`；4 处反证实测。**全仓 26 包，0 个 no test files** | `go test ./cmd/credit ./cmd/trial ./cmd/signin -count=1` |
+| `936750a` | `trunc` 改按 rune 边界截断（原来 `s[:n]` 会把中文昵称切成非法 UTF-8：`"张三李四"` 取 11 字节得到 `"张三李\xe5\x9b"`）；signin/trial 各加 `TestTruncKeepsValidUTF8` | `go test ./cmd/signin -run TestTruncKeepsValidUTF8 -v` |
 
 ---
 
@@ -160,9 +163,12 @@ internal/
 - **给 `/metrics` 加 per-model / per-account 标签**：基数会炸到几千，先崩的是 Prometheus。要按维度拆，先上 exemplar 或降采样。
 - **全量 `-race` 阻断**：`-race` 作业目前是观察态（`continue-on-error`）。等它在 CI 里连续几轮全绿再转阻断——现在直接阻断大概率一次红到底。
 - **把 `strip_tool_metadata` 并进 `payload.go` 归一化链**：纯性能优化（省一次 parse），等 `payload.go` 没有在途改动时再做，避免两个工作混进同一 diff（见坑 #9）。
+- **`go.mod` 加 `toolchain`**：`go 1.22.5` 已是 `toolchain` 能表达的同一件事（它同样会在 go 版本不够时触发工具链下载）。再加一行 `toolchain go1.22.5` 是空操作；写成更高的版本则会在 CI/运维机上多一次工具链下载，收益为 0。真需要固定工具链时用 `GOTOOLCHAIN` 环境变量按环境设，别写进仓库。
 
 ### P3 — 低成本清理
-圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）｜`cmd/*` 冒烟测试（signin/trial/credit 零测试）｜`go.mod` 加 `toolchain`｜`panel/ring.go` 函数级覆盖率 67–100%（旧说的 7.5% 已过时）/ `upstream/dump.go` 仅剩 `dumpUpstream` 89.5%
+圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）｜`panel/ring.go` 函数级覆盖率 67–100%（旧说的 7.5% 已过时）/ `upstream/dump.go` 仅剩 `dumpUpstream` 89.5%
+
+> `cmd/*` 冒烟测试已在 `356498c` / `936750a` 完成，从本清单移除。
 
 ---
 
@@ -275,3 +281,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | P2-4.2 第 1 步：`internal/logx` 保形分级日志门面 + `usage` 包试点迁移；顺带修「任务失败行掉频道」的隐藏回归 | `4b50049` |
 | 2026-10-25 | P2-4.2 收尾：其余 12 个包 229 处日志全部迁到 `logx`（含 panel/scheduler 两个最大的包），补装配契约测试；**4.2 完成** | `9fee070` |
 | 2026-10-26 | P2-4.5 第一步：前端纯函数层抽出 + 60 条行为断言（含 3 处反证）；DOM 逻辑仍无测试，需 DOM 运行时才能覆盖 | `0f9e896` |
+| 2026-10-26 | P3 第一批：`cmd/credit`/`cmd/trial`/`cmd/signin` 补纯函数测试（26 包全绿、0 个 no test files）；顺带修 `trunc` 切中文产生非法 UTF-8 | `936750a` |
