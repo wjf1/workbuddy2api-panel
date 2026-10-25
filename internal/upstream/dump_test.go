@@ -1,11 +1,13 @@
 package upstream
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
@@ -207,4 +209,82 @@ func TestDumpUpstreamOpenFailureFallsBack(t *testing.T) {
 	if err != nil || string(b) != raw {
 		t.Fatalf("回落后应能正常读到底流: %q err=%v", b, err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 保留期清理：dump 里含完整提示词与上游响应，无限期留存是隐私与磁盘双重风险
+// ---------------------------------------------------------------------------
+
+// dumpFileName 造一个符合 dumpName 形状的文件名（15 字符时间戳前缀 + 标签）。
+func dumpFileName(t time.Time) string {
+	return t.Format("20060102-150405.000") + "-www.codebuddy.cn-00112233.log"
+}
+
+// TestCleanDumpDirRemovesExpiredOnly 只清理「带时间戳前缀且已过保留期」的文件：
+// 窗口内的新文件、用户手放的对照样本（无时间戳前缀）都必须留着。
+func TestCleanDumpDirRemovesExpiredOnly(t *testing.T) {
+	dir := t.TempDir()
+	expired := dumpFileName(time.Now().AddDate(0, 0, -(dumpRetentionDays + 1)))
+	fresh := dumpFileName(time.Now())
+	samples := []string{"notes.txt", "x.log", "对照样本-2026.log"} // 无 15 字符时间戳前缀
+	for _, name := range append([]string{expired, fresh}, samples...) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatalf("准备 %s: %v", name, err)
+		}
+	}
+
+	c := New()
+	c.DumpDir = dir
+	c.CleanDumpDir()
+
+	if _, err := os.Stat(filepath.Join(dir, expired)); !os.IsNotExist(err) {
+		t.Errorf("超过 %d 天的 dump 应被删除: %s", dumpRetentionDays, expired)
+	}
+	if _, err := os.Stat(filepath.Join(dir, fresh)); err != nil {
+		t.Errorf("窗口内的 dump 不应被删除: %v", err)
+	}
+	for _, name := range samples {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("无时间戳前缀的文件不应被删除（可能是用户手放的样本）: %s", name)
+		}
+	}
+}
+
+// TestCleanDumpDirNoDir DumpDir 未配置 / 目录不存在时静默返回，不 panic、不建目录。
+func TestCleanDumpDirNoDir(t *testing.T) {
+	c := New()
+	c.CleanDumpDir() // DumpDir 为空
+
+	missing := filepath.Join(t.TempDir(), "nope")
+	c.DumpDir = missing
+	c.CleanDumpDir()
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("清理不应顺手建目录: %v", err)
+	}
+}
+
+// TestStartDumpCleanerCleansOnStartAndStops 启动即清一次（同步完成），
+// ctx 取消后后台协程退出。
+func TestStartDumpCleanerCleansOnStartAndStops(t *testing.T) {
+	dir := t.TempDir()
+	expired := dumpFileName(time.Now().AddDate(0, 0, -(dumpRetentionDays + 1)))
+	if err := os.WriteFile(filepath.Join(dir, expired), []byte("x"), 0o600); err != nil {
+		t.Fatalf("准备过期文件: %v", err)
+	}
+
+	c := New()
+	c.DumpDir = dir
+	ctx, cancel := context.WithCancel(context.Background())
+	c.StartDumpCleaner(ctx)
+	// 启动清理是同步的（在 go func 之前调用），这里无需等待。
+	if _, err := os.Stat(filepath.Join(dir, expired)); !os.IsNotExist(err) {
+		t.Errorf("启动时应立即清理过期 dump")
+	}
+	cancel() // 后台每日协程应随之退出（无 ctx 泄漏）
+}
+
+// TestStartDumpCleanerDisabled 未配置 DumpDir 时既不清理也不起协程。
+func TestStartDumpCleanerDisabled(t *testing.T) {
+	c := New()
+	c.StartDumpCleaner(context.Background()) // 不应 panic
 }
