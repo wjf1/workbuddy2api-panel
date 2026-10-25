@@ -40,14 +40,14 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `0b3c664` | `git log --oneline -1` |
+| HEAD | `8160b3b` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 99 文件 / 32,626 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 94 文件 / 24,590 行 / 837 个 Test 函数 | 同上 |
-| `go test ./...` | **22 包全绿，约 10.6 秒** | `go test ./... -count=1` |
+| 非测试代码 | 104 文件 / 32,778 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 95 文件 / 24,715 行 / 841 个 Test 函数 | 同上 |
+| `go test ./...` | **22 包全绿，约 10.4 秒** | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
-| `gofmt -l ./cmd ./internal` | 空（CI 已设门禁） | `gofmt -l ./cmd ./internal` |
-| 最大文件 | `server/handler.go` 1962 / `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 855 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
+| `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
+| 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 976 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 858 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
 | 最慢包 | `internal/scheduler` 约 7.3s（其余均 < 2s） | 见测试输出 |
 
 ### 目录职责（18 个 internal 包）
@@ -86,6 +86,10 @@ internal/
 | `1b7bcd7` | `upstream.SetBillingRetryDelayForTest` 注入点；`TestCheckinErrorDoesNotCrash` 从零断言改为 4 条真断言 | 单条 12.01s → 0.02s，scheduler 19.5s → 7.3s |
 | `df97527` | `client.go` 2580 行按职责拆 6 文件（纯搬运） | 154 个顶层声明零缺失；行多重集比对丢失 0 行 |
 | `0b3c664` | 25 个文件 gofmt + `.gitattributes`(LF) + CI 加 gofmt 门禁 | `gofmt -l ./cmd ./internal` 为空 |
+| `d8d70a0` | 面板字号 13 种 → 6 档语义令牌（`--fs-xs/sm/base/md/lg/num`）；账号表表头吸附（`--topbar-h`） | `grep -o 'font-size:[^;]*' internal/panel/index.html \| sort -u` 只剩令牌；滚动账号表看表头 |
+| `bd4d969` | 补 `scheduler_wait_test.go` 文档注释缩进（Go 1.19+ gofmt 规则） | `gofmt -l ./cmd ./internal` |
+| `9f0b9be` | 新增 `features.strip_tool_metadata`（默认 false）：出站剥除 tool-call 的追踪 `metaData`，无字段可删时字节不变 | `go test ./internal/upstream -run TestStripToolMetaData -v`（4 个用例） |
+| `8160b3b` | `handler.go` 1962 行按端点族拆 5 文件（纯搬运） | 47 个声明零缺失、行多重集丢失 0 行 |
 
 ---
 
@@ -95,55 +99,32 @@ internal/
 
 ### P1 — 直接影响可用性、费用或后续开发效率
 
-**4.1 面板字号令牌化**
-- 现状：`internal/panel/index.html` 有 13 种字号散落（10px×1、11px×8、11.5px×17、12px×18、12.5px×16、13px×10、13.5px×5、14/15/15.5px 各若干），4 个半像素值。
-- 改法：在 `:root` 定义 `--fs-xs:11px / --fs-sm:12px / --fs-base:13px / --fs-md:14px / --fs-lg:16px / --fs-xl:20px`，把 `font-size:` 与 `font:` 简写里的字号全部替换为 `var(--fs-*)`，`10px` / `10.5px` 一律并入 `--fs-xs`。
-- 风险：**纯视觉回归**（字号收敛必然微调观感），必须人眼过一遍深浅两套主题。
-- 验收：`grep -o 'font-size:[^;]*' index.html | sort -u` 只剩 6 种 + 变量引用；面板两套主题截图对比。
-
-**4.2 账号主表吸附表头**
-- 现状：`index.html:639` 只有请求表有 `.req-wrap thead th { position:sticky }`，账号表 `#accTable` 没有，长列表滚动后失去列名。
-- 改法：给 `.acc thead th` 加 `position:sticky; top:0; background:var(--surface); z-index:1`，注意 `.topbar` 也是 `sticky top:0 z-index:20`，需给表头设置合适的 `top`（表头应吸在 topbar 下方）并避免 z-index 叠层错乱。
-- 验收：账号列表滚动时表头常驻、不遮挡 topbar。
-
-**4.3 拆分 `internal/server/handler.go`（1962 行）**
-- 参考 `df97527` 的做法：**纯文件切分，零逻辑改动**。建议按端点族拆：`handler.go`(主链路/装配) / `handler_chat.go`(chatCompletions) / `handler_models.go`(/v1/models) / `handler_status.go`(/status,/healthz) / `handler_error.go`(错误写出与策略)。
-- 必须用机械等价验证（见第 7 节），不要人工目测。
-- 风险：低（编译期即可发现漏搬），但 diff 上千行，需单独 commit。
-
-**4.4 请求体里 `metaData` 体积优化（opt-in）**
-- 现状：客户端历史消息里每个 tool-call 都带 `tool.metaData._meta`（约 20 个字段：`traceId/traceparent/baggage/requestId/rawResponse/时间戳`），39 个 tool-call ≈ 55–70KB **纯追踪数据**；`payload.go` 的归一化链**不处理**它，原样透传上游 → 挤占上下文与费用。
-- 改法：新增配置 `upstream.strip_tool_metadata`（默认 `false`），在 `payload.go` 归一化链加 `stripToolMetaData(obj)`：遍历 `messages[].content[]`，删 `type=="tool-call"` 的 `tool.metaData` 与 `tool.result.metaData`，保留 `id/name/args/result.text`。
-- **先测量再改**：配 `upstream.dump_dir` 落一份真实出站请求（`dump.go` 落的就是发给上游的 body），对比开关前后字节数。
-- 风险：上游是否依赖这些字段未知 → 必须单账号 A/B（同一请求开关对比响应与错误码）。
-- 验收：单测断言「剥除后 id/name/args/result.text 完整、metaData 消失、reasoning 块不受影响」；dump 体积对比有数字。
-
-**4.5 入站 per-key 限速**
-- 现状：只有账号级 `max_in_flight`，**没有按 API Key 的入站限流**；配合默认不限制的请求体，单客户端可压满。
+**4.1 入站 per-key 限速**
+- 现状：只有账号级 `max_in_flight`，**没有按 API Key 的入站限流**；配合默认不限制的请求体（`max_body_mb` 缺省 0），单客户端可压满。
 - 改法：在 `server` 层加令牌桶（按 `api_key` 或 `X-Forwarded-For`），配置 `server.rate_limit_rps` / `burst`，默认 `0 = 关闭`（保持零行为变更）。超限回 429 + `Retry-After`。
 - 风险：限流粒度选错会误伤多客户端共享同一 key 的场景 → 默认关闭 + 文档说明。
 
-**4.6 上游码 → HTTP 状态/错误体映射抽单一函数**
-- 现状：映射散在 `handler.go` 8 处（`StatusTooManyRequests`/`StatusBadGateway` 直接赋值）。
+**4.2 上游码 → HTTP 状态/错误体映射抽单一函数**
+- 现状：映射散在 `handler_chat.go` 等多处（`StatusTooManyRequests`/`StatusBadGateway` 直接赋值，共 8 处）。
 - 注意：**v1 审计报告说映射分散在 `backoff.go`/`degrade.go`/`handler.go` 三处，这是错的** —— 前者是退避抖动单一来源，后者是降级状态机，都不做状态映射。
 - 改法：抽 `mapUpstreamErr(kind upstream.ErrKind) (status int, typ string)`，handler 只调它。
 - 风险：改变对外错误语义，属契约变更 → 单独发版。
 
-**4.7 上游 `requestId` 关联进日志**
-- 现状：网关自己的 `X-Request-Id`（`handler.go:246`）和日志 `rid` 都有；**缺的是上游返回的 `requestId` 没被记录**，跨端排查接不上。
+**4.3 上游 `requestId` 关联进日志**
+- 现状：网关自己的 `X-Request-Id`（`handler.go:246` 一带）和日志 `rid` 都有；**缺的是上游返回的 `requestId` 没被记录**，跨端排查接不上。
 - 改法：`Classify`/响应解析时把上游 `requestId` 取出，随流水行输出（如 `up_rid=...`）。
 
-**4.8 开启 `-race` 门禁**
+**4.4 开启 `-race` 门禁**
 - 只能加在 Linux CI（本机无 gcc）。步骤：先在 CI 单独跑 `go test ./internal/pool ./internal/server ./internal/scheduler -race`，**确认全绿后再设为阻断**；项目 mutex+goroutine 密集，很可能暴露新问题，要有心理准备。
 
 ### P2 — 结构性债务
 
-- **4.9 弹窗改原生 `<dialog>`**：现在是 `div.veil` + 自建焦点陷阱（已可用），缺 top-layer / 背景 `inert` / `::backdrop`；读屏仍能浏览背景内容。
-- **4.10 三态一致性**：`pool`（内存）↔ `state.json`（快照）↔ `redisstore`（镜像）靠 `main.go` 的 `RestoreFromSnapshot()`「择新恢复」，并发写或时钟漂移可能回滚数据。需要单一真相源或版本号/租约。
-- **4.11 日志结构化**：全仓 249 处 `log.Printf`（非测试），级别靠字符串前缀；`internal/logfmt` 已存在未全量采用。建议迁 `log/slog` 并保留面板 ring 的频道分类。
-- **4.12 pprof / metrics 端点**：目前只有 `/status` 聚合计数，线上无法定位 CPU/内存热点。
-- **4.13 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。建议 README 拆「索引 + 专题页」，HANDOFF 只留「当前状态 + 下一步 + 避坑」。
-- **4.14 前端行为测试**：`app.js`(3449 行) 只有 `node --check` 语法检查 + CSP 断言，**无 node 时静默跳过**；73 处 `innerHTML` 无回归网。
+- **4.5 弹窗改原生 `<dialog>`**：现在是 `div.veil` + 自建焦点陷阱（已可用），缺 top-layer / 背景 `inert` / `::backdrop`；读屏仍能浏览背景内容。
+- **4.6 三态一致性**：`pool`（内存）↔ `state.json`（快照）↔ `redisstore`（镜像）靠 `main.go` 的 `RestoreFromSnapshot()`「择新恢复」，并发写或时钟漂移可能回滚数据。需要单一真相源或版本号/租约。
+- **4.7 日志结构化**：全仓 249 处 `log.Printf`（非测试），级别靠字符串前缀；`internal/logfmt` 已存在未全量采用。建议迁 `log/slog` 并保留面板 ring 的频道分类。
+- **4.8 pprof / metrics 端点**：目前只有 `/status` 聚合计数，线上无法定位 CPU/内存热点。
+- **4.9 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。建议 README 拆「索引 + 专题页」，HANDOFF 只留「当前状态 + 下一步 + 避坑」。
+- **4.10 前端行为测试**：`app.js`(3449 行) 只有 `node --check` 语法检查 + CSP 断言，**无 node 时静默跳过**；73 处 `innerHTML` 无回归网。
 
 ### P3 — 低成本清理
 圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）｜`cmd/*` 冒烟测试（signin/trial/credit 零测试）｜`go.mod` 加 `toolchain`｜`panel/ring.go` 覆盖率 7.5% / `upstream/dump.go` 0%
@@ -170,6 +151,12 @@ internal/
 5. **`/v1/models` 是纯动态无兜底**：拉不到就返回空列表 + 5min 负缓存。`dynamicModelsCache` 是包级全局，测试里必须用 `resetDynamicModelsCache(t)`，否则会污染后续用例（曾被误判为"偶发 flaky"）。
 6. **`max_body_mb` 默认 0 = 不限制**：这是刻意的零行为变更设计，别"顺手"改成默认限制。
 7. **部署前备份 `data/state.json`**：账号池状态、冷却、用量都在里面。
+8. **批量改行尾后 `git status` 会诈胡**：`.gitattributes` 改成 LF 后，把已在盘上的 CRLF 文件转成 LF，`git status` 会把上百个**内容没变**的文件标成 `M`（stat 缓存失配，`git diff` 却是空的）。别慌、更别 `git add -A`，执行：
+   ```bash
+   git status --porcelain | awk '$1=="M"{print $2}' | grep -v "upstream/payload" | tr '\n' '\0' | xargs -0 git add --
+   ```
+   这些文件内容与索引一致，`git add` 只刷新 stat 缓存、不会产生提交内容（用 `git diff --cached --name-only` 确认为空）。之后 `gofmt -l` 才会与 CI 结论一致。
+9. **`strip_tool_metadata` 的技术债**：配置项落在 `features` 段（与 `sanitize_blacklist_fingerprints` 同段，复用其热加载路径），实现放在独立文件 `internal/upstream/strip_metadata.go`，调用点挂在 `client.go` 的 `prepareBody`，**没有并进 `payload.go` 的归一化链**。原因是当时 `payload.go` 有他人未提交改动，并进去会把两个工作搅在同一个 diff 里。代价：开关开启时多一次 parse+marshal（默认关闭时零成本）。后续若要优化，可把它合并进 `PrepareBodyOptWithEffortsAndDefault` 的同一次解析。
 
 ---
 
@@ -226,3 +213,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 日期 | 做了什么 | HEAD |
 |---|---|---|
 | 2026-10-25 | 建立本文档；记录 6 个提交（测试顺序依赖、SSE fatal、测试去网络、scheduler 提速、client.go 拆分、gofmt+CI 门禁）与全部待办 | `0b3c664` |
+| 2026-10-25 | 完成 4 项 P1：面板字号 6 档令牌化、账号表表头吸附、`handler.go` 拆 5 文件、`strip_tool_metadata`（opt-in）；顺带统一工作区行尾为 LF（此前本地 gofmt 会误报 100+ 文件），补 1 处漏网格式问题 | `8160b3b` |
