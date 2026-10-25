@@ -20,13 +20,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // 保留窗口与硬上限：审计文件按天切，保留 7 天（与 reqlog 惯例一致）。
@@ -84,7 +85,7 @@ func (r *Recorder) Seed(entries map[string]string) {
 			r.cur[uid] = fingerprint(rt)
 		}
 	}
-	log.Printf("[rotaudit] 基准播种完成：%d 个账号", len(r.cur))
+	logx.Infof("[rotaudit] 基准播种完成：%d 个账号", len(r.cur))
 }
 
 // Reset 重置单账号基准（面板重登成功后调用——新凭证的第一次刷新不构成外部轮换）。
@@ -132,7 +133,7 @@ func (r *Recorder) Observe(uid, oldRT8, newRT8, source string, err error) {
 	onExt, oldBase := r.onExternal, cur
 	r.mu.Unlock()
 	if external {
-		log.Printf("[rotaudit] ERROR: 检测到外部 RT 轮换 uid=%s 本进程基准=%s 实际旧指纹=%s 来源=%s —— 有另一执行体（其他机器副本 / signin.sh 等进程）在共享该账号凭证，正是 RT 链连坐吊销的成因",
+		logx.Errorf("[rotaudit] 检测到外部 RT 轮换 uid=%s 本进程基准=%s 实际旧指纹=%s 来源=%s —— 有另一执行体（其他机器副本 / signin.sh 等进程）在共享该账号凭证，正是 RT 链连坐吊销的成因",
 			uid, oldBase, oldRT8, source)
 		if onExt != nil {
 			onExt(uid, oldRT8, oldBase, source)
@@ -146,23 +147,23 @@ func (r *Recorder) write(rec Rec) {
 		return
 	}
 	if err := os.MkdirAll(r.dir, 0o755); err != nil {
-		log.Printf("[rotaudit] WARN: mkdir %s: %v", r.dir, err)
+		logx.Warnf("[rotaudit] mkdir %s: %v", r.dir, err)
 		return
 	}
 	fp := filepath.Join(r.dir, "refresh-audit-"+r.now().Format("20060102")+".jsonl")
 	line, err := json.Marshal(rec)
 	if err != nil {
-		log.Printf("[rotaudit] WARN: marshal: %v", err)
+		logx.Warnf("[rotaudit] marshal: %v", err)
 		return
 	}
 	f, err := os.OpenFile(fp, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		log.Printf("[rotaudit] WARN: open %s: %v", fp, err)
+		logx.Warnf("[rotaudit] open %s: %v", fp, err)
 		return
 	}
 	defer f.Close()
 	if _, err := f.Write(append(line, '\n')); err != nil {
-		log.Printf("[rotaudit] WARN: write: %v", err)
+		logx.Warnf("[rotaudit] write: %v", err)
 	}
 }
 
@@ -187,9 +188,9 @@ func (r *Recorder) cleanup() {
 			continue
 		}
 		if err := os.Remove(filepath.Join(r.dir, name)); err != nil {
-			log.Printf("[rotaudit] WARN: 清理过期审计 %s: %v", name, err)
+			logx.Warnf("[rotaudit] 清理过期审计 %s: %v", name, err)
 		} else {
-			log.Printf("[rotaudit] 已清理过期审计文件 %s", name)
+			logx.Infof("[rotaudit] 已清理过期审计文件 %s", name)
 		}
 	}
 }

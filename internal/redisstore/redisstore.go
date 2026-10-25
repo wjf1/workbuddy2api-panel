@@ -10,11 +10,11 @@ package redisstore
 
 import (
 	"context"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -56,14 +56,14 @@ const (
 //   - Ping 失败 → Noop + 启动警告（硬性降级要求：不因 Redis 不可用而失败）
 func New(url, token string) Store {
 	if url == "" {
-		log.Printf("[redisstore] upstash 未配置，进入纯内存模式（Noop 降级）")
+		logx.Infof("[redisstore] upstash 未配置，进入纯内存模式（Noop 降级）")
 		return Noop{}
 	}
 
 	full := normalizeURL(url, token)
 	opt, err := redis.ParseURL(full)
 	if err != nil {
-		log.Printf("[redisstore] 警告: redis 连接串解析失败 (%v)，降级 Noop", err)
+		logx.Warnf("[redisstore] redis 连接串解析失败 (%v)，降级 Noop", err)
 		return Noop{}
 	}
 	opt.ReadTimeout = readTimeout
@@ -73,11 +73,11 @@ func New(url, token string) Store {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
-		log.Printf("[redisstore] 警告: upstash 连接失败 (%v)，降级 Noop（纯内存模式）", err)
+		logx.Warnf("[redisstore] upstash 连接失败 (%v)，降级 Noop（纯内存模式）", err)
 		_ = client.Close()
 		return Noop{}
 	}
-	log.Printf("[redisstore] upstash 已连接 (addr=%s)", opt.Addr)
+	logx.Infof("[redisstore] upstash 已连接 (addr=%s)", opt.Addr)
 	return &Upstash{
 		client: client,
 		sem:    make(chan struct{}, writeConcurrencyLimit),
@@ -179,7 +179,7 @@ func (u *Upstash) Close() error {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		// 兜底超时（单写上限 5s，10s 富余）：卡死的写不应阻塞进程退出。
-		log.Printf("[redisstore] WARN: Close 等待在途写超时，放弃（镜像可能未写完）")
+		logx.Warnf("[redisstore] Close 等待在途写超时，放弃（镜像可能未写完）")
 	}
 	return u.closeClient()
 }
@@ -203,7 +203,7 @@ func (u *Upstash) SetBind(key, uid string, ttl time.Duration) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := u.client.Set(ctx, bindKey(key), uid, ttl).Err(); err != nil {
-			log.Printf("[redisstore] debug: SetBind %s: %v", key, err)
+			logx.Warnf("[redisstore] SetBind 镜像写失败 %s: %v", key, err)
 		}
 	})
 }
@@ -214,7 +214,7 @@ func (u *Upstash) DelBind(key string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := u.client.Del(ctx, bindKey(key)).Err(); err != nil {
-			log.Printf("[redisstore] debug: DelBind %s: %v", key, err)
+			logx.Warnf("[redisstore] DelBind 镜像写失败 %s: %v", key, err)
 		}
 	})
 }
@@ -225,7 +225,7 @@ func (u *Upstash) SaveState(data []byte) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := u.client.Set(ctx, stateKey, data, keyTTL).Err(); err != nil {
-			log.Printf("[redisstore] debug: SaveState: %v", err)
+			logx.Warnf("[redisstore] SaveState 镜像写失败: %v", err)
 		}
 	})
 }
