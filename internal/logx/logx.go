@@ -165,12 +165,17 @@ func (l Logger) Errorf(format string, args ...any) {
 }
 
 // 包级快捷方式：等价于 Default().*f，供「只改 import 与函数名」的机械迁移。
+//
+// std 只构造一次：Handler 本身无状态（级别固定 Info、无绑定属性），日志行最终仍走
+// log.Print，所以这里缓存 logger 不会「抓死」输出目标——main 之后无论怎么改
+// log.SetOutput，输出都跟着走。
+var std = Default()
 
 // Infof 见 Logger.Infof。
-func Infof(format string, args ...any) { Default().Infof(format, args...) }
+func Infof(format string, args ...any) { std.Infof(format, args...) }
 
 // Warnf 见 Logger.Warnf。
-func Warnf(format string, args ...any) { Default().Warnf(format, args...) }
+func Warnf(format string, args ...any) { std.Warnf(format, args...) }
 
 // Errorf 见 Logger.Errorf。
-func Errorf(format string, args ...any) { Default().Errorf(format, args...) }
+func Errorf(format string, args ...any) { std.Errorf(format, args...) }
