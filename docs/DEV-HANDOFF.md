@@ -40,11 +40,11 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `4b50049` | `git log --oneline -1` |
+| HEAD | `3e05c4d` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 107 文件 / 33,247 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 102 文件 / 864 个 Test 函数 | 同上 |
-| `go test ./...` | **22 包全绿，约 10–12 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
+| 非测试代码 | 108 文件 / 33,457 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 103 文件 / 877 个 Test 函数 | 同上 |
+| `go test ./...` | **23 包全绿，约 11 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
 | 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 989 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 888 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
@@ -124,7 +124,7 @@ internal/
 
   现状：`internal/logx` 提供**保形** Handler——时间戳仍由 log 包 flags 打、级别写成
   `WARN: `/`ERR: ` 前缀（不写 `level=`）、结构化属性以 ` k=v` 追加行尾。`internal/usage`
-  6 处已迁完作样板，其余包仍是裸 `log.Printf`（约 250 处）。
+  6 处已迁完作样板，其余包仍是裸 `log.Printf`（约 255 处）。
 
   **迁一个包的配方**（三分钟）：
   1. `log.Printf(...)` → `logx.Infof(...)`（逐字等价，无文本变化）
