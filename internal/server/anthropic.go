@@ -27,10 +27,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -384,7 +384,7 @@ func (h *Handler) messagesAnthropic(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(requestBody(w, r, h.cfg.MaxBodyBytes))
 	if err != nil {
 		if isBodyTooLarge(err) {
-			log.Printf("WARN: [server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, upstream.ExtractClientIP(r))
+			logx.Warnf("[server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, upstream.ExtractClientIP(r))
 			writeAnthropicError(w, http.StatusRequestEntityTooLarge, "request_too_large", h.bodyTooLargeMsg())
 			return
 		}
@@ -442,7 +442,7 @@ func (h *Handler) countTokensAnthropic(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(requestBody(w, r, h.cfg.MaxBodyBytes))
 	if err != nil {
 		if isBodyTooLarge(err) {
-			log.Printf("WARN: [server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, upstream.ExtractClientIP(r))
+			logx.Warnf("[server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, upstream.ExtractClientIP(r))
 			writeAnthropicError(w, http.StatusRequestEntityTooLarge, "request_too_large", h.bodyTooLargeMsg())
 			return
 		}

@@ -18,9 +18,10 @@
 package server
 
 import (
-	"log"
 	"sync"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // wafIPWindow IP 级判定滑动窗 + 激活时长：窗内不同账号命中 WAF 403 达阈值即
@@ -65,7 +66,7 @@ func (g *wafIPGate) noteWaf(uid string) bool {
 	}
 	if len(g.hits) >= wafIPThreshold {
 		g.until = now.Add(wafIPWindow)
-		log.Printf("WARN: [server] waf ip-level block: %d accounts hit waf 403 within %s, rotate fail-fast until %s", len(g.hits), wafIPWindow, g.until.Format(time.RFC3339))
+		logx.Warnf("[server] waf ip-level block: %d accounts hit waf 403 within %s, rotate fail-fast until %s", len(g.hits), wafIPWindow, g.until.Format(time.RFC3339))
 		g.hits = map[string]time.Time{}
 		return true
 	}

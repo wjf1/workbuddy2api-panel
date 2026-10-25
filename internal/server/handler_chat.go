@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
@@ -37,7 +37,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(requestBody(w, r, h.cfg.MaxBodyBytes))
 	if err != nil {
 		if isBodyTooLarge(err) {
-			log.Printf("WARN: [server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, clientIP)
+			logx.Warnf("[server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, clientIP)
 			writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request_too_large", h.bodyTooLargeMsg())
 			return
 		}
@@ -78,7 +78,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					realm, bareModel = resolveModel(aliasTarget)
 					modelEcho = peek.Model
 					routeModel = aliasTarget
-					log.Printf("INFO: [server] model alias applied: %s -> %s", peek.Model, aliasTarget)
+					logx.Infof("[server] model alias applied: %s -> %s", peek.Model, aliasTarget)
 				}
 			}
 		}
@@ -206,7 +206,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 		fallbackTried[to] = true
-		log.Printf("INFO: [server] model fallback: %s -> %s (6004 model rate limit)", curModel, to)
+		logx.Infof("[server] model fallback: %s -> %s (6004 model rate limit)", curModel, to)
 		curModel = to
 		// 出站 body 重写：上游必须收到等价模型名。与 models.aliases 同一手法
 		// （解析 → 改顶层 model → 重序列化）。解析失败时不动 body——那说明请求体
@@ -444,7 +444,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := acct.SaveAtomicRetry(); err != nil {
 				// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
-				log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
+				logx.Errorf("[server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
 			}
 		}
 
@@ -474,7 +474,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 				st.status = http.StatusServiceUnavailable
 				lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
-				log.Printf("WARN: [server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
+				logx.Warnf("[server] upstream timeout acct=%s: %v (rotation stopped, account not penalized)",
 					logfmt.Label(acct.UID, acct.Nickname), terr)
 				break
 			}
@@ -513,7 +513,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				degradedApplied = true
 				delete(tried, acct.UID) // 单账号池也能拿到重试机会（降级重试占一次名额）
 				releaseHeld()
-				log.Printf("content-blocked (likely fingerprint false positive) -> degraded prompt retry")
+				logx.Warnf("content-blocked (likely fingerprint false positive) -> degraded prompt retry")
 				continue
 			}
 			if kind == upstream.ErrContentBlocked {
@@ -672,7 +672,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				// 502 观测没有意义）。
 				st.status = http.StatusBadGateway
 				st.outcome = reqlog.OutcomeStreamError
-				log.Printf("WARN: [server] stream acct=%s model=%s: empty upstream stream (200+0 frames)", logfmt.Label(acct.UID, acct.Nickname), bareModel)
+				logx.Warnf("[server] stream acct=%s model=%s: empty upstream stream (200+0 frames)", logfmt.Label(acct.UID, acct.Nickname), bareModel)
 			case errFrame != "":
 				// 上游以 error 帧报错（6004 限流 / 内容拦截 / 审核）：按帧内容分类并
 				// 处置账号——**不记成功、不清 11102 负缓存、不绑粘性**。此前这些动作
@@ -682,7 +682,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				h.applyErrorPolicy(acct.UID, kind, errFrame, bareModel, nil)
 				st.status = http.StatusServiceUnavailable
 				st.outcome = reqlog.OutcomeStreamError
-				log.Printf("WARN: [server] stream acct=%s model=%s: upstream error frame kind=%s payload=%s",
+				logx.Warnf("[server] stream acct=%s model=%s: upstream error frame kind=%s payload=%s",
 					logfmt.Label(acct.UID, acct.Nickname), bareModel, kind, logfmt.Truncate(errFrame, 200))
 			case sErr != nil:
 				// 客户端写失败（断连）：上游帧无恙，账号健康——账号侧照常记成功
@@ -714,7 +714,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// **只记日志、不改流**：模型「判断不需要工具、直接回答」是合法行为，强行
 			// 改写成可重试错误会让这类正常回合反复重试，每次都真实计费。
 			if isSilentToolStop(len(peek.Tools), stats.SawToolCalls(), stats.FinishReason()) {
-				log.Printf("WARN: [server] stream acct=%s model=%s: finish_reason=stop with zero tool_calls despite %d declared tool(s) (silent stop; client may treat the turn as complete)",
+				logx.Warnf("[server] stream acct=%s model=%s: finish_reason=stop with zero tool_calls despite %d declared tool(s) (silent stop; client may treat the turn as complete)",
 					logfmt.Label(acct.UID, acct.Nickname), bareModel, len(peek.Tools))
 			}
 			credit, hasCredit := stats.Credit()
@@ -845,7 +845,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if tr := requestTraceFrom(r); tr != nil {
 				rid = tr.id
 			}
-			log.Printf("WARN: [server] upstream requestId=%s rid=%s acct=%s model=%s kind=%s",
+			logx.Warnf("[server] upstream requestId=%s rid=%s acct=%s model=%s kind=%s",
 				ue.RequestID, rid, logfmt.Label(st.uid, st.nick), bareModel, ue.Kind)
 		}
 		switch ue.Kind {
@@ -962,7 +962,7 @@ func rotateBackoff(i int, ctx context.Context) bool {
 		return ctx.Err() == nil
 	}
 	if !sleepCtx(ctx, d) {
-		log.Printf("WARN: [server] rotate backoff aborted: ctx cancelled")
+		logx.Warnf("[server] rotate backoff aborted: ctx cancelled")
 		return false
 	}
 	return true

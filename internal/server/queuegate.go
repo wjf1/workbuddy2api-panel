@@ -18,10 +18,10 @@
 package server
 
 import (
-	"log"
 	"sync"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -73,7 +73,7 @@ func (g *queueGate) noteQueue(uid string, info upstream.QueueInfo) bool {
 	}
 	active := now.Before(g.until)
 	if active {
-		log.Printf("WARN: [server] upstream queue busy: code=%s position=%d size=%s retry_after=%s (account-level penalty skipped; rotation fail-fast until %s)",
+		logx.Warnf("[server] upstream queue busy: code=%s position=%d size=%s retry_after=%s (account-level penalty skipped; rotation fail-fast until %s)",
 			info.Code, info.Position, info.Size, info.RetryAfter, g.until.Format(time.RFC3339))
 	}
 	return active

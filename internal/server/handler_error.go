@@ -4,12 +4,12 @@ package server
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
@@ -127,9 +127,9 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 				if st, ok := h.cfg.Pool.Status(uid); ok {
 					nick = st.Nickname
 				}
-				log.Printf("[server] acct=%s 连续 %d 次裸 401 — 禁用", logfmt.Label(uid, nick), pool.SessionDeadThreshold())
+				logx.Errorf("[server] acct=%s 连续 %d 次裸 401 — 禁用", logfmt.Label(uid, nick), pool.SessionDeadThreshold())
 			} else if st, ok := h.cfg.Pool.Status(uid); ok {
-				log.Printf("[server] acct=%s 裸 401（session dead 计数 %d/%d）", logfmt.Label(uid, st.Nickname), st.SessionDeadFails, pool.SessionDeadThreshold())
+				logx.Warnf("[server] acct=%s 裸 401（session dead 计数 %d/%d）", logfmt.Label(uid, st.Nickname), st.SessionDeadFails, pool.SessionDeadThreshold())
 			}
 			return
 		}
