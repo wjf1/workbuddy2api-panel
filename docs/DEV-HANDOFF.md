@@ -40,10 +40,10 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `94799e5` | `git log --oneline -1` |
+| HEAD | `62f67f5` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 107 文件 / 33,204 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 101 文件 / 858 个 Test 函数 | 同上 |
+| 非测试代码 | 107 文件 / 33,247 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 102 文件 / 863 个 Test 函数 | 同上 |
 | `go test ./...` | **22 包全绿，约 10–12 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
@@ -96,6 +96,7 @@ internal/
 | `be7747f` | 可选诊断监听 `server.debug_addr`（pprof + 低基数 `/metrics`），默认空关闭，**独立端口** | `go test ./cmd/server -run TestDebugServer -v`；`go test ./internal/server -run TestMainMuxHasNoDebug -v` |
 | `d4410a5` | CI 增加 `-race` 作业（pool/server/scheduler 三个包，首轮 `continue-on-error`） | 看 Actions 里 race job；本机无 gcc 跑不了 |
 | `94799e5` | 弹窗打开时给 `.shell` 加 `inert`（读屏不再能浏览遮罩背后内容） | `node --check internal/panel/app.js`；面板测试 |
+| `62f67f5` | 状态快照加单调 `revision`（本步只写+打日志，**不改恢复判定**）：5 个测试覆盖递增/快照一致/续号/旧文件/采纳快照 | `go test ./internal/pool -run 'TestRevision\|TestAdoptSnapshotKeepsRevision' -v` |
 
 ---
 
@@ -105,14 +106,13 @@ internal/
 
 ### P1 — 需要先设计，不能盲改
 
-**4.1 状态三源一致性（pool 内存 ↔ `state.json` ↔ Redis 镜像）**
-- 现状：`main.go` 的 `RestoreFromSnapshot()` 取"较新"的那份（比 `saved_at` / 文件 mtime），三处都能写，没有版本号也没有租约。并发写或时钟漂移时可能把**较旧的快照**覆盖上去。
-- 为什么没做（重点）：这不是"抽个函数"能解决的，盲改的后果是**账号冷却状态回滚**——被冷却的号重新进入轮换，轻则继续被上游拒（白烧请求），重则触底号被打穿、账号被判死。改之前必须先有"冲突场景会怎样"的测试，而当前 `pool` 的持久化测试只覆盖单源读写。
-- 建议路线（按顺序）：
-  1. 给状态快照加单调整数 `revision`（每次 Flush +1），恢复时**只接受 revision 更大**的那份，`saved_at` 降级为观测字段；
-  2. 补测试：本地旧 + Redis 新 → 采用 Redis；本地新 + Redis 旧 → 采用本地；revision 相同 → 采用本地（确定性，不靠时钟）；
-  3. 再考虑多实例写冲突（租约或 CAS），那需要 `redisstore` 支持 WATCH/MULTI。
-- 验收：上述三种组合的测试全绿 + 手工把 Redis 的 revision 调低后重启，状态不被回滚。
+**4.1 状态三源一致性（pool 内存 ↔ `state.json` ↔ Redis 镜像）— 第 1 步已完成**
+
+- 现状：`RestoreFromSnapshot()` 靠「文件 mtime vs 快照 `saved_at`」择新。mtime 会被无关操作改写（备份还原、拷贝、杀软扫描），时钟也可能漂移。
+- **已完成（`62f67f5`）**：快照加单调 `revision`，每次落盘 +1，本地文件与 Redis 快照共用同一份 `stateFile` 所以两侧天然一致；`load()` / `applySnapshotLocked()` 各自续号；恢复日志现在会打出「本地 rev / 快照 rev / mtime / saved_at」四项。**判定逻辑一行未改**，旧文件（无该字段 → 0）行为与历史完全一致。
+- **下一步（第 2 步，未做）**：把判定改成——两侧 revision 均 >0 且不等时取大者；否则回落现有 mtime/`saved_at` 逻辑。切换前先在生产日志里观察几轮：确认 revision 在单调增长、两侧没有出现"本地 rev > 快照 rev 但 mtime 更旧"这类互斥信号。
+- 切换时必须补三种冲突组合的测试（本地旧+快照新 → 取快照；本地新+快照旧 → 取本地；revision 相等 → 取本地，确定性、不靠时钟）。
+- 再往后才考虑多实例写冲突（`redisstore` 支持 WATCH/MULTI）。**注意**：`authlease` 已经禁止同一 `auths` 目录挂两个执行体，所以"同目录双写"不成立；真正的多实例风险来自**两个不同 auths 目录共享同一个 Redis**，那才是 CAS 要解决的问题。
 
 ### P2 — 结构性债务
 
@@ -221,3 +221,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | 完成入站限流 `server.rate_limit_rps`（opt-in，与 `max_body_mb` 配套）；待办缩到 9 项 | `6deb1b5` |
 | 2026-10-25 | 上游错误类别→HTTP 状态码收敛到 `errmap.go` 单表（原散在 6 处），附完整性测试；待办缩到 8 项，P1 只剩 2 项 | `3c1a87f` |
 | 2026-10-25 | 完成剩余可安全落地的 4 项：上游 requestId 落台账、pprof/metrics 独立诊断监听、CI `-race` 观察作业、弹窗 `inert`；其余 4 项因「需先设计/需人眼验收/会与在途改动冲突」明确保留（见第 4 节末尾） | `94799e5` |
+| 2026-10-25 | 状态三源一致性第 1 步：快照加单调 `revision`（只写不改判定），恢复日志带四项观测值；5 个测试钉住递增/续号/快照一致/旧文件/采纳快照 | `62f67f5` |
