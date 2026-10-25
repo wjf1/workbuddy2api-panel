@@ -67,6 +67,12 @@ type Config struct {
 		RateLimitRPS float64 `json:"rate_limit_rps"`
 		// RateLimitBurst 令牌桶容量（允许的瞬时突发）。<=0 时取 ceil(rps)，至少 1。
 		RateLimitBurst int `json:"rate_limit_burst"`
+		// DebugAddr 可选诊断监听地址（pprof + /metrics），**默认空 = 不启动**。
+		// 例："127.0.0.1:7864"。刻意独立成第二个端口而不是挂在主 mux：pprof 无鉴权，
+		// profile 能导出 CPU/heap 采样，heap 里含请求体与账号 token；主端口通常对外
+		// 暴露，挂上去等于开了个读内存的后门。建议只绑回环地址。
+		// 改动需重启进程。
+		DebugAddr string `json:"debug_addr"`
 	} `json:"server"`
 
 	Cooldown struct {

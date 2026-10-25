@@ -406,6 +406,7 @@ curl -sN http://localhost:7863/v1/messages \
 | `server.max_body_mb` | `0` | 入站请求体大小上限（MB）。`0` = 不限制（缺省，与历史行为一致）；配正值时超限请求在读 body 前被拒，返回 413（Anthropic 端点回 `request_too_large`），不消耗选号与上游配额 |
 | `server.rate_limit_rps` | `0` | 入站限流速率（请求/秒，令牌桶按 **TCP 对端主机**划分）。`0` = 不限制（缺省）。只作用于 `/v1/chat/completions`、`/v1/models`、`/v1/messages`、`/v1/messages/count_tokens`，**不含 `/status` 与 `/healthz`**（监控/探活被限流会被误判成服务挂了）。超限返回 429 + `Retry-After`（Anthropic 面为 `rate_limit_error`）。与 `max_body_mb` 配套：一个管单请求多大，一个管单客户端多快 |
 | `server.rate_limit_burst` | `0` | 令牌桶容量（允许的瞬时突发）。`0` = 取 `ceil(rps)`，至少 1 |
+| `server.debug_addr` | `""` | 可选诊断监听（pprof + `/metrics`），空 = 不启动。**独立端口**而非挂主 mux：pprof 无鉴权，`profile` 能导出 CPU/heap 采样，heap 含请求体与账号 token。建议只绑回环，如 `"127.0.0.1:7864"` |
 | `panel.package_detail_limit` | `5` | 积分构成页单账号默认展示的最早到期包数；其余未用完包与已用完包聚合折叠 |
 | `logging.request_archive_enabled` | `true` | 请求元数据 JSONL 归档开关；不记录提示词、响应正文或 Authorization |
 | `logging.request_retention_days` | `7` | 请求归档保留天数；超期文件在启动和周期清理时删除 |

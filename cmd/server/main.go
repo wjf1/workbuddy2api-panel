@@ -447,13 +447,30 @@ func main() {
 		// （长流式生成合法时长可达数分钟，全局 WriteTimeout 会误杀在途 SSE）。
 		IdleTimeout: 120 * time.Second,
 	}
+	// 可选诊断监听（server.debug_addr）：pprof + /metrics，默认关闭。
+	// 声明在停机 goroutine 之前，停机时要一并 Shutdown。
+	var dbg *http.Server
 	go func() {
 		<-ctx.Done()
 		p.Flush() // 信号触发：先落盘再做优雅停机
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		if dbg != nil {
+			_ = dbg.Shutdown(shutdownCtx)
+		}
 	}()
+
+	// 独立端口 + 建议只绑回环：pprof 无鉴权，挂主端口等于对外开读内存的后门。
+	if addr := cfg.Server.DebugAddr; addr != "" {
+		dbg = newDebugServer(addr, p)
+		go func() {
+			log.Printf("debug listener on %s (/debug/pprof/, /metrics)", addr)
+			if err := dbg.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("WARN: debug listener: %v", err)
+			}
+		}()
+	}
 
 	log.Printf("workbuddy2api listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -690,6 +707,7 @@ func restartRequiredDiff(oldC, newC *Config) []string {
 	add(oldC.ServerMaxBodyBytes != newC.ServerMaxBodyBytes, "server.max_body_mb")
 	add(oldC.ServerRateLimitRPS != newC.ServerRateLimitRPS ||
 		oldC.ServerRateLimitBurst != newC.ServerRateLimitBurst, "server.rate_limit_rps")
+	add(oldC.Server.DebugAddr != newC.Server.DebugAddr, "server.debug_addr")
 	add(oldC.Auths.StrictLease != newC.Auths.StrictLease, "auths.strict_lease")
 	add(oldC.Prompt.Mode != newC.Prompt.Mode, "prompt.mode")
 	add(oldC.Prompt.File != newC.Prompt.File, "prompt.file")

@@ -7,7 +7,8 @@
     "read_timeout": "300s",
     "max_body_mb": 0,
     "rate_limit_rps": 0,
-    "rate_limit_burst": 0
+    "rate_limit_burst": 0,
+    "debug_addr": ""
   },
   "panel": {
     "package_detail_limit": 5
