@@ -2,6 +2,14 @@
 /* ── 状态 ─────────────────────────────────────────────────────────── */
 const LS_KEY = 'wb2api.key', LS_THEME = 'wb2api.theme';
 
+/* 纯函数层（logic.js）：转义 / 时间解析 / 各种格式化。这些函数不碰 DOM，单独成文件
+   才能用 node 直接跑断言（见 logic_test.js）。加载顺序由 index.html 保证——logic.js
+   必须排在 app.js 之前，否则这里解构到 undefined，整份脚本在首行就抛 TypeError。 */
+const {
+  esc, ago, dur, parseAPITime, fmtLocalDateTime, fmtK, fmtBytes,
+  fmtTok, fmtMs, fmtRate, trimFixed, fmtCredit, fmtCreditRatio, fmtModelRate,
+} = window.WBLogic;
+
 /* lsGet/lsSet：localStorage 安全包装——隐私模式/禁用存储的浏览器直接访问会抛
    SecurityError 中断整份脚本（此前顶层多处的裸访问让面板整体白屏）。 */
 function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -138,41 +146,6 @@ function toast(msg, cls) {
 // esc 文本/属性双安全转义。不能只用 div.innerHTML（它转义 <>& 但不转义引号），
 // 否则字符串拼进 HTML 属性（如 title="uid: ..."）时引号可闭合属性并注入事件处理器。
 // 显式替换 5 个字符：& < > " '（& 必须最先，避免二次转义）。
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-function ago(iso) {
-  if (!iso || iso.startsWith('0001-')) return '—';
-  const s = (Date.now() - new Date(iso)) / 1000;
-  if (s < 0) return '刚刚';
-  if (s < 60) return Math.floor(s) + ' 秒前';
-  if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
-  if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
-  return Math.floor(s / 86400) + ' 天前';
-}
-function dur(sec) {
-  sec = Math.max(0, Math.round(sec));
-  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
-  return h ? h + '时' + String(m).padStart(2, '0') + '分' : m ? m + '分' + String(s).padStart(2, '0') + '秒' : s + '秒';
-}
-function parseAPITime(value) {
-  const text = String(value || '');
-  if (!text || text.startsWith('0001-')) return 0;
-  const ms = Date.parse(text);
-  return Number.isFinite(ms) ? ms : 0;
-}
-function fmtLocalDateTime(ms) {
-  const d = new Date(ms);
-  const p = n => String(n).padStart(2, '0');
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
-    p(d.getHours()) + ':' + p(d.getMinutes());
-}
-
 /* ── 时间范围控件（用量 / 请求记录共用）────────────────────────────────
    预设项：今天 / 近 24 小时 / 近 3 天 / 近 7 天 / 近 30 天 / 全部历史 / 自定义。
 
@@ -800,7 +773,6 @@ $('btnProbeDead').onclick = () => busyBtn($('btnProbeDead'), '探测中…', asy
 /* 实测上限标注：scripts/probe_max_tokens.py --panel-out 写入探测结果，
    /panel/api/model_probes 只读透传。探测键带域前缀（cn:glm-5.2），模型表
    显示裸名，按「精确命中或 :后缀」关联。无数据时本列退回上游声称值。 */
-function fmtK(n) { n = Number(n || 0); return n >= 1000 ? Math.round(n / 1000) + 'K' : String(n); }
 function probeDays(ts) {
   if (!ts) return null;
   const t = new Date(String(ts).replace(' ', 'T'));
@@ -1176,12 +1148,6 @@ function cacheRateText(hit, miss) {
   return String(Math.round(h / total * 1000) / 10) + '%';
 }
 
-function fmtBytes(bytes) {
-  const n = Number(bytes || 0);
-  if (n < 1024) return n + ' B';
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-  return (n / 1024 / 1024).toFixed(1) + ' MB';
-}
 $('btnLogPin').onclick = () => {
   logPin = !logPin;
   $('btnLogPin').textContent = '自动滚动：' + (logPin ? '开' : '关');
@@ -2432,40 +2398,6 @@ function reattachQueueView() {
 /* ── 用量 ─────────────────────────────────────────────────────────── */
 /* 图表用原生 SVG 手绘：面板是 go:embed 单文件、无构建步骤，引入图表库
    就得带上打包器，得不偿失。这里只需要堆叠柱状图，二十行足够。 */
-
-function fmtTok(n) {
-  n = Number(n || 0);
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
-  return String(n);
-}
-function fmtMs(ms) {
-  ms = Number(ms || 0);
-  if (!ms) return '—';
-  if (ms >= 1000) return (ms / 1000).toFixed(2) + 's';
-  return Math.round(ms) + 'ms';
-}
-function fmtRate(r) { return r ? Number(r).toFixed(1) + ' tok/s' : '—'; }
-function trimFixed(s) {
-  if (!String(s).includes('.')) return String(s);
-  return String(s).replace(/0+$/, '').replace(/\.$/, '');
-}
-function fmtCredit(n) {
-  const v = Number(n || 0);
-  if (!Number.isFinite(v)) return '—';
-  return trimFixed(v.toFixed(2));
-}
-function fmtCreditRatio(v, samples, tokens) {
-  if (!samples || !tokens) return '—';
-  const n = Number(v || 0);
-  if (!Number.isFinite(n)) return '—';
-  return trimFixed(n.toFixed(4)) + ' / 1M';
-}
-function fmtModelRate(rate) {
-  const s = String(rate || '').trim();
-  return s ? 'x' + s : '—';
-}
 
 function usStat(v, k, cls) {
   return '<div class="stat ' + (cls || '') + '"><div class="v">' + esc(v) +

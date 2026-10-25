@@ -2,6 +2,7 @@
 //
 // 资源经 go:embed 打进二进制（随服务部署，无外部构建步骤）：
 //   - index.html  页面骨架
+//   - logic.js    纯函数层（转义 / 时间解析 / 格式化），可被 node 直接单测
 //   - app.js      全部前端逻辑（独立文件而非内联，为了启用无需 unsafe-inline 的严格 CSP）
 //
 // 安全头只作用于面板的两个静态响应（index/appScript）：CSP 限制脚本只能来自本服务，
@@ -17,6 +18,9 @@ import (
 
 //go:embed index.html
 var indexHTML []byte
+
+//go:embed logic.js
+var logicJS []byte
 
 //go:embed app.js
 var appJS []byte
@@ -46,10 +50,11 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 }
 
-// noCache 单文件嵌入资源（index.html / app.js）的缓存策略：禁止启发式强缓存，
-// 每次 no-cache 协商校验。html 与 js 是【同版本强耦合】的两份独立文件（弹窗 DOM
-// 与其交互逻辑分属两处），URL 不带版本号，一旦浏览器用旧缓存拼新页面就会出现
-// 半新半旧的错乱界面——宁多一次 304 往返，也不容忍版本错配。
+// noCache 单文件嵌入资源（index.html / logic.js / app.js）的缓存策略：禁止启发式
+// 强缓存，每次 no-cache 协商校验。这三个文件是【同版本强耦合】的独立文件（结构 /
+// 纯函数 / 交互分属三处，app.js 顶部还解构 logic.js 的导出），URL 不带版本号，
+// 一旦浏览器用旧缓存拼新页面就会出现半新半旧的错乱界面——更糟的是 logic.js 旧版
+// 少了新函数时，app.js 解构到 undefined 直接白屏。宁多一次 304，不容忍版本错配。
 func noCache(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-cache")
 }
@@ -61,6 +66,16 @@ func (p *Panel) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(indexHTML)
+}
+
+// logicScript 输出纯函数层。必须由 index.html 在 app.js **之前**加载：
+// app.js 顶部直接解构 window.WBLogic，顺序错了整份脚本首行即 TypeError（面板白屏）。
+func (p *Panel) logicScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	noCache(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(logicJS)
 }
 
 // appScript 输出前端逻辑（同源脚本，供 CSP script-src 'self' 加载）。

@@ -132,7 +132,11 @@ func TestAppJSTopLevelSmoke(t *testing.T) {
 	}
 	harness := `const fs = require('fs');
 const vm = require('vm');
+const path = require('path');
 const src = fs.readFileSync(process.argv[2], 'utf8');
+// 纯函数层（logic.js）已从 app.js 抽出：app.js 首行就解构 window.WBLogic，
+// 所以沙箱必须先具备它，否则顶层求值直接 TypeError（面板白屏的那种）。
+const WBLogic = require(path.resolve(path.dirname(process.argv[2]), 'logic.js'));
 const inert = new Proxy(function () {}, {
   get(t, k) { if (k === Symbol.toPrimitive) return () => ''; return inert; },
   set() { return true; },
@@ -152,7 +156,7 @@ const sandbox = new Proxy({
   setInterval, clearInterval, setTimeout, clearTimeout,
   console, JSON, Math, Date, Number, String, Boolean, Object, Array, Promise, Map, Set, RegExp, Error, TypeError, isNaN, parseInt, parseFloat, encodeURIComponent, decodeURIComponent, URL, Symbol, Proxy, Reflect,
 }, { get(t, k) { return t[k]; }, has() { return true; } });
-sandbox.window = sandbox; sandbox.globalThis = sandbox;
+sandbox.window = sandbox; sandbox.globalThis = sandbox; sandbox.WBLogic = WBLogic;
 vm.createContext(sandbox);
 try {
   vm.runInContext(src, sandbox, { filename: 'app.js' });
@@ -193,9 +197,9 @@ func TestAppJSCreditDimensionFormatting(t *testing.T) {
 	}
 	script := `const fs = require('fs');
 const vm = require('vm');
-const src = fs.readFileSync(process.argv[2], 'utf8');
-	const start = src.indexOf('function trimFixed');
-const end = src.indexOf('function usStat');
+const src = fs.readFileSync(require('path').join(require('path').dirname(process.argv[2]), 'logic.js'), 'utf8');
+const start = src.indexOf('function trimFixed');
+const end = src.indexOf('const api = {');
 if (start < 0 || end < 0) throw new Error('credit helpers not found');
 const ctx = { Number, String, RegExp };
 vm.createContext(ctx);
@@ -240,13 +244,17 @@ func TestAppJSRateLimitMeta(t *testing.T) {
 	}
 	script := `const fs = require('fs');
 const vm = require('vm');
-const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('function dur(');
-const end = src.indexOf('function rateLimitRowsHtml');
-if (start < 0 || end < 0) throw new Error('rate limit helpers not found');
+const path = require('path');
+const app = fs.readFileSync(process.argv[2], 'utf8');
+const logic = fs.readFileSync(path.join(path.dirname(process.argv[2]), 'logic.js'), 'utf8');
+const start = logic.indexOf('function dur(');
+const end = logic.indexOf('const api = {');
+const aStart = app.indexOf('function rateLimitMeta');
+const aEnd = app.indexOf('function rateLimitRowsHtml');
+if ([start, end, aStart, aEnd].some(v => v < 0)) throw new Error('rate limit helpers not found');
 const ctx = { Date, Number, String, Math };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.rateLimitMeta=rateLimitMeta;', ctx);
+vm.runInContext(logic.slice(start, end) + app.slice(aStart, aEnd) + '\nthis.rateLimitMeta=rateLimitMeta;', ctx);
 const now = new Date(2026, 8, 28, 14, 0, 0).getTime();
 const reset = new Date(2026, 8, 28, 16, 0, 0).getTime();
 const until = new Date(2026, 8, 28, 15, 0, 0).getTime();
@@ -285,17 +293,20 @@ func TestAppJSRequestLogFormatting(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const escStart = src.indexOf('function esc(');
-const escEnd = src.indexOf('function ago(');
-const fmtStart = src.indexOf('function fmtTok(');
-const fmtEnd = src.indexOf('function usStat(');
-const reqStart = src.indexOf('function requestLogText');
-const reqEnd = src.indexOf('function fmtBytes');
+const path = require('path');
+const app = fs.readFileSync(process.argv[2], 'utf8');
+const logic = fs.readFileSync(path.join(path.dirname(process.argv[2]), 'logic.js'), 'utf8');
+const escStart = logic.indexOf('function esc(');
+const escEnd = logic.indexOf('function ago(');
+const fmtStart = logic.indexOf('function fmtTok(');
+const fmtEnd = logic.indexOf('const api = {');
+const reqStart = app.indexOf('function requestLogText');
+const reqEnd = app.indexOf("$('btnLogPin').onclick");
 if ([escStart, escEnd, fmtStart, fmtEnd, reqStart, reqEnd].some(v => v < 0)) throw new Error('request log helpers not found');
 const ctx = { Date, Number, String, Math, RegExp, isNaN };
 vm.createContext(ctx);
 vm.runInContext(
-  src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(reqStart, reqEnd) +
+  logic.slice(escStart, escEnd) + logic.slice(fmtStart, fmtEnd) + app.slice(reqStart, reqEnd) +
   '\nthis.requestLogText=requestLogText;',
   ctx
 );
@@ -467,12 +478,15 @@ func TestAppJSUsageChartBarClass(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('function parsePointTime');
-const end = src.indexOf('function fmtTokTip');
-const escStart = src.indexOf('function esc(');
-const escEnd = src.indexOf('function ago(');
-const fmtStart = src.indexOf('function fmtTok(');
-const fmtEnd = src.indexOf('function usStat(');
+const path = require('path');
+const app = fs.readFileSync(process.argv[2], 'utf8');
+const logic = fs.readFileSync(path.join(path.dirname(process.argv[2]), 'logic.js'), 'utf8');
+const start = app.indexOf('function parsePointTime');
+const end = app.indexOf('function fmtTokTip');
+const escStart = logic.indexOf('function esc(');
+const escEnd = logic.indexOf('function ago(');
+const fmtStart = logic.indexOf('function fmtTok(');
+const fmtEnd = logic.indexOf('const api = {');
 if ([start, end, escStart, escEnd, fmtStart, fmtEnd].some(v => v < 0)) throw new Error('usage chart helpers not found');
 const host = { innerHTML: '', textContent: '' };
 const ctx = {
@@ -481,7 +495,7 @@ const ctx = {
   $: () => host,
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(start, end) +
+vm.runInContext(logic.slice(escStart, escEnd) + logic.slice(fmtStart, fmtEnd) + app.slice(start, end) +
   '\nthis.renderUsageChart=renderUsageChart;this.fmtTok=fmtTok;', ctx);
 const series = [
   { t: '2026-09-30T09', scope: 'hour', prompt_tokens: 35, completion_tokens: 16, total_tokens: 51, requests: 1 },
