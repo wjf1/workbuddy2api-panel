@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
-	"log"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -83,9 +83,9 @@ func (p *Panel) StartBackupLoop(ctx context.Context) {
 				continue
 			}
 			if name, err := p.RunBackupNow(); err != nil {
-				log.Printf("panel: 定时备份失败: %v（明日 %d 点重试）", err, hour)
+				logx.Infof("panel: 定时备份失败: %v（明日 %d 点重试）", err, hour)
 			} else {
-				log.Printf("panel: 定时备份完成: %s", name)
+				logx.Infof("panel: 定时备份完成: %s", name)
 			}
 		}
 	}
@@ -200,7 +200,7 @@ func (p *Panel) rotateBackups() {
 	sort.Strings(zips) // 升序；最旧在前
 	for _, name := range zips[:len(zips)-keep] {
 		if err := os.Remove(filepath.Join(p.cfg.BackupDir, name)); err == nil {
-			log.Printf("panel: backup rotate 删除旧备份 %s（保留 %d 份）", name, keep)
+			logx.Infof("panel: backup rotate 删除旧备份 %s（保留 %d 份）", name, keep)
 		}
 	}
 }
@@ -223,11 +223,11 @@ func (p *Panel) backupRun(w http.ResponseWriter, r *http.Request) {
 	}
 	name, err := p.RunBackupNow()
 	if err != nil {
-		log.Printf("panel: 手动备份失败: %v", err)
+		logx.Infof("panel: 手动备份失败: %v", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	log.Printf("panel: 手动备份完成: %s", name)
+	logx.Infof("panel: 手动备份完成: %s", name)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": name})
 }
 

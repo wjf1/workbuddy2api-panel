@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"path"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // cockpitAccount 映射 cockpit tools 导出格式的单个账号。
@@ -194,18 +194,18 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		if p.cfg.Upstream != nil {
 			if realm == "global" {
 				if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
-					log.Printf("panel: import global 注册激活 uid=%s: %v", uid, err)
+					logx.Infof("panel: import global 注册激活 uid=%s: %v", uid, err)
 				} else if activated {
-					log.Printf("panel: import global 注册激活 uid=%s 完成", uid)
+					logx.Infof("panel: import global 注册激活 uid=%s 完成", uid)
 				}
 				if claimed, err := p.cfg.Upstream.ClaimTrial(a); err != nil {
-					log.Printf("panel: import global trial uid=%s: %v", uid, err)
+					logx.Infof("panel: import global trial uid=%s: %v", uid, err)
 				} else if claimed {
-					log.Printf("panel: import global trial uid=%s 已领", uid)
+					logx.Infof("panel: import global trial uid=%s 已领", uid)
 				}
 			} else {
 				if err := p.cfg.Upstream.DailyCheckin(a); err != nil {
-					log.Printf("panel: import checkin uid=%s: %v", uid, err)
+					logx.Infof("panel: import checkin uid=%s: %v", uid, err)
 				}
 			}
 			if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
@@ -218,7 +218,7 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 
 	total = len(pending) + skippedElems
 	skipped += skippedElems
-	log.Printf("panel: cockpit import finished total=%d imported=%d skipped=%d", total, imported, skipped)
+	logx.Infof("panel: cockpit import finished total=%d imported=%d skipped=%d", total, imported, skipped)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"total":    total,

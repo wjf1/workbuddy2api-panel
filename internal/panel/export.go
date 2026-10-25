@@ -2,12 +2,12 @@ package panel
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // cockpitExportAccount 对齐 cockpit tools 的 WorkBuddy 账号序列化字段
@@ -78,7 +78,7 @@ func (p *Panel) exportCockpit(w http.ResponseWriter, r *http.Request) {
 		accounts = append(accounts, cockpitAccountFromAuth(a))
 	}
 
-	log.Printf("panel: cockpit export count=%d", len(accounts))
+	logx.Infof("panel: cockpit export count=%d", len(accounts))
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="workbuddy_accounts_%s.json"`, time.Now().Format("20060102_150405")))
 	writeJSON(w, http.StatusOK, accounts)

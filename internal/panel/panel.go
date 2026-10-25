@@ -12,7 +12,6 @@ package panel
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"os"
 	"sort"
@@ -25,6 +24,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
@@ -648,7 +648,7 @@ func (p *Panel) accountRevive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.cfg.Pool.Revive(uid)
-	log.Printf("panel: revive uid=%s（人工清除禁用/冷却/熔断）", uid)
+	logx.Infof("panel: revive uid=%s（人工清除禁用/冷却/熔断）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -660,7 +660,7 @@ func (p *Panel) accountDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.cfg.Pool.Disable(uid, "manual disable (panel)")
-	log.Printf("panel: disable uid=%s（人工禁用）", uid)
+	logx.Infof("panel: disable uid=%s（人工禁用）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -673,7 +673,7 @@ func (p *Panel) accountPause(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
-	log.Printf("panel: pause uid=%s（暂停选号，保号任务照常）", uid)
+	logx.Infof("panel: pause uid=%s（暂停选号，保号任务照常）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -684,7 +684,7 @@ func (p *Panel) accountResume(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
-	log.Printf("panel: resume uid=%s（恢复参与选号）", uid)
+	logx.Infof("panel: resume uid=%s（恢复参与选号）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -724,7 +724,7 @@ func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
 	p.cfg.Pool.SetCreditsDetailed(uid, remain, total, expiring, earliestAt, earliestRemaining)
 	resp["credits"] = remain
 	resp["credits_total"] = total
-	log.Printf("panel: checkin uid=%s msg=%q credits=%d/%d", uid, checkinMsg, remain, total)
+	logx.Infof("panel: checkin uid=%s msg=%q credits=%d/%d", uid, checkinMsg, remain, total)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -763,22 +763,22 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if fileMsg != "" {
-			log.Printf("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
+			logx.Infof("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": fileMsg})
 			return
 		}
-		log.Printf("panel: remove uid=%s（已出池并删除凭证文件）", uid)
+		logx.Infof("panel: remove uid=%s（已出池并删除凭证文件）", uid)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
 	name, err := p.moveToTrash(a)
 	if err != nil {
 		// 出池已成功、文件仍在原地：如实告知（文件残留比静默丢失好）。
-		log.Printf("panel: remove uid=%s 出池成功但移入回收站失败: %v", uid, err)
+		logx.Infof("panel: remove uid=%s 出池成功但移入回收站失败: %v", uid, err)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": err.Error()})
 		return
 	}
-	log.Printf("panel: remove uid=%s（已出池，凭证移入回收站 %s）", uid, name)
+	logx.Infof("panel: remove uid=%s（已出池，凭证移入回收站 %s）", uid, name)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "trashed": name})
 }
 
@@ -806,7 +806,7 @@ func (p *Panel) accountTags(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "save auth: "+err.Error())
 		return
 	}
-	log.Printf("panel: tags uid=%s -> %v", uid, a.TagsValue())
+	logx.Infof("panel: tags uid=%s -> %v", uid, a.TagsValue())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tags": a.TagsValue(), "changed": true})
 }
 
@@ -821,7 +821,7 @@ func (p *Panel) checkinAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go p.cfg.Scheduler.RunCheckinNow()
-	log.Printf("panel: 手动全量签到已触发（签到 + 余额 + 连登管家；旅行为独立排程）")
+	logx.Infof("panel: 手动全量签到已触发（签到 + 余额 + 连登管家；旅行为独立排程）")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
@@ -832,7 +832,7 @@ func (p *Panel) travelAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go p.cfg.Scheduler.RunTravelNow()
-	log.Printf("panel: 手动全量旅行巡检已触发")
+	logx.Infof("panel: 手动全量旅行巡检已触发")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
@@ -843,7 +843,7 @@ func (p *Panel) activityAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go p.cfg.Scheduler.RunActivityNow()
-	log.Printf("panel: 手动全量活跃上报已触发")
+	logx.Infof("panel: 手动全量活跃上报已触发")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
@@ -865,7 +865,7 @@ func (p *Panel) keepaliveAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go p.cfg.Scheduler.RunKeepaliveNow()
-	log.Printf("panel: 手动全量保活已触发")
+	logx.Infof("panel: 手动全量保活已触发")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
@@ -879,7 +879,7 @@ func (p *Panel) balanceAll(w http.ResponseWriter, r *http.Request) {
 	}
 	p.cfg.Scheduler.RunBalanceRefreshNow()
 	p.syncNicknames()
-	log.Printf("panel: 手动全量余额刷新完成")
+	logx.Infof("panel: 手动全量余额刷新完成")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accounts": p.cfg.Pool.List()})
 }
 
@@ -934,7 +934,7 @@ func (p *Panel) syncNicknames() {
 	}
 	wg.Wait()
 	if updated > 0 || failed > 0 {
-		log.Printf("panel: 昵称同步：更新 %d 个，失败 %d 个（未变化不计数）", updated, failed)
+		logx.Infof("panel: 昵称同步：更新 %d 个，失败 %d 个（未变化不计数）", updated, failed)
 	}
 }
 

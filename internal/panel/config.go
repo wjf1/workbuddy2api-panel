@@ -7,8 +7,9 @@ package panel
 
 import (
 	"io"
-	"log"
 	"net/http"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // getConfig 返回当前配置文件内容与路径（前端按 schema 渲染表单）。
@@ -49,7 +50,7 @@ func (p *Panel) saveConfig(w http.ResponseWriter, r *http.Request) {
 	if restartRequired == nil {
 		restartRequired = []string{}
 	}
-	log.Printf("panel: 配置已保存（热生效完成；需重启字段 %d 个）", len(restartRequired))
+	logx.Infof("panel: 配置已保存（热生效完成；需重启字段 %d 个）", len(restartRequired))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"restart_required": restartRequired,

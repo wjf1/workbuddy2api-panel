@@ -12,13 +12,13 @@ package panel
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -107,7 +107,7 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		pending += len(it.Growth)
 	}
-	log.Printf("panel: 队列扫描完成：全部账号待办 %d 项", pending)
+	logx.Infof("panel: 队列扫描完成：全部账号待办 %d 项", pending)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accounts": items, "pending_count": pending})
 }
 
@@ -260,7 +260,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 		}
 	}
 	if len(items) == 0 {
-		log.Printf("panel: 队列启动：无可执行待办（全部账号任务已完成）")
+		logx.Infof("panel: 队列启动：无可执行待办（全部账号任务已完成）")
 		q.mu.Lock()
 		q.running = false
 		q.startedAt = time.Time{}
@@ -276,7 +276,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 	q.mu.Unlock()
 
 	go p.runQueueItems(accts, items, concurrency)
-	log.Printf("panel: 队列启动：%d 项（并发 %d，成长 %v）", len(items), concurrency, growth)
+	logx.Infof("panel: 队列启动：%d 项（并发 %d，成长 %v）", len(items), concurrency, growth)
 	return true, len(items), seq, ""
 }
 
@@ -287,7 +287,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 func (p *Panel) RunGrowthQueueOnce() {
 	started, total, _, _ := p.startGrowthQueue(1, true)
 	if started {
-		log.Printf("panel: 定时成长任务队列已启动（%d 项）", total)
+		logx.Infof("panel: 定时成长任务队列已启动（%d 项）", total)
 	}
 }
 
@@ -299,7 +299,7 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 		q.mu.Lock()
 		q.running = false
 		q.mu.Unlock()
-		log.Printf("panel: 队列执行结束（共 %d 项）", len(items))
+		logx.Infof("panel: 队列执行结束（共 %d 项）", len(items))
 	}()
 
 	sem := make(chan struct{}, concurrency)
@@ -396,10 +396,10 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
 		return 0
 	}
 	if err := p.cfg.Upstream.AcceptTasks(a, codes); err != nil {
-		log.Printf("panel: 队列 accept uid=%s: %v（不阻塞）", a.UID, err)
+		logx.Infof("panel: 队列 accept uid=%s: %v（不阻塞）", a.UID, err)
 		return 0
 	}
-	log.Printf("panel: 队列 accept uid=%s: 已接受 %d 个任务", a.UID, len(codes))
+	logx.Infof("panel: 队列 accept uid=%s: 已接受 %d 个任务", a.UID, len(codes))
 	return len(codes)
 }
 
@@ -447,7 +447,7 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 	if after != nil {
 		msg += "（进度 " + taskProgressText(after) + "）"
 	}
-	log.Printf("panel: 队列 growth uid=%s code=%s: %s", a.UID, code, msg)
+	logx.Infof("panel: 队列 growth uid=%s code=%s: %s", a.UID, code, msg)
 	return msg, nil
 }
 

@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,6 +25,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // trashItem 回收站列表条目。
@@ -60,7 +60,7 @@ func (p *Panel) moveToTrash(a *auth.Auth) (string, error) {
 	// mtime = 删除时刻：sweepTrash 的保留期依据 + 列表展示，双用。
 	now := time.Now()
 	if err := os.Chtimes(dst, now, now); err != nil {
-		log.Printf("panel: trash %s set mtime: %v（不影响功能，仅清理时刻取创建时间）", dst, err)
+		logx.Infof("panel: trash %s set mtime: %v（不影响功能，仅清理时刻取创建时间）", dst, err)
 	}
 	return filepath.Base(dst), nil
 }
@@ -214,7 +214,7 @@ func (p *Panel) trashRestore(w http.ResponseWriter, r *http.Request) {
 	a2.FilePath = dst
 	p.cfg.Pool.Add(a2)
 	p.cfg.Pool.Revive(a2.UID)
-	log.Printf("panel: trash restore uid=%s -> %s", a2.UID, dst)
+	logx.Infof("panel: trash restore uid=%s -> %s", a2.UID, dst)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "uid": a2.UID})
 }
 
@@ -235,7 +235,7 @@ func (p *Panel) trashPurge(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "purge: "+err.Error())
 		return
 	}
-	log.Printf("panel: trash purge %s", name)
+	logx.Infof("panel: trash purge %s", name)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -264,7 +264,7 @@ func (p *Panel) trashPurgeAll(w http.ResponseWriter, r *http.Request) {
 		}
 		removed++
 	}
-	log.Printf("panel: trash purge_all removed=%d errs=%d", removed, len(errs))
+	logx.Infof("panel: trash purge_all removed=%d errs=%d", removed, len(errs))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed, "errors": errs})
 }
 
@@ -317,7 +317,7 @@ func (p *Panel) sweepTrash() {
 			continue
 		}
 		if err := os.Remove(fp); err == nil {
-			log.Printf("panel: trash sweep 过期清理 %s（保留 %d 天）", e.Name(), int(retention/(24*time.Hour)))
+			logx.Infof("panel: trash sweep 过期清理 %s（保留 %d 天）", e.Name(), int(retention/(24*time.Hour)))
 		}
 	}
 }
