@@ -8,11 +8,11 @@ package pool
 
 import (
 	"encoding/json"
-	"log"
 	"path/filepath"
 	"sort"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
@@ -111,7 +111,7 @@ func (p *Pool) writeCreditsHistory(accounts map[string][]creditPoint) {
 		err = safefile.Write(p.creditHistPath, raw, 0o644)
 	}
 	if err != nil {
-		log.Printf("[credits-history] WARN: 落盘失败: %v", err)
+		logx.Warnf("[credits-history] 落盘失败: %v", err)
 		return
 	}
 	p.creditHistDirty.Store(false)
@@ -128,7 +128,7 @@ func (p *Pool) loadCreditsHistory() {
 	}
 	var f creditHistoryFile
 	if json.Unmarshal(raw, &f) != nil || f.Version != 1 {
-		log.Printf("[credits-history] WARN: %s 损坏，趋势从空开始重建", p.creditHistPath)
+		logx.Warnf("[credits-history] %s 损坏，趋势从空开始重建", p.creditHistPath)
 		return
 	}
 	p.creditHist = f.Accounts

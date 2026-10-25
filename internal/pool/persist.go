@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
@@ -64,14 +64,14 @@ func (p *Pool) RestoreFromSnapshot() {
 	raw, ok := store.LoadState()
 	if !ok {
 		if localErr == nil {
-			log.Printf("pool: 恢复来源=本地 state.json（无 Redis 快照）本地 rev=%d", localRev)
+			logx.Infof("pool: 恢复来源=本地 state.json（无 Redis 快照）本地 rev=%d", localRev)
 		}
 		return
 	}
 	var snap snapshot
 	if json.Unmarshal(raw, &snap) != nil || snap.SavedAt.IsZero() {
 		// 快照无 savedAt：无法比较新旧，本地优先。
-		log.Printf("pool: 恢复来源=本地 state.json（Redis 快照无 saved_at）本地 rev=%d 快照 rev=%d", localRev, snap.Revision)
+		logx.Infof("pool: 恢复来源=本地 state.json（Redis 快照无 saved_at）本地 rev=%d 快照 rev=%d", localRev, snap.Revision)
 		return
 	}
 	if localErr != nil {
@@ -82,7 +82,7 @@ func (p *Pool) RestoreFromSnapshot() {
 		// 从未发生过的比较，把排障引向根本不存在的本地文件；随后 SyncToDir 只增删不入值，
 		// 全池运行态（credits/冷却/熔断计数/usedSeq/lastUsed）被清零。
 		p.adoptSnapshot(snap)
-		log.Printf("pool: 恢复来源=Redis 快照 (saved_at=%s, rev=%d)（本地 state.json 不可用: %v）",
+		logx.Infof("pool: 恢复来源=Redis 快照 (saved_at=%s, rev=%d)（本地 state.json 不可用: %v）",
 			snap.SavedAt.Format(time.RFC3339), snap.Revision, localErr)
 		return
 	}
@@ -90,17 +90,17 @@ func (p *Pool) RestoreFromSnapshot() {
 	if localRev > 0 && snap.Revision > 0 && localRev != snap.Revision {
 		if snap.Revision > localRev {
 			p.adoptSnapshot(snap)
-			log.Printf("pool: 恢复来源=Redis 快照 (rev=%d > 本地 rev=%d，按版本号判定；saved_at=%s, mtime=%s)",
+			logx.Infof("pool: 恢复来源=Redis 快照 (rev=%d > 本地 rev=%d，按版本号判定；saved_at=%s, mtime=%s)",
 				snap.Revision, localRev, snap.SavedAt.Format(time.RFC3339), localInfo.ModTime().Format(time.RFC3339))
 			return
 		}
-		log.Printf("pool: 恢复来源=本地 state.json（rev=%d > 快照 rev=%d，按版本号判定；mtime=%s, saved_at=%s）",
+		logx.Infof("pool: 恢复来源=本地 state.json（rev=%d > 快照 rev=%d，按版本号判定；mtime=%s, saved_at=%s）",
 			localRev, snap.Revision, localInfo.ModTime().Format(time.RFC3339), snap.SavedAt.Format(time.RFC3339))
 		return
 	}
 	// —— 判据 2：revision 相等且 >0 → 同一次落盘，两侧内容必然一致，确定性取本地 ——
 	if localRev > 0 && localRev == snap.Revision {
-		log.Printf("pool: 恢复来源=本地 state.json（两侧 rev 相同=%d，同一次落盘，不看时钟；mtime=%s, saved_at=%s）",
+		logx.Infof("pool: 恢复来源=本地 state.json（两侧 rev 相同=%d，同一次落盘，不看时钟；mtime=%s, saved_at=%s）",
 			localRev, localInfo.ModTime().Format(time.RFC3339), snap.SavedAt.Format(time.RFC3339))
 		return
 	}
@@ -108,12 +108,12 @@ func (p *Pool) RestoreFromSnapshot() {
 	if !localInfo.ModTime().After(snap.SavedAt) {
 		// 快照不早于本地 → 采用快照。
 		p.adoptSnapshot(snap)
-		log.Printf("pool: 恢复来源=Redis 快照 (saved_at=%s, rev=%d)（本地 rev=%d 不可比，按 mtime=%s 判定）",
+		logx.Infof("pool: 恢复来源=Redis 快照 (saved_at=%s, rev=%d)（本地 rev=%d 不可比，按 mtime=%s 判定）",
 			snap.SavedAt.Format(time.RFC3339), snap.Revision, localRev, localInfo.ModTime().Format(time.RFC3339))
 		return
 	}
 	// 走到这里必然是「本地存在且严格新于快照」，日志结论属实。
-	log.Printf("pool: 恢复来源=本地 state.json（rev=%d, mtime=%s；快照 rev=%d, saved_at=%s；一侧 rev 不可比，按时间判定）",
+	logx.Infof("pool: 恢复来源=本地 state.json（rev=%d, mtime=%s；快照 rev=%d, saved_at=%s；一侧 rev 不可比，按时间判定）",
 		localRev, localInfo.ModTime().Format(time.RFC3339), snap.Revision, snap.SavedAt.Format(time.RFC3339))
 }
 
@@ -205,7 +205,7 @@ func (p *Pool) persistState() {
 	p.mu.Unlock()
 	if recovered {
 		// 从连续失败中恢复：打一条恢复日志，避免"错误打完却无人知道已恢复"。
-		log.Printf("pool: state.json 落盘恢复（此前连续失败）")
+		logx.Infof("pool: state.json 落盘恢复（此前连续失败）")
 	}
 	// 同步镜像一份快照到 Redis（fire-and-forget），与本地 state.json 并存作恢复备份。
 	if store != nil {
@@ -223,7 +223,7 @@ func (p *Pool) load() {
 	raw, err := safefile.Read(p.stateFp, nil)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("pool: state.json 不可用（%v），跳过本地状态恢复: %s", err, p.stateFp)
+			logx.Warnf("pool: state.json 不可用（%v），跳过本地状态恢复: %s", err, p.stateFp)
 		}
 		return
 	}
@@ -332,9 +332,9 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 // "失败仅打日志、不向上抛"范式对齐，但落盘失败对运维是盲区，故多一层节流（notification）。
 func (p *Pool) notePersistFail(err error) {
 	if p.persistFails == 0 {
-		log.Printf("pool: state.json 落盘失败: %v", err)
+		logx.Errorf("pool: state.json 落盘失败: %v", err)
 	} else if p.persistFails%persistLogEvery == 0 {
-		log.Printf("pool: state.json 连续落盘失败 %d 次: %v", p.persistFails, err)
+		logx.Errorf("pool: state.json 连续落盘失败 %d 次: %v", p.persistFails, err)
 	}
 	p.persistFails++
 }

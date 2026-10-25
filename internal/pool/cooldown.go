@@ -4,11 +4,11 @@
 package pool
 
 import (
-	"log"
 	"strings"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 func (p *Pool) SetCredits(uid string, credits, total int64) {
@@ -45,7 +45,7 @@ func (p *Pool) SetNickname(uid, nickname string) bool {
 		return false
 	}
 	if err := a.SaveAtomic(); err != nil {
-		log.Printf("WARN: [pool] nickname save %s: %v", uid, err)
+		logx.Warnf("[pool] nickname save %s: %v", uid, err)
 		return false
 	}
 	return true

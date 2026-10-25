@@ -2,7 +2,6 @@
 package pool
 
 import (
-	"log"
 	"math/rand/v2"
 	"sort"
 	"strconv"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // Pick 单一选号入口（无请求级轮换、无 realm 过滤，模型感知缺省账号级）。
@@ -230,7 +230,7 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		// 探索事件日志（可观测性）：选中号此时才确定，故在选中点打出。
 		// 毕业结果由相邻的既有日志闭环（免费号无日志、收费号走 NoteModelCost
 		// 常规路径）。
-		log.Printf("[pool] cost explore model=%s realm=%q acct=%s window=%s",
+		logx.Infof("[pool] cost explore model=%s realm=%q acct=%s window=%s",
 			reqModel, realm, logfmt.Label(e.a.UID, e.a.Nickname), p.costExploreInterval)
 	}
 	e.lastUsed = now // 锁内即时标记：下一个进入 pick 的 goroutine 立即看到本号已用
@@ -340,7 +340,7 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 	// 可见，日志只需提示「正在兜底」这一事实。
 	if nowN := now.UnixNano(); nowN-p.lastFallbackWarn.Load() > int64(5*time.Minute) {
 		if p.lastFallbackWarn.CompareAndSwap(p.lastFallbackWarn.Load(), nowN) {
-			log.Printf("WARN: [pool] fallback_earliest_expiry acct=%s until=%s kind=%s（同类日志 5 分钟内节流）", logfmt.Label(best.a.UID, best.a.Nickname), best.expiry(now).Format(time.RFC3339), best.fallbackKind(now))
+			logx.Warnf("[pool] fallback_earliest_expiry acct=%s until=%s kind=%s（同类日志 5 分钟内节流）", logfmt.Label(best.a.UID, best.a.Nickname), best.expiry(now).Format(time.RFC3339), best.fallbackKind(now))
 		}
 	}
 	best.lastUsed = time.Now()
