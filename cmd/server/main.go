@@ -21,6 +21,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/authlease"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/panel"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
@@ -63,12 +64,12 @@ func main() {
 			// 首次运行：目录下没有配置 → 自动落一份推荐配置（含随机 api_key）再加载。
 			// 双击 exe / 裸跑 docker 即开，无需先手工复制样例。
 			if key, werr := WriteDefault(*cfgPath); werr == nil {
-				log.Printf("config %s 不存在，已生成推荐配置（api_key=%s，记录在该文件里，可自行修改）", *cfgPath, key)
+				logx.Infof("config %s 不存在，已生成推荐配置（api_key=%s，记录在该文件里，可自行修改）", *cfgPath, key)
 				cfg, err = Load(*cfgPath)
 			}
 			if err != nil {
 				// 生成失败（目录只读等）：退回纯默认 + env（旧行为兜底），不阻塞启动。
-				log.Printf("config %s not found (auto-generate failed), using defaults+env: %v", *cfgPath, err)
+				logx.Infof("config %s not found (auto-generate failed), using defaults+env: %v", *cfgPath, err)
 				cfg, err = Load("")
 			}
 		}
@@ -89,7 +90,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load auths: %v", err)
 	}
-	log.Printf("loaded %d account(s) from %s", len(auths), cfg.AuthDir)
+	logx.Infof("loaded %d account(s) from %s", len(auths), cfg.AuthDir)
 
 	// redisstore：未配置/连接失败 → Noop（纯内存模式，一切功能照常）。
 	store := redisstore.New(cfg.Upstash.URL, cfg.Upstash.Token)
@@ -210,41 +211,41 @@ func main() {
 	})
 	switch {
 	case !cfg.Schedule.CheckinEnabled:
-		log.Printf("签到已禁用（schedule.checkin_enabled=false）")
+		logx.Infof("签到已禁用（schedule.checkin_enabled=false）")
 	default:
-		log.Printf("签到已启用：%v 点（签到 + 余额查询解冻）", cfg.Schedule.CheckinHours)
+		logx.Infof("签到已启用：%v 点（签到 + 余额查询解冻）", cfg.Schedule.CheckinHours)
 	}
 	switch {
 	case !cfg.Schedule.TravelEnabled:
-		log.Printf("猫猫旅行已禁用（schedule.travel_enabled=false）")
+		logx.Infof("猫猫旅行已禁用（schedule.travel_enabled=false）")
 	default:
-		log.Printf("猫猫旅行已启用：%v 点（独立排程：领养 / 派出 / 领奖）", cfg.Schedule.TravelHours)
+		logx.Infof("猫猫旅行已启用：%v 点（独立排程：领养 / 派出 / 领奖）", cfg.Schedule.TravelHours)
 	}
 	switch {
 	case !cfg.Schedule.ActivityEnabled:
-		log.Printf("活跃上报已禁用（schedule.activity_enabled=false）")
+		logx.Infof("活跃上报已禁用（schedule.activity_enabled=false）")
 	default:
-		log.Printf("活跃上报已启用：%v 点（每日 1 次，点亮连登 + 解锁 first_buddy）", cfg.Schedule.ActivityHours)
+		logx.Infof("活跃上报已启用：%v 点（每日 1 次，点亮连登 + 解锁 first_buddy）", cfg.Schedule.ActivityHours)
 	}
 	if !cfg.Schedule.KeepaliveEnabled {
-		log.Printf("token 保活已禁用（schedule.keepalive_enabled=false）")
+		logx.Infof("token 保活已禁用（schedule.keepalive_enabled=false）")
 	} else {
-		log.Printf("token 保活已启用：%v 点", cfg.Schedule.KeepaliveHours)
+		logx.Infof("token 保活已启用：%v 点", cfg.Schedule.KeepaliveHours)
 	}
 	switch {
 	case !cfg.Schedule.BlackcatEnabled:
-		log.Printf("夜猫子已禁用（schedule.blackcat_enabled=false）")
+		logx.Infof("夜猫子已禁用（schedule.blackcat_enabled=false）")
 	default:
-		log.Printf("夜猫子已启用：%v 点（23:00–08:00 窗口 glm-5.2 对话补足）", cfg.Schedule.BlackcatHours)
+		logx.Infof("夜猫子已启用：%v 点（23:00–08:00 窗口 glm-5.2 对话补足）", cfg.Schedule.BlackcatHours)
 	}
 	switch {
 	case !cfg.Schedule.BalanceRefreshEnabled:
-		log.Printf("余额后台刷新已禁用（schedule.balance_refresh_enabled=false）")
+		logx.Infof("余额后台刷新已禁用（schedule.balance_refresh_enabled=false）")
 	case cfg.BalanceRefreshInterval > 0:
-		log.Printf("余额后台刷新：每 %s（签到时点照常额外刷新）", cfg.BalanceRefreshInterval)
+		logx.Infof("余额后台刷新：每 %s（签到时点照常额外刷新）", cfg.BalanceRefreshInterval)
 	}
 	if cfg.Schedule.IncludeDisabledInTasks {
-		log.Printf("保号任务覆盖禁用账号（schedule.include_disabled_in_tasks=true）：禁用号仍签到 / 活跃 / 保活 / 刷新余额，但不参与选号")
+		logx.Infof("保号任务覆盖禁用账号（schedule.include_disabled_in_tasks=true）：禁用号仍签到 / 活跃 / 保活 / 刷新余额，但不参与选号")
 	}
 
 	// 管理面板日志镜像：标准 log（stderr）与 chat 表格日志（stdout）双路复制进
@@ -265,7 +266,7 @@ func main() {
 	rec := usage.New(usagePath)
 	rec.Start()
 	defer rec.Stop()
-	log.Printf("[usage] 逐请求用量记录已启用: %s (%s)", usagePath, rec.Describe())
+	logx.Infof("[usage] 逐请求用量记录已启用: %s (%s)", usagePath, rec.Describe())
 
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
@@ -277,10 +278,10 @@ func main() {
 	defer requestLog.Close()
 	rs := requestLog.Snapshot().Archive
 	if rs.Enabled {
-		log.Printf("[reqlog] 请求指标已启用；JSONL 归档 %s（保留 %d 天，上限 %d MiB）",
+		logx.Infof("[reqlog] 请求指标已启用；JSONL 归档 %s（保留 %d 天，上限 %d MiB）",
 			rs.Dir, cfg.Logging.RequestRetentionDays, cfg.Logging.RequestArchiveMaxMB)
 	} else {
-		log.Printf("[reqlog] 请求指标已启用；JSONL 归档已关闭")
+		logx.Infof("[reqlog] 请求指标已启用；JSONL 归档已关闭")
 	}
 
 	// M2 批量判死告警：pool 禁用 hook → alert（横幅 + webhook）。webhook_url 空 =
@@ -292,7 +293,7 @@ func main() {
 		CooldownMin:       cfg.Notify.CooldownMin,
 	}, "", appVersion)
 	p.SetOnDisabled(alertMgr.NoteDisabled)
-	log.Printf("[alert] 批量判死告警已启用：阈值 %d 号 / %d 分钟窗口%s",
+	logx.Infof("[alert] 批量判死告警已启用：阈值 %d 号 / %d 分钟窗口%s",
 		cfg.Notify.MassKillAccounts, cfg.Notify.MassKillWindowMin,
 		map[bool]string{true: "，webhook 已配置", false: "（仅面板横幅，未配 webhook）"}[cfg.Notify.WebhookURL != ""])
 
@@ -313,10 +314,10 @@ func main() {
 	sch.SetKeepaliveSmart(cfg.Schedule.KeepaliveMode == "smart", cfg.Schedule.SmartKeepaliveDays)
 	sch.SetProbeDeadHours(cfg.Schedule.ProbeDeadHours)
 	sch.SetRecoveredHook(alertMgr.NoteRecovered)
-	log.Printf("[scheduler] 抖动 %d 分钟窗口；保活模式 %s（阈值 %d 天）；死号探活 %v",
+	logx.Infof("[scheduler] 抖动 %d 分钟窗口；保活模式 %s（阈值 %d 天）；死号探活 %v",
 		cfg.Schedule.JitterMinutes, cfg.Schedule.KeepaliveMode, cfg.Schedule.SmartKeepaliveDays,
 		map[bool]string{true: "已启用", false: "关闭"}[len(cfg.Schedule.ProbeDeadHours) > 0])
-	log.Printf("[rotaudit] RT 轮换审计已启用：%s（外部轮换检测：本进程之外的任何 RT 消费都会告警）",
+	logx.Infof("[rotaudit] RT 轮换审计已启用：%s（外部轮换检测：本进程之外的任何 RT 消费都会告警）",
 		stateSibling(cfg.StateFile, "refresh-audit"))
 
 	// pn 先声明再赋值：SaveConfig 闭包需引用 pn 本身（配置页热改备份/回收站设置），
@@ -355,7 +356,7 @@ func main() {
 	})
 	// 备份设置注入 + 每日定时备份与回收站过期清理循环（随 ctx 取消退出）。
 	pn.SetBackupSettings(cfg.Backup.Enabled, cfg.Backup.Hour, cfg.Backup.Keep)
-	log.Printf("定时备份已启用：每日 %d 点 → %s（保留 %d 份）", cfg.Backup.Hour, stateSibling(cfg.StateFile, "backups"), cfg.Backup.Keep)
+	logx.Infof("定时备份已启用：每日 %d 点 → %s（保留 %d 份）", cfg.Backup.Hour, stateSibling(cfg.StateFile, "backups"), cfg.Backup.Keep)
 	// 成长任务队列每日自动执行（与「执行全部待办」同管线）：Sequential 族零点解锁后
 	// 无需手动扫描；hook 返回即启动（异步执行），已在跑时内部跳过。
 	sch.SetGrowthHook(pn.RunGrowthQueueOnce)
@@ -368,7 +369,7 @@ func main() {
 	var searcher websearch.Searcher
 	if cfg.Search.Enabled {
 		searcher = websearch.NewSo(time.Duration(cfg.Search.TimeoutSeconds)*time.Second, "")
-		log.Printf("服务端 web_search 已启用（360 搜索抓取；单次 %d 条 / %ds 超时）",
+		logx.Infof("服务端 web_search 已启用（360 搜索抓取；单次 %d 条 / %ds 超时）",
 			cfg.Search.MaxResults, cfg.Search.TimeoutSeconds)
 	}
 
@@ -465,18 +466,18 @@ func main() {
 	if addr := cfg.Server.DebugAddr; addr != "" {
 		dbg = newDebugServer(addr, p)
 		go func() {
-			log.Printf("debug listener on %s (/debug/pprof/, /metrics)", addr)
+			logx.Infof("debug listener on %s (/debug/pprof/, /metrics)", addr)
 			if err := dbg.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("WARN: debug listener: %v", err)
+				logx.Warnf("debug listener: %v", err)
 			}
 		}()
 	}
 
-	log.Printf("workbuddy2api listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
+	logx.Infof("workbuddy2api listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http: %v", err)
 	}
-	log.Printf("bye")
+	logx.Infof("bye")
 }
 
 // warmModelRates 启动预热各域模型积分倍率表（供积分保底的目录兜底判定）。
@@ -497,9 +498,9 @@ func warmModelRates(ctx context.Context, up *upstream.Client, p *pool.Pool) {
 	if uids := p.AvailableUIDsForRealm("cn"); len(uids) > 0 {
 		if a := p.AuthByUID(uids[0]); a != nil {
 			if _, err := up.FetchModels(a); err != nil {
-				log.Printf("WARN: [upstream] warm model rates (cn): %v", err)
+				logx.Warnf("[upstream] warm model rates (cn): %v", err)
 			} else {
-				log.Printf("[upstream] warm model rates: cn ok")
+				logx.Infof("[upstream] warm model rates: cn ok")
 			}
 		}
 	}
@@ -510,9 +511,9 @@ func warmModelRates(ctx context.Context, up *upstream.Client, p *pool.Pool) {
 				// FetchGlobalModelInfos 无错误返回（内部负缓存自行节流），
 				// 仅按结果条数判断是否拿到目录。
 				if infos := up.FetchGlobalModelInfos(a); len(infos) == 0 {
-					log.Printf("WARN: [upstream] warm model rates (global): empty model list")
+					logx.Warnf("[upstream] warm model rates (global): empty model list")
 				} else {
-					log.Printf("[upstream] warm model rates: global ok (%d models)", len(infos))
+					logx.Infof("[upstream] warm model rates: global ok (%d models)", len(infos))
 				}
 			}
 		}
