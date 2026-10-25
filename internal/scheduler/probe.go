@@ -17,13 +17,13 @@ package scheduler
 
 import (
 	"context"
-	"log"
 	"math/rand/v2"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 )
 
@@ -80,9 +80,9 @@ func (s *Scheduler) probeOne(st pool.Status, a *auth.Auth) {
 	s.cfg.Pool.ClearSessionDead(st.UID)
 	s.cfg.Pool.ReviveDisabled(st.UID)
 	if err := a.SaveAtomicRetry(); err != nil {
-		log.Printf("probe %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
+		logx.Warnf("probe %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
 	}
-	log.Printf("probe %s: 死号复活——上游已接受刷新，账号恢复可选（此前 reason=%q）",
+	logx.Infof("probe %s: 死号复活——上游已接受刷新，账号恢复可选（此前 reason=%q）",
 		logfmt.Label(st.UID, st.Nickname), st.DisabledReason)
 	s.schedMu.Lock()
 	hook := s.cfg.RecoveredHook
@@ -123,7 +123,7 @@ func (s *Scheduler) driveProbeDead() {
 	// 退避重试（死号多时一探几分钟）。
 	go func(h int) {
 		if n := s.runProbeDead(s.ctxRef()); n > 0 {
-			log.Printf("probe: 本小时探测 %d 个死号（probe_dead_hours 命中 %d 点）", n, h)
+			logx.Infof("probe: 本小时探测 %d 个死号（probe_dead_hours 命中 %d 点）", n, h)
 		}
 	}(hour)
 }

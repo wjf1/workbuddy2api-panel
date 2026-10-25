@@ -16,11 +16,11 @@ package scheduler
 import (
 	"context"
 	"hash/fnv"
-	"log"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // jitterOffset 计算账号在 day（CST YYYY-MM-DD）的抖动偏移，范围 [0, maxMin*60s)。
@@ -79,7 +79,7 @@ func (s *Scheduler) sleepJitter(ctx context.Context, uid, nickname string, start
 func (s *Scheduler) sleepJitterKind(ctx context.Context, uid, nickname, kind string, start time.Time) bool {
 	wait := s.jitterWaitFor(uid, kind, start)
 	if wait > 30*time.Second {
-		log.Printf("jitter %s: 延迟 %s 后执行（打散整点齐射）", logfmt.Label(uid, nickname), wait.Round(time.Second))
+		logx.Infof("jitter %s: 延迟 %s 后执行（打散整点齐射）", logfmt.Label(uid, nickname), wait.Round(time.Second))
 	}
 	return sleepCtx(ctx, wait)
 }

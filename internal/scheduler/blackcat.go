@@ -4,10 +4,10 @@ package scheduler
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
@@ -16,7 +16,7 @@ import (
 // 由 blackcat_hours 排程（默认 [23]）触发；执行前二次校验 InNightWindow。
 func (s *Scheduler) RunBlackcatNow() {
 	if !upstream.InNightWindow(time.Now()) {
-		log.Printf("blackcat: 当前不在 23:00–08:00 计数窗口，跳过")
+		logx.Infof("blackcat: 当前不在 23:00–08:00 计数窗口，跳过")
 		return
 	}
 	for _, st := range s.cfg.Pool.List() {
@@ -42,7 +42,7 @@ func (s *Scheduler) blackcatOne(st pool.Status) {
 	}
 	need, err := s.cfg.Upstream.BlackcatNeed(a)
 	if err != nil {
-		log.Printf("blackcat %s: %v", logfmt.Label(a.UID, a.Nickname), err)
+		logx.Warnf("blackcat %s: %v", logfmt.Label(a.UID, a.Nickname), err)
 		return
 	}
 	if need <= 0 {
@@ -50,17 +50,17 @@ func (s *Scheduler) blackcatOne(st pool.Status) {
 	}
 	ok, err := s.cfg.Upstream.RunNightChats(a, int(need))
 	if err != nil {
-		log.Printf("blackcat %s: %d/%d 完成，中断: %v", logfmt.Label(a.UID, a.Nickname), ok, need, err)
+		logx.Warnf("blackcat %s: %d/%d 完成，中断: %v", logfmt.Label(a.UID, a.Nickname), ok, need, err)
 		return
 	}
-	log.Printf("blackcat %s: 完成 %d 次夜间对话", logfmt.Label(a.UID, a.Nickname), ok)
+	logx.Infof("blackcat %s: 完成 %d 次夜间对话", logfmt.Label(a.UID, a.Nickname), ok)
 }
 
 // runBlackcatScheduled 定时夜猫子（M5 抖动版）：每号在自己的偏移点执行；
 // 夜猫子窗口 23:00–08:00 很宽，抖动不挤压窗口。执行前校验窗口（手动路径同口径）。
 func (s *Scheduler) runBlackcatScheduled(ctx context.Context) {
 	if !upstream.InNightWindow(time.Now()) {
-		log.Printf("blackcat: 当前不在 23:00–08:00 计数窗口，跳过")
+		logx.Infof("blackcat: 当前不在 23:00–08:00 计数窗口，跳过")
 		return
 	}
 	start := time.Now()

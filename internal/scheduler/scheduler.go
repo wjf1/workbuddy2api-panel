@@ -5,7 +5,6 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"log"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -14,6 +13,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
@@ -389,7 +389,7 @@ func awaitWakeupGrace(ctx context.Context, planned time.Time) bool {
 	if late := time.Since(planned); late <= wakeupLateThreshold {
 		return ctx.Err() == nil // 准点触发：零延迟放行
 	}
-	log.Printf("wakeup grace %s: late catch-up for slot %s", wakeupGraceDelay, planned.Format("15:04"))
+	logx.Infof("wakeup grace %s: late catch-up for slot %s", wakeupGraceDelay, planned.Format("15:04"))
 	return sleepCtx(ctx, wakeupGraceDelay)
 }
 
@@ -563,21 +563,21 @@ func (s *Scheduler) checkinOne(st pool.Status, expiringSoon time.Duration) {
 		// "今天已签到"是幂等成功（上游对重复签到返回 code!=0），不再当失败打 error 行。
 		if upstream.IsAlreadyCheckin(err) {
 			s.cfg.Pool.NoteCheckinDone(st.UID)
-			log.Printf("checkin %s: 今天已签到（幂等）", logfmt.Label(st.UID, st.Nickname))
+			logx.Infof("checkin %s: 今天已签到（幂等）", logfmt.Label(st.UID, st.Nickname))
 		} else {
-			log.Printf("checkin %s: %v", logfmt.Label(st.UID, st.Nickname), err)
+			logx.Warnf("checkin %s: %v", logfmt.Label(st.UID, st.Nickname), err)
 		}
 		// 其余业务错误也继续走余额查询
 	} else {
 		// 首次签到成功此前静默——排查「签到到底跑没跑」时无迹可循（幂等行只在
 		// 重复触发时出现），成功也落一行。
 		s.cfg.Pool.NoteCheckinDone(st.UID)
-		log.Printf("checkin %s: 签到成功", logfmt.Label(st.UID, st.Nickname))
+		logx.Infof("checkin %s: 签到成功", logfmt.Label(st.UID, st.Nickname))
 	}
 	// 分桶查余额：配置窗口内的积分单独标记，同时记录最早未来到期批次。
 	remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
 	if err != nil {
-		log.Printf("user-resource %s: %v", logfmt.Label(st.UID, st.Nickname), err)
+		logx.Warnf("user-resource %s: %v", logfmt.Label(st.UID, st.Nickname), err)
 		return
 	}
 	s.cfg.Pool.ReenableIfCredits(st.UID, remain, total)
@@ -642,7 +642,7 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 		// （issue #51）；ReportChatActivity 把它写进 conversationId / parentConversationId。
 		cid := session.NewConversationID()
 		if err := s.cfg.Upstream.ReportChatActivity(a, cid, ""); err != nil {
-			log.Printf("activity %s: %v", logfmt.Label(a.UID, a.Nickname), err)
+			logx.Warnf("activity %s: %v", logfmt.Label(a.UID, a.Nickname), err)
 			continue
 		}
 		s.checkActivityStreak(a) // 上报成功 → 回读 streak 自检
@@ -659,14 +659,14 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 func (s *Scheduler) checkActivityStreak(a *auth.Auth) bool {
 	days, err := s.cfg.Upstream.GrowthStreak(a)
 	if err != nil {
-		log.Printf("activity %s: streak check failed (report OK): %v", logfmt.Label(a.UID, a.Nickname), err)
+		logx.Warnf("activity %s: streak check failed (report OK): %v", logfmt.Label(a.UID, a.Nickname), err)
 		return true
 	}
 	if days == 0 {
-		log.Printf("activity %s: report OK but streak.days=0 (silent drop?)", logfmt.Label(a.UID, a.Nickname))
+		logx.Warnf("activity %s: report OK but streak.days=0 (silent drop?)", logfmt.Label(a.UID, a.Nickname))
 		return true
 	}
-	log.Printf("activity %s: streak days=%d", logfmt.Label(a.UID, a.Nickname), days)
+	logx.Infof("activity %s: streak days=%d", logfmt.Label(a.UID, a.Nickname), days)
 	return false
 }
 
@@ -699,13 +699,13 @@ func (s *Scheduler) RunKeepaliveNow() {
 // session dead 不进退避：死号重试无意义，走连续计数。
 func (s *Scheduler) keepaliveOne(st pool.Status, a *auth.Auth) {
 	if err := s.cfg.Upstream.RefreshToken(a, "keepalive"); err != nil {
-		log.Printf("keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)
+		logx.Warnf("keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)
 		var ue *upstream.Error
 		if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
 			s.clearKaBackoff(st.UID)
 			if !st.Disabled {
 				if s.cfg.Pool.NoteSessionDead(st.UID) {
-					log.Printf("keepalive %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(st.UID, st.Nickname), pool.SessionDeadThreshold())
+					logx.Errorf("keepalive %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(st.UID, st.Nickname), pool.SessionDeadThreshold())
 				}
 			}
 			return
@@ -716,7 +716,7 @@ func (s *Scheduler) keepaliveOne(st pool.Status, a *auth.Auth) {
 	s.cfg.Pool.ClearSessionDead(st.UID) // 刷新成功清误判计数，失败不该累计
 	s.clearKaBackoff(st.UID)
 	if err := a.SaveAtomicRetry(); err != nil {
-		log.Printf("keepalive %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
+		logx.Warnf("keepalive %s save: %v", logfmt.Label(st.UID, st.Nickname), err)
 	}
 }
 
@@ -745,7 +745,7 @@ func (s *Scheduler) runKeepaliveScheduled(ctx context.Context) {
 		done++
 	}
 	if smart {
-		log.Printf("keepalive: smart 模式 %d 刷新 / %d 跳过（RT 距过期超阈值）", done, skipped)
+		logx.Infof("keepalive: smart 模式 %d 刷新 / %d 跳过（RT 距过期超阈值）", done, skipped)
 	}
 }
 
@@ -789,7 +789,7 @@ func (s *Scheduler) driveKeepaliveBackoff() int {
 			s.clearKaBackoff(uid)
 			continue
 		}
-		log.Printf("keepalive %s: 退避重试（第 %d 次）", logfmt.Label(uid, st.Nickname), s.kaBackTries(uid))
+		logx.Infof("keepalive %s: 退避重试（第 %d 次）", logfmt.Label(uid, st.Nickname), s.kaBackTries(uid))
 		s.keepaliveOne(st, a)
 	}
 	return len(due)
@@ -864,7 +864,7 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 			defer func() { <-sem }()
 			remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
 			if err != nil {
-				log.Printf("balance %s: %v", logfmt.Label(uid, a.Nickname), err)
+				logx.Warnf("balance %s: %v", logfmt.Label(uid, a.Nickname), err)
 				s.noteBalanceAuthFailure(a, uid, err)
 				return
 			}
@@ -876,10 +876,10 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 			if s.cfg.Pool.TierNeedsFetch(uid) {
 				if mt, terr := s.cfg.Upstream.UserResourceSummary(a); terr == nil {
 					s.cfg.Pool.SetTier(uid, mt.Paid, mt.Pkg)
-					log.Printf("member-tier %s: %s（%s）", logfmt.Label(uid, a.Nickname),
+					logx.Infof("member-tier %s: %s（%s）", logfmt.Label(uid, a.Nickname),
 						map[bool]string{true: "paid", false: "free"}[mt.Paid], mt.Pkg)
 				} else {
-					log.Printf("member-tier %s: 读取失败，保留旧值: %v", logfmt.Label(uid, a.Nickname), terr)
+					logx.Warnf("member-tier %s: 读取失败，保留旧值: %v", logfmt.Label(uid, a.Nickname), terr)
 				}
 			}
 		}(a, st.UID)
@@ -901,7 +901,7 @@ func (s *Scheduler) StartBalanceRefresh(ctx context.Context, interval time.Durat
 		for {
 			cur := time.Duration(s.balanceInterval.Load())
 			if cur != logged {
-				log.Printf("scheduler: 余额后台刷新每 %s（暂停中显示 0s）", cur)
+				logx.Infof("scheduler: 余额后台刷新每 %s（暂停中显示 0s）", cur)
 				logged = cur
 			}
 			if cur <= 0 {

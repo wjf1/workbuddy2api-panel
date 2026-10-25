@@ -12,13 +12,13 @@ package scheduler
 
 import (
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
@@ -36,7 +36,7 @@ func (s *Scheduler) noteBalanceAuthFailure(a *auth.Auth, uid string, probeErr er
 	// 退避只记「refresh 成功」：真死号每轮 refresh 都回 12153 且不轮换 RT，必须每轮都
 	// 试，连续计数才能按预期在阈值内判死；把失败也记进退避会让死号永远停在 1/阈。
 	if !s.allowAuthHeal(uid) {
-		log.Printf("balance %s: 401（%s 内已求证过登录态，本轮跳过 refresh）", label, authHealBackoff)
+		logx.Infof("balance %s: 401（%s 内已求证过登录态，本轮跳过 refresh）", label, authHealBackoff)
 		return
 	}
 	rerr := s.cfg.Upstream.RefreshToken(a, "balance")
@@ -45,11 +45,11 @@ func (s *Scheduler) noteBalanceAuthFailure(a *auth.Auth, uid string, probeErr er
 		// 统一走 SaveAtomicRetry——本路径同样是「上游已轮换 RT，本地必须落盘」，
 		// 落盘抖动一次就会丢新 RT，账号下次仍需重登，与补丁二防的是同一类事故。
 		if serr := a.SaveAtomicRetry(); serr != nil {
-			log.Printf("balance %s: 401 后刷新成功但落盘失败: %v", label, serr)
+			logx.Warnf("balance %s: 401 后刷新成功但落盘失败: %v", label, serr)
 		}
 		s.noteAuthHeal(uid)
 		s.cfg.Pool.ClearSessionDead(uid)
-		log.Printf("balance %s: 401 经 refresh 求证为降级 token（会话仍活），已换新 token 并清 session dead 计数", label)
+		logx.Infof("balance %s: 401 经 refresh 求证为降级 token（会话仍活），已换新 token 并清 session dead 计数", label)
 		return
 	}
 	var re *upstream.Error
@@ -57,15 +57,15 @@ func (s *Scheduler) noteBalanceAuthFailure(a *auth.Auth, uid string, probeErr er
 	// 不总是英文原文（本地化后不含 marker 就会落成 ErrClient，死号便永远不计罚）。
 	if errors.As(rerr, &re) && (re.Kind == upstream.ErrSessionDead || strings.Contains(re.Msg, "12153")) {
 		if s.cfg.Pool.NoteSessionDead(uid) {
-			log.Printf("balance %s: 连续 %d 次 401 且 refresh 判死 — 禁用（需重新登录）", label, pool.SessionDeadThreshold())
+			logx.Errorf("balance %s: 连续 %d 次 401 且 refresh 判死 — 禁用（需重新登录）", label, pool.SessionDeadThreshold())
 			return
 		}
 		if st, ok := s.cfg.Pool.Status(uid); ok {
-			log.Printf("balance %s: 401 且 refresh 判死（session dead 计数 %d/%d）", label, st.SessionDeadFails, pool.SessionDeadThreshold())
+			logx.Warnf("balance %s: 401 且 refresh 判死（session dead 计数 %d/%d）", label, st.SessionDeadFails, pool.SessionDeadThreshold())
 		}
 		return
 	}
-	log.Printf("balance %s: 401 但 refresh 失败（非 session dead，不计罚）: %v", label, rerr)
+	logx.Warnf("balance %s: 401 但 refresh 失败（非 session dead，不计罚）: %v", label, rerr)
 }
 
 // authHealBackoff 同一账号 401→refresh 求证的最小间隔。降级 token 每轮探测都会 401，
