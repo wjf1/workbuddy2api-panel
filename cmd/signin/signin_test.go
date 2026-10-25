@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
 // TestIsAlready 已签判定：只有这几种上游回执算幂等成功，其余一律进 fail 列。
 func TestIsAlready(t *testing.T) {
@@ -76,4 +79,29 @@ func repeat(s string, n int) string {
 		out = append(out, s...)
 	}
 	return string(out)
+}
+
+// TestTruncKeepsValidUTF8 中文昵称被截断后必须仍是合法 UTF-8。
+//
+// 回归场景：s[:n] 按字节硬切，"张三李四" 取 11 字节会剩下半个「四」，
+// 打印出非法字节序列（终端显示 �）。
+func TestTruncKeepsValidUTF8(t *testing.T) {
+	const nick = "张三李四" // 12 字节，每字 3 字节
+	if got := trunc(nick, 11); got != "张三李" {
+		t.Fatalf("trunc(%q,11) = %q，want %q（应回退到最近的字符边界）", nick, got, "张三李")
+	}
+	// 边界比首个字符还小：宁可输出空，也不输出半个字符。
+	if got := trunc("张", 1); got != "" {
+		t.Fatalf("trunc(%q,1) = %q，want 空串", "张", got)
+	}
+	// 扫一遍所有切点，任何位置都不许出现非法 UTF-8。
+	for n := 0; n <= len(nick)+2; n++ {
+		out := trunc(nick, n)
+		if !utf8.ValidString(out) {
+			t.Fatalf("trunc(%q,%d) = %q，含非法 UTF-8", nick, n, out)
+		}
+		if len(out) > n {
+			t.Fatalf("trunc(%q,%d) 长度 %d 超过上限", nick, n, len(out))
+		}
+	}
 }

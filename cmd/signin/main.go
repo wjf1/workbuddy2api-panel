@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
@@ -125,11 +126,18 @@ func isAlready(msg string) bool {
 		strings.Contains(s, "code=400")
 }
 
+// trunc 按 rune 边界把字符串截到不超过 n 字节。
+//
+// 昵称多为中文，直接 s[:n] 会把末尾字符切成半个，打印出 \xe5\x9b 这类非法 UTF-8
+// （终端显示成 �）。报表是给人看的，别为了对齐把字切坏。
 func trunc(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	if len(s) <= n {
+		return s
 	}
-	return s
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 func short(s string) string {

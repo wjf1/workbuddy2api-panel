@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"unicode/utf8"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
@@ -125,9 +126,15 @@ func main() {
 		len(rows), okN, alreadyN, notAppN, failN)
 }
 
+// trunc 按 rune 边界把字符串截到不超过 n 字节（与 cmd/signin 的同名函数同口径）。
+//
+// 直接 s[:n] 会把中文昵称切成半个字符，输出非法 UTF-8。
 func trunc(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	if len(s) <= n {
+		return s
 	}
-	return s
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

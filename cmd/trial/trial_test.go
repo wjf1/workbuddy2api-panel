@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestClassifyTrial 结果归一：错误优先于「是否领到」。
@@ -60,5 +61,21 @@ func TestTrialStatusStrings(t *testing.T) {
 			t.Fatalf("状态字面量重复：%q", string(c.st))
 		}
 		seen[string(c.st)] = true
+	}
+}
+
+// TestTruncKeepsValidUTF8 昵称列截断同理：中文不能切成半个字符。
+func TestTruncKeepsValidUTF8(t *testing.T) {
+	const nick = "张三李四" // 12 字节
+	if got := trunc(nick, 11); got != "张三李" {
+		t.Fatalf("trunc(%q,11) = %q，want %q", nick, got, "张三李")
+	}
+	if got := trunc("abcdef", 3); got != "abc" {
+		t.Fatalf("ASCII 行为不变：trunc(%q,3) = %q，want %q", "abcdef", got, "abc")
+	}
+	for n := 0; n <= len(nick)+2; n++ {
+		if out := trunc(nick, n); !utf8.ValidString(out) {
+			t.Fatalf("trunc(%q,%d) = %q，含非法 UTF-8", nick, n, out)
+		}
 	}
 }
