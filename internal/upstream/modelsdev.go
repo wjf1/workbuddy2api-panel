@@ -22,12 +22,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // ModelsDevURL models.dev 官方聚合 JSON 端点（唯一端点，见文件头逆向结论）。
@@ -215,7 +216,7 @@ func (f *modelsDevFetcher) ensureDocAsync(client *http.Client, baseOverride stri
 // 静默 WARN + 返回（与 fetch 失败同语义，降级 1M 兜底）让疏漏显式化。
 func (f *modelsDevFetcher) fetchDoc(client *http.Client, baseOverride string) {
 	if client == nil {
-		log.Printf("WARN: [upstream] models.dev fetch: nil client rejected (no DefaultClient fallback, silent fallback to 1M)")
+		logx.Warnf("[upstream] models.dev fetch: nil client rejected (no DefaultClient fallback, silent fallback to 1M)")
 		return
 	}
 	url := ModelsDevURL
@@ -226,27 +227,27 @@ func (f *modelsDevFetcher) fetchDoc(client *http.Client, baseOverride string) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		log.Printf("WARN: [upstream] models.dev fetch: build request: %v", err)
+		logx.Warnf("[upstream] models.dev fetch: build request: %v", err)
 		return
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("WARN: [upstream] models.dev fetch failed (silent fallback to 1M): %v", err)
+		logx.Warnf("[upstream] models.dev fetch failed (silent fallback to 1M): %v", err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("WARN: [upstream] models.dev fetch status %d (silent fallback to 1M)", resp.StatusCode)
+		logx.Warnf("[upstream] models.dev fetch status %d (silent fallback to 1M)", resp.StatusCode)
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, modelsDevMaxBody))
 	if err != nil {
-		log.Printf("WARN: [upstream] models.dev fetch read: %v", err)
+		logx.Warnf("[upstream] models.dev fetch read: %v", err)
 		return
 	}
 	doc, err := parseModelsDevDoc(raw)
 	if err != nil {
-		log.Printf("WARN: [upstream] models.dev parse failed (silent fallback to 1M): %v", err)
+		logx.Warnf("[upstream] models.dev parse failed (silent fallback to 1M): %v", err)
 		return
 	}
 	f.mu.Lock()

@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // refreshIOTimeout 刷新端点网络 I/O 上限（两段式锁外执行，防上游 hang 长占锁）。
@@ -137,7 +137,7 @@ func (c *Client) refresh(a *auth.Auth, within time.Duration, force bool, source 
 		// 计数；若强制调用也吃宽限，上游不换 RT 时会把后续真失败掩盖成成功。
 		if r, ok := c.renewed[key]; ok && time.Since(r.at) < refreshGrace {
 			c.refreshMu.Unlock()
-			log.Printf("refresh %s: reuse result within %s", logfmt.Label(a.UID, a.Nickname), refreshGrace)
+			logx.Infof("refresh %s: reuse result within %s", logfmt.Label(a.UID, a.Nickname), refreshGrace)
 			return c.applyRefresh(a, r, atBefore, rtSnapshot)
 		}
 	}

@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // GlobalModelNames 国际版（global realm）历史静态名单（PLAN §7.2 附录 21 名）。
@@ -243,12 +243,12 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 	}
 	if v3.err != nil {
 		// /v3 失败降级：不拖累企业端点结果（降级仅企业端点 + warn）。
-		log.Printf("WARN: [upstream] global models: v3/config probe failed (degraded to enterprise endpoint): %v", v3.err)
+		logx.Warnf("[upstream] global models: v3/config probe failed (degraded to enterprise endpoint): %v", v3.err)
 		names, infos, efforts, defaults = extractEfforts(enterprise.infos)
 		return names, infos, efforts, defaults, nil
 	}
 	if enterprise.err != nil {
-		log.Printf("WARN: [upstream] global models: enterprise endpoint failed (v3/config only): %v", enterprise.err)
+		logx.Warnf("[upstream] global models: enterprise endpoint failed (v3/config only): %v", enterprise.err)
 		names, infos, efforts, defaults = extractEfforts(v3.infos)
 		return names, infos, efforts, defaults, nil
 	}
@@ -291,7 +291,7 @@ func mergeV3Routes(routes []struct {
 	nOK := 0
 	for _, r := range routes {
 		if r.res.err != nil {
-			log.Printf("WARN: [upstream] global models: v3/config %s probe failed: %v", r.label, r.res.err)
+			logx.Warnf("[upstream] global models: v3/config %s probe failed: %v", r.label, r.res.err)
 			if firstErr == nil {
 				firstErr = r.res.err
 			}

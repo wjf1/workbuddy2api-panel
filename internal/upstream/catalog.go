@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // ModelInfo 动态模型信息（含 maxInputTokens/maxOutputTokens + 上游模型对象全字段）。
@@ -194,10 +194,10 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 	}
 	if v3.err != nil {
 		// /v3 失败降级：不拖累企业端点结果（降级仅企业端点 + warn）。
-		log.Printf("WARN: [upstream] fetch models: v3/config probe failed (degraded to enterprise endpoint): %v", v3.err)
+		logx.Warnf("[upstream] fetch models: v3/config probe failed (degraded to enterprise endpoint): %v", v3.err)
 	}
 	if enterprise.err != nil {
-		log.Printf("WARN: [upstream] fetch models: enterprise endpoint failed (v3/config only): %v", enterprise.err)
+		logx.Warnf("[upstream] fetch models: enterprise endpoint failed (v3/config only): %v", enterprise.err)
 	}
 	out := mergeModelInfos(v3.infos, enterprise.infos)
 	if len(out) == 0 {

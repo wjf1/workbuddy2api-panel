@@ -18,7 +18,8 @@ package upstream
 
 import (
 	"encoding/json"
-	"log"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // StripToolMetaData 剥除出站 body 中 tool-call 块的 metaData 字段。
@@ -37,7 +38,7 @@ func StripToolMetaData(body []byte) []byte {
 	out, err := json.Marshal(obj)
 	if err != nil {
 		// 理论上不可达（obj 来自 json.Unmarshal）；真出错就透传原文，别把请求弄坏。
-		log.Printf("WARN: [upstream] strip tool metaData: marshal failed, passing through: %v", err)
+		logx.Warnf("[upstream] strip tool metaData: marshal failed, passing through: %v", err)
 		return body
 	}
 	return out

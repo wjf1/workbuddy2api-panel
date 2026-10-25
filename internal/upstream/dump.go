@@ -16,13 +16,13 @@ package upstream
 import (
 	"context"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // dumpLimit 单文件封顶：请求体 + 响应体合计预算。
@@ -45,12 +45,12 @@ func (c *Client) dumpUpstream(rc io.ReadCloser, prepared []byte, a *auth.Auth) i
 		return rc
 	}
 	if err := os.MkdirAll(c.DumpDir, 0o700); err != nil {
-		log.Printf("WARN: [upstream] dump dir %s: %v", c.DumpDir, err)
+		logx.Warnf("[upstream] dump dir %s: %v", c.DumpDir, err)
 		return rc
 	}
 	f, err := os.OpenFile(filepath.Join(c.DumpDir, dumpName(a)), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
-		log.Printf("WARN: [upstream] dump open: %v", err)
+		logx.Warnf("[upstream] dump open: %v", err)
 		return rc
 	}
 	// DumpRequestMax<=0 = 用默认上限（0 是「未配置」而非「不写请求体」——
@@ -100,7 +100,7 @@ func (c *Client) CleanDumpDir() {
 		}
 	}
 	if removed > 0 {
-		log.Printf("[upstream] dump 保留清理：删除 %d 个超过 %d 天的文件（%s）", removed, dumpRetentionDays, c.DumpDir)
+		logx.Infof("[upstream] dump 保留清理：删除 %d 个超过 %d 天的文件（%s）", removed, dumpRetentionDays, c.DumpDir)
 	}
 }
 
