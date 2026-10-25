@@ -40,7 +40,7 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `15c0dd5` | `git log --oneline -1` |
+| HEAD | `4b50049` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
 | 非测试代码 | 107 文件 / 33,247 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
 | 测试代码 | 102 文件 / 864 个 Test 函数 | 同上 |
@@ -50,7 +50,7 @@ go build -o wb2api.exe ./cmd/server
 | 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 989 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 888 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
 | 最慢包 | `internal/scheduler` 约 7.3s（其余均 < 2s） | 见测试输出 |
 
-### 目录职责（18 个 internal 包）
+### 目录职责（19 个 internal 包）
 
 ```
 cmd/server      入口：配置加载 / 装配 / HTTP Server（main.go 711 行，含 config.go 855 行）
@@ -68,7 +68,8 @@ internal/
   usage         用量记账    reqlog 请求归档    rotaudit 轮换审计
   auth          账号凭证    authlease 目录租约   httpauth API Key 校验（恒定时间比较）
   livecfg       配置热加载（atomic 快照）        redisstore Redis 镜像（可 Noop）
-  safefile      fsync+rename 原子落盘            logfmt 日志标签化
+  safefile      fsync+rename 原子落盘            logfmt 日志标签化（纯字符串 helper）
+  logx          分级日志门面：保形 slog Handler（WARN:/ERR: 前缀，不写 level=）
   alert         告警 webhook                     prompt 提示词改写    websearch 搜索
 ```
 
@@ -99,6 +100,8 @@ internal/
 | `62f67f5` | 状态快照加单调 `revision`（本步只写+打日志，**不改恢复判定**）：5 个测试覆盖递增/快照一致/续号/旧文件/采纳快照 | `go test ./internal/pool -run 'TestRevision\|TestAdoptSnapshotKeepsRevision' -v` |
 | `dc1534a` | 择新恢复改以 `revision` 为主判据：两侧可比且不等取大者 / 相等取本地 / 一侧为 0 回落 mtime（旧文件行为不变）；4 个子用例故意让 mtime 指向相反结论 | `go test ./internal/pool -run TestRestoreByRevision -v`（4 子用例）；回退判定后前 3 个子用例即红 |
 | `15c0dd5` | `upstream/dump.go` 保留期清理补测试（原 0%）：只删过期且有 15 字符时间戳前缀的文件、窗口内与用户手放样本保留、未配置时静默返回、启动即清一次 | `go test ./internal/upstream -run 'TestCleanDumpDir\|TestStartDumpCleaner' -v`（4 用例）；CleanDumpDir 0%→100% |
+| `2a8771f` | 面板频道分类忽略 `WARN: `/`ERR: ` 前缀（否则任务失败行会掉进 sys 频道） | `go test ./internal/panel -run 'TestClassifyLine\|TestRingKeepsLevelPrefix' -v`；反证：去掉剥离即红 |
+| `4b50049` | 新增 `internal/logx`（保形 slog Handler）+ `internal/usage` 6 处迁移为样板 | `go test ./internal/logx -v`（8 用例，含「Info 与 log.Printf 逐字一致」「不出现 level=」） |
 
 ---
 
@@ -117,7 +120,25 @@ internal/
 
 ### P2 — 结构性债务
 
-- **4.2 日志结构化（迁 `log/slog`）**：全仓 249 处 `log.Printf`（非测试），级别靠字符串前缀。**注意**：面板的 ring 与 `logfmt` 是按前缀/频道解析的，迁移必须保留输出形状（或同步改解析侧），否则面板会静默丢日志。建议一个包一个包迁，每迁一个包跑一次面板回归。
+- **4.2 日志结构化（迁 `log/slog`）— 门面与试点已落地（`4b50049` / `2a8771f`）**
+
+  现状：`internal/logx` 提供**保形** Handler——时间戳仍由 log 包 flags 打、级别写成
+  `WARN: `/`ERR: ` 前缀（不写 `level=`）、结构化属性以 ` k=v` 追加行尾。`internal/usage`
+  6 处已迁完作样板，其余包仍是裸 `log.Printf`（约 250 处）。
+
+  **迁一个包的配方**（三分钟）：
+  1. `log.Printf(...)` → `logx.Infof(...)`（逐字等价，无文本变化）
+  2. 失败/降级行按语义改 `logx.Warnf` / `logx.Errorf`（行首会多出 `WARN: `/`ERR: `）
+  3. 删掉 `"log"` import，加 `internal/logx`；`go build ./... && go test ./<pkg>`
+  4. 任务类日志（`checkin `/`travel `/`panel: 任务` 等前缀）**加级别前缀是安全的**：
+     `panel/ring.go` 分类前会剥掉前缀（`2a8771f`），仍落 task 频道
+  5. 该包迁完跑一次面板日志视图回归（三频道筛选是否正常）
+
+  **剩余量**（`log.Printf` 非测试）：scheduler 59 / panel 59 / cmd/server 32 /
+  upstream 26 / pool 19 / server 18 / rotaudit 8 / redisstore 8 / usage 0（已迁）/
+  authlease 6 / alert 6 / auth 5 / safefile 2 / session 1。建议顺序：小包先行
+  （safefile → session → auth → authlease → alert），每包一提交，最后碰 panel/scheduler
+  这两个日志量最大、且与任务频道耦合最紧的包。
 - **4.3 弹窗完整迁移原生 `<dialog>`**：`inert` 与 `role/aria-modal` 已补（`94799e5`），剩下 top-layer（`showModal()` 天然置顶，不受 z-index 影响）与 `::backdrop`。属于结构性重写 8 个弹窗，需要人眼验收，建议单独一轮做。
 - **4.4 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。拆的时候注意仓库内外已有大量 `#锚点` 引用，改标题会断链；建议先加索引页再加专题页，最后才收缩主文档。
 - **4.5 前端行为测试**：`app.js`(3449 行) 只有 `node --check` + CSP 断言，且**无 node 时静默跳过**。要写行为测试得先把可测函数（`esc` / `dur` / 时间格式化 / 模型名解析）抽成可导出模块，是一次结构性改动，不建议在功能迭代中途做。
@@ -160,6 +181,11 @@ internal/
    这些文件内容与索引一致，`git add` 只刷新 stat 缓存、不会产生提交内容（用 `git diff --cached --name-only` 确认为空）。之后 `gofmt -l` 才会与 CI 结论一致。
 9. **`strip_tool_metadata` 的技术债**：配置项落在 `features` 段（与 `sanitize_blacklist_fingerprints` 同段，复用其热加载路径），实现放在独立文件 `internal/upstream/strip_metadata.go`，调用点挂在 `client.go` 的 `prepareBody`，**没有并进 `payload.go` 的归一化链**。原因是当时 `payload.go` 有他人未提交改动，并进去会把两个工作搅在同一个 diff 里。代价：开关开启时多一次 parse+marshal（默认关闭时零成本）。后续若要优化，可把它合并进 `PrepareBodyOptWithEffortsAndDefault` 的同一次解析。
 10. **限流键刻意不用 `X-Forwarded-For`**：`internal/server/ratelimit.go` 的 `rateKey()` 取的是 `RemoteAddr` 的主机部分。XFF / X-Real-IP 客户端可任意伪造，按它限流等于"每请求换一个伪造 IP 拿无限额度"，限流形同虚设。代价是反代后面所有请求对端都是代理地址，桶退化为全局限流——**这是有意的安全方向退化，别"顺手优化"成读 XFF**。同理也别改成按 `api_key` 限流：本网关只有一个 key，按 key 限等价于全局限流。
+
+12. **别裸用 `slog.TextHandler`**：它输出 `time=… level=… msg=…`，而 `panel/ring.go` 的
+   `tsPrefixRe` 只认 log 包默认的 `2026/10/25 23:00:13 `，且 task 频道靠行首前缀匹配。
+   直接换 TextHandler 的结果是面板日志视图**静默**丢掉时间戳与任务筛选（不报错、只是难用）。
+   迁移一律走 `internal/logx`（`4b50049`），它把这两点都钉死了。
 
 11. **诊断端点必须独立端口**：`server.debug_addr` 刻意不开在主 mux 上。Go 的 `net/http/pprof` 无鉴权，`profile` 能导出 CPU/heap，heap 里含请求体与账号 token；主端口通常绑 `0.0.0.0`。回归测试 `TestMainMuxHasNoDebugEndpoints` 钉住这一点——**别为了"顺手"把它加回主路由**。`/metrics` 也只放低基数指标（状态枚举 + goroutine 数），加 per-model 标签会先崩 Prometheus。
 
@@ -225,3 +251,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | 状态三源一致性第 1 步：快照加单调 `revision`（只写不改判定），恢复日志带四项观测值；5 个测试钉住递增/续号/快照一致/旧文件/采纳快照 | `62f67f5` |
 | 2026-10-25 | 状态三源一致性第 2 步：`RestoreFromSnapshot` 改以 `revision` 为主判据（取大者 / 相等取本地 / 一侧为 0 回落 mtime），**P1 清空** | `dc1534a` |
 | 2026-10-25 | 补 `upstream/dump.go` 保留期清理测试（原 0%）；顺带纠正 P3 里过时的覆盖率数字 | `15c0dd5` |
+| 2026-10-25 | P2-4.2 第 1 步：`internal/logx` 保形分级日志门面 + `usage` 包试点迁移；顺带修「任务失败行掉频道」的隐藏回归 | `4b50049` |
