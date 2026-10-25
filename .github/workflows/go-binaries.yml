@@ -51,6 +51,21 @@ jobs:
       # ubuntu runner 自带 node → panel 包的 JS 运行时冒烟测试（TestAppJSTopLevelSmoke）会真实执行
       - run: go test ./...
 
+  # 竞态检测：仅 Linux runner（自带 gcc，CGO 可用；本机 Windows 无 gcc 跑不了 -race）。
+  # 首轮刻意 continue-on-error: 这个项目 mutex + goroutine 密集（pool 状态机、
+  # 心跳、redis 异步写），从未跑过 -race，很可能一次暴露多个既有问题。先让它在 CI
+  # 里跑起来产生信号，观察几轮确认稳定后再把 continue-on-error 去掉转成阻断。
+  race:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # 只跑并发密集的三个包：全量 -race 太慢，且纯函数包没有收益。
+      - run: go test -race -count=1 ./internal/pool ./internal/server ./internal/scheduler
+
   build:
     needs: test
     runs-on: ubuntu-latest
