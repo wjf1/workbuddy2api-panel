@@ -4,8 +4,8 @@ package pool
 
 import (
 	"log"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -522,6 +522,7 @@ func (p *Pool) List() []Status {
 	}
 	return out
 }
+
 // RecordDailyUsage 累计每日限额计数（护栏记账，v1.17.0 ⑤）：CST 日键翻转即清零
 // （跨日自然解封，无需定时任务）。creditMilli = 积分消耗 ×1000。
 func (p *Pool) RecordDailyUsage(uid, model string, tokens, creditMilli int64) {
@@ -558,6 +559,7 @@ func (p *Pool) RecordDailyUsage(uid, model string, tokens, creditMilli int64) {
 //   - 每日积分限额：当日积分消耗达限 → 只放行免费模型（复用 floorBlocked 的
 //     收费判据：本地实测台账优先、目录倍率兜底；免费/未知放行——与保底同哲学）；
 //   - 按模型每日 Token 限额：该号该模型当日 token 达限 → 只拦该模型。
+//
 // 限额 0 = 关闭（默认）。跨日由 RecordDailyUsage 的日期键翻转清零；
 // 读取侧对「日期键非今天」的 entry 一律视为零值（定时任务不跑也有解封保证）。
 // 调用方必须已持有 p.mu。

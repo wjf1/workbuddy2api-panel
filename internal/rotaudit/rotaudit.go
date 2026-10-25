@@ -34,23 +34,23 @@ const retentionDays = 7
 
 // Rec 审计记录（JSONL 每行一条）。
 type Rec struct {
-	Ts      string `json:"ts"`                  // RFC3339
-	UID     string `json:"uid"`                 // 账号 uid（脱敏场景由调用方决定，本包不处理）
-	OldRT8  string `json:"old_rt8"`             // 旧 RT 指纹（sha256 前 8 hex）
-	NewRT8  string `json:"new_rt8,omitempty"`   // 新 RT 指纹（失败时为空）
-	Source  string `json:"source"`              // keepalive / chat / balance / signin / probe
-	Host    string `json:"host"`                // 自证来源（排查多机部署）
-	PID     int    `json:"pid"`                 // 自证进程
-	Err     string `json:"err,omitempty"`       // 刷新失败原因（成功为空）
-	ErrKind string `json:"err_kind,omitempty"`  // "session_dead"（12153/裸 401）等归类，非死错误为空
+	Ts      string `json:"ts"`                 // RFC3339
+	UID     string `json:"uid"`                // 账号 uid（脱敏场景由调用方决定，本包不处理）
+	OldRT8  string `json:"old_rt8"`            // 旧 RT 指纹（sha256 前 8 hex）
+	NewRT8  string `json:"new_rt8,omitempty"`  // 新 RT 指纹（失败时为空）
+	Source  string `json:"source"`             // keepalive / chat / balance / signin / probe
+	Host    string `json:"host"`               // 自证来源（排查多机部署）
+	PID     int    `json:"pid"`                // 自证进程
+	Err     string `json:"err,omitempty"`      // 刷新失败原因（成功为空）
+	ErrKind string `json:"err_kind,omitempty"` // "session_dead"（12153/裸 401）等归类，非死错误为空
 }
 
 // Recorder 审计器。并发安全。
 type Recorder struct {
-	mu     sync.Mutex
-	dir    string // 审计目录（data/refresh-audit）
-	cur    map[string]string // uid → 基准 RT 指纹
-	host   string
+	mu         sync.Mutex
+	dir        string            // 审计目录（data/refresh-audit）
+	cur        map[string]string // uid → 基准 RT 指纹
+	host       string
 	onExternal func(uid, old8, cur8, source string) // 外部轮换回调（main 注入；nil = 只记日志）
 	// nowF 仅供测试注入时钟；nil 用 time.Now。
 	nowF func() time.Time

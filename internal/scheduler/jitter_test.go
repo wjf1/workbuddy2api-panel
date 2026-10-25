@@ -116,7 +116,7 @@ func TestRunKeepaliveScheduledSmart(t *testing.T) {
 
 	p := pool.New("")
 	now := time.Now()
-	p.Add(&auth.Auth{UID: "fresh", AccessToken: "at", RefreshToken: "rt", ExpiresAt: now.Add(59 * 24 * time.Hour).Unix()})  // 59 天后过期：跳过
+	p.Add(&auth.Auth{UID: "fresh", AccessToken: "at", RefreshToken: "rt", ExpiresAt: now.Add(59 * 24 * time.Hour).Unix()}) // 59 天后过期：跳过
 	p.Add(&auth.Auth{UID: "stale", AccessToken: "at", RefreshToken: "rt", ExpiresAt: now.Add(10 * 24 * time.Hour).Unix()}) // 10 天：刷新
 	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
 	s := New(Config{Pool: p, Upstream: up})

@@ -317,23 +317,23 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	}
 	accounts := p.cfg.Pool.List()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":         p.cfg.Version,
-		"uptime_sec":      int(time.Since(p.started).Seconds()),
-		"auth_required":   p.apiKey() != "",
-		"redis_mode":      p.cfg.RedisMode,
-		"sticky_sessions": sticky,
-		"total":           total,
-		"healthy":         healthy,
-		"cooling":         cooling,
-		"disabled":        disabled,
-		"in_flight_full":  inFlightFull,
-		"accounts":        accounts,
-		"tags":            p.tagsByUID(accounts),
-		"credit_floor":    p.creditFloor(),
-		"low_credit":      p.lowCreditAccounts(accounts),
-		"upstream_queue":  p.upstreamQueuePayload(),
-		"mass_kill":           p.massKillPayload(),
-		"external_rotations":  p.externalRotationsPayload(),
+		"version":            p.cfg.Version,
+		"uptime_sec":         int(time.Since(p.started).Seconds()),
+		"auth_required":      p.apiKey() != "",
+		"redis_mode":         p.cfg.RedisMode,
+		"sticky_sessions":    sticky,
+		"total":              total,
+		"healthy":            healthy,
+		"cooling":            cooling,
+		"disabled":           disabled,
+		"in_flight_full":     inFlightFull,
+		"accounts":           accounts,
+		"tags":               p.tagsByUID(accounts),
+		"credit_floor":       p.creditFloor(),
+		"low_credit":         p.lowCreditAccounts(accounts),
+		"upstream_queue":     p.upstreamQueuePayload(),
+		"mass_kill":          p.massKillPayload(),
+		"external_rotations": p.externalRotationsPayload(),
 	})
 }
 
@@ -906,11 +906,11 @@ func (p *Panel) syncNicknames() {
 		return
 	}
 	var (
-		mu       sync.Mutex
-		updated  int
-		failed   int
-		sem      = make(chan struct{}, 3)
-		wg       sync.WaitGroup
+		mu      sync.Mutex
+		updated int
+		failed  int
+		sem     = make(chan struct{}, 3)
+		wg      sync.WaitGroup
 	)
 	for _, j := range jobs {
 		wg.Add(1)

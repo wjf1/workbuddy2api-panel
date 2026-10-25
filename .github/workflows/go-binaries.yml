@@ -35,9 +35,19 @@ jobs:
         with:
           go-version-file: go.mod
       # 静态检查先行：vet 能在编译期抓出 printf 参数错配、结构体标签错误、无用赋值等，
-      # 成本几乎为零。gofmt 门禁暂不启用——存量 149/185 个文件不符合 gofmt，需单独
-      # 一次"仅格式化"提交后再开，否则每个 PR 都会红。
+      # 成本几乎为零。
       - run: go vet ./...
+      # gofmt 门禁：存量格式问题已一次性清理（25 个文件，纯空白/import 排序改动），
+      # 配合 .gitattributes 的 *.go eol=lf，本地与 CI 判定一致（此前本地 CRLF 会把
+      # 149 个文件误报成"不合规"，而 CI 用 LF 检出几乎全绿——两种结论互不采信）。
+      - name: gofmt 检查
+        run: |
+          bad=$(gofmt -l ./cmd ./internal)
+          if [ -n "$bad" ]; then
+            echo "::error::以下文件未按 gofmt 格式化，请本地执行 gofmt -w："
+            echo "$bad"
+            exit 1
+          fi
       # ubuntu runner 自带 node → panel 包的 JS 运行时冒烟测试（TestAppJSTopLevelSmoke）会真实执行
       - run: go test ./...
 

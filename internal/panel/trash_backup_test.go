@@ -312,8 +312,8 @@ func TestOverviewLowCreditAndTags(t *testing.T) {
 		t.Fatalf("overview status = %d", w.Code)
 	}
 	var d struct {
-		CreditFloor int64             `json:"credit_floor"`
-		LowCredit   []map[string]any  `json:"low_credit"`
+		CreditFloor int64               `json:"credit_floor"`
+		LowCredit   []map[string]any    `json:"low_credit"`
 		Tags        map[string][]string `json:"tags"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {

@@ -156,8 +156,8 @@ func (c *Client) chatHTTP() *http.Client {
 // pkg = 套餐名（付费包名，免费侧可能为空）。调用方节流一天一次——摘要端点
 // 与余额同族，高频轮询是上游可观测特征。
 type MemberTier struct {
-	Paid  bool
-	Pkg   string
+	Paid bool
+	Pkg  string
 }
 
 // UserResourceSummary 拉计费摘要（get-user-resource-summary）：IsPaidUser /

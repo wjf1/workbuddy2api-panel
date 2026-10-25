@@ -1,0 +1,26 @@
+# 统一行尾：Go/Markdown/脚本一律 LF 入库与检出。
+#
+# 为什么需要：此前 Windows 侧 core.autocrlf=true 把 .go 检出成 CRLF，而 gofmt 只认 LF
+# ——于是 `gofmt -l` 在本地报 149 个"不合规"，实际只有 25 个是真问题；CI（Linux，LF）
+# 又几乎全绿。同一份代码两种结论，开 gofmt 门禁时会变成"本地红、CI 假过"。
+# 显式声明后，检出即为 LF，本地与 CI 判定一致。
+* text=auto
+
+*.go      text eol=lf
+*.md      text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.sh      text eol=lf
+*.js      text eol=lf
+*.html    text eol=lf
+
+# Windows 专用脚本保持 CRLF（cmd.exe 对 LF 的批处理兼容性差）
+*.cmd     text eol=crlf
+*.bat     text eol=crlf
+
+# 二进制：不做行尾与 diff 处理
+*.exe     binary
+*.png     binary
+*.jpg     binary
+*.zip     binary

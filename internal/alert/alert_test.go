@@ -101,7 +101,7 @@ func TestWebhookFiredWithCooldown(t *testing.T) {
 	}
 	mu.Unlock()
 	m.NoteDisabled("u3", "丙", "12153 session dead") // 第 3 号到达即达标，内部同步外发
-	m.maybeNotify()                                  // 冷却内重复评估被抑制
+	m.maybeNotify()                                 // 冷却内重复评估被抑制
 	mu.Lock()
 	if calls != 1 {
 		t.Fatalf("webhook 调用次数=%d want 1", calls)

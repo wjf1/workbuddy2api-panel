@@ -29,9 +29,9 @@ import (
 
 // 心跳与新鲜度参数。
 const (
-	heartbeatEvery  = 30 * time.Second
-	freshThreshold  = 90 * time.Second
-	leaseFileName   = ".lease.json"
+	heartbeatEvery = 30 * time.Second
+	freshThreshold = 90 * time.Second
+	leaseFileName  = ".lease.json"
 )
 
 // leaseFile 租约文件内容。

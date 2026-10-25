@@ -260,7 +260,6 @@ func TestChatModelParamInvalidFailsFastWithoutPenalty(t *testing.T) {
 	}
 }
 
-
 // TestChatUpstreamQueueFailsFastWithoutPenalty 上游 429 + 6021 queue.full（免费档排队）
 // → 上游服务端队列水位，与账号无关：账号零惩罚、零轮转、直接回 429 upstream_queue_busy，
 // 且响应必须带上游排队原文（用户/面板据此确认"不是号的问题"）。

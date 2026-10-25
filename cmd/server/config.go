@@ -313,10 +313,10 @@ type Config struct {
 	// Notify 批量判死告警（M2，internal/alert）。webhook_url 空 = 仅面板横幅不外发；
 	// 阈值/窗口/冷却 <=0 由 alert.SetConfig 归一为默认（3 / 10m / 30m）。热生效。
 	Notify struct {
-		WebhookURL        string `json:"webhook_url"`         // 通用 JSON POST（飞书/Bark/企微等）
-		MassKillAccounts  int    `json:"mass_kill_accounts"`   // 窗口内判死 distinct uid 阈值，默认 3
+		WebhookURL        string `json:"webhook_url"`              // 通用 JSON POST（飞书/Bark/企微等）
+		MassKillAccounts  int    `json:"mass_kill_accounts"`       // 窗口内判死 distinct uid 阈值，默认 3
 		MassKillWindowMin int    `json:"mass_kill_window_minutes"` // 判死窗口分钟数，默认 10
-		CooldownMin       int    `json:"cooldown_minutes"`     // webhook 外发冷却分钟数，默认 30
+		CooldownMin       int    `json:"cooldown_minutes"`         // webhook 外发冷却分钟数，默认 30
 	} `json:"notify"`
 
 	// 解析后

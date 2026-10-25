@@ -52,12 +52,12 @@ type evt struct {
 
 // MassKill overview.mass_kill 载荷：窗口内会话失效类禁用汇总（无事件时整体为 null）。
 type MassKill struct {
-	Count         int       `json:"count"`                    // distinct uid 数
-	WindowMinutes int       `json:"window_minutes"`           // 当前窗口（分钟）
-	UIDs          []string  `json:"uids"`                     // 判死账号 uid（首次出现序）
-	Nicknames     []string  `json:"nicknames,omitempty"`      // 与 UIDs 一一对应
-	FirstAt       time.Time `json:"first_at"`                 // 窗口内最早事件
-	LastAt        time.Time `json:"last_at"`                  // 窗口内最晚事件
+	Count         int       `json:"count"`               // distinct uid 数
+	WindowMinutes int       `json:"window_minutes"`      // 当前窗口（分钟）
+	UIDs          []string  `json:"uids"`                // 判死账号 uid（首次出现序）
+	Nicknames     []string  `json:"nicknames,omitempty"` // 与 UIDs 一一对应
+	FirstAt       time.Time `json:"first_at"`            // 窗口内最早事件
+	LastAt        time.Time `json:"last_at"`             // 窗口内最晚事件
 }
 
 // Manager 批量判死告警器。并发安全；零值不可用，经 NewManager 构造。
@@ -68,11 +68,11 @@ type Manager struct {
 	lastSent time.Time // 最近一次外发尝试（成功失败都算——失败也节流，防重试风暴）
 	// ext 外部 RT 轮换事件（M6 rotaudit 检测 → NoteExternalRotation）：uid → 最近时间。
 	// 与 mass_kill 不同：**任意数量即告警**（哪怕 1 个也意味着凭证双活，无需凑阈值）。
-	ext       map[string]time.Time
+	ext         map[string]time.Time
 	lastExtSent time.Time // 外部轮换 webhook 的独立冷却键
-	host      string    // webhook 载荷自证来源（os.Hostname）
-	version   string    // 面板版本（同载荷）
-	hc        *http.Client
+	host        string    // webhook 载荷自证来源（os.Hostname）
+	version     string    // 面板版本（同载荷）
+	hc          *http.Client
 }
 
 // New 构造告警器。host/version 为 webhook 载荷的自证字段（缺省自动取 hostname）。

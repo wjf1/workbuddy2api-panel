@@ -30,7 +30,7 @@ type creditPoint struct {
 
 // creditHistoryFile 落盘结构：版本化，方便未来改形态。
 type creditHistoryFile struct {
-	Version  int                     `json:"version"`
+	Version  int                      `json:"version"`
 	Accounts map[string][]creditPoint `json:"accounts"`
 }
 
@@ -142,16 +142,16 @@ type CreditTrendPoint struct {
 
 // CreditTrendSeries 单账号趋势。
 type CreditTrendSeries struct {
-	UID      string            `json:"uid"`
-	Nickname string            `json:"nickname,omitempty"`
+	UID      string             `json:"uid"`
+	Nickname string             `json:"nickname,omitempty"`
 	Points   []CreditTrendPoint `json:"points"`
 }
 
 // CreditTrend 面板载荷：total = 全池总和曲线（桶并集，缺失账号不计入该桶）；
 // series = 每账号明细（前端可选渲染）。
 type CreditTrend struct {
-	Days   int                `json:"days"`
-	Total  []CreditTrendPoint `json:"total"`
+	Days   int                 `json:"days"`
+	Total  []CreditTrendPoint  `json:"total"`
 	Series []CreditTrendSeries `json:"series"`
 }
 

@@ -13,11 +13,11 @@ func TestDeadKindClassification(t *testing.T) {
 		reason string
 		want   string
 	}{
-		{"12153 session dead", "session_dead"},                                                       // NoteSessionDead 满阈 / handler 信封 12153
-		{"refresh session dead", "session_dead"},                                                     // handler.go chat 刷新失败单发
-		{"account banned by upstream (11140 request illegal), re-login required", "banned"},          // handler.go 11140
-		{"manual disable (panel)", ""},                                                               // 人工禁用：普通已禁用
-		{"", ""},                                                                                     // 健康账号
+		{"12153 session dead", "session_dead"},                                              // NoteSessionDead 满阈 / handler 信封 12153
+		{"refresh session dead", "session_dead"},                                            // handler.go chat 刷新失败单发
+		{"account banned by upstream (11140 request illegal), re-login required", "banned"}, // handler.go 11140
+		{"manual disable (panel)", ""},                                                      // 人工禁用：普通已禁用
+		{"", ""},                                                                            // 健康账号
 	}
 	for _, tc := range cases {
 		if got := deadKindOf(tc.reason); got != tc.want {
