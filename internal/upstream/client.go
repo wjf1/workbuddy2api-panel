@@ -287,7 +287,8 @@ func (c *Client) doJSON(req *http.Request) (json.RawMessage, error) {
 	}
 	if resp.StatusCode >= 400 {
 		kind := Classify(resp.StatusCode, string(raw))
-		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
+		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200),
+			RequestID: ParseUpstreamRequestID(string(raw))}
 	}
 	var env apiEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
@@ -298,7 +299,8 @@ func (c *Client) doJSON(req *http.Request) (json.RawMessage, error) {
 		if kind == ErrNone {
 			kind = ErrClient
 		}
-		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: fmt.Sprintf("code=%d msg=%s", env.Code, truncate(env.Msg, 160))}
+		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: fmt.Sprintf("code=%d msg=%s", env.Code, truncate(env.Msg, 160)),
+			RequestID: ParseUpstreamRequestID(string(raw))}
 	}
 	return env.Data, nil
 }
@@ -384,7 +386,8 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			if kind == ErrNone {
 				return nil, resp.StatusCode, raw, nil
 			}
-			ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
+			ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200),
+				RequestID: ParseUpstreamRequestID(string(raw))}
 			if d, ok := ParseRetryAfter(resp.Header); ok {
 				ue.RetryAfter = d
 			}

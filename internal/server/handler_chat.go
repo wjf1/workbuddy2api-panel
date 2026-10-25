@@ -837,6 +837,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// 状态码统一由 errmap.go 的 httpStatusForKind 决定（单一事实来源）；
 		// 下面只组装 code 与文案——同类别在不同场景文案不同，但状态码必须一致。
 		status = httpStatusForKind(ue.Kind)
+		// 上游 requestId 与本地 rid 同时落台账 + 一行日志：用户报障给的是上游 ID，
+		// 运维手里是 rid，这两者对上号才能让上游查（成功响应不含该字段，仅错误有）。
+		if ue.RequestID != "" {
+			st.upstreamRequestID = ue.RequestID
+			rid := ""
+			if tr := requestTraceFrom(r); tr != nil {
+				rid = tr.id
+			}
+			log.Printf("WARN: [server] upstream requestId=%s rid=%s acct=%s model=%s kind=%s",
+				ue.RequestID, rid, logfmt.Label(st.uid, st.nick), bareModel, ue.Kind)
+		}
 		switch ue.Kind {
 		case upstream.ErrSoftRate:
 			code = "rate_limit_exceeded"

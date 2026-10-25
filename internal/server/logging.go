@@ -64,6 +64,9 @@ type chatStat struct {
 	cacheHit  int64
 	cacheMiss int64
 	hasCache  bool
+	// upstreamRequestID 上游在错误体里回的 requestId（成功响应没有）。用户报障时
+	// 拿它找上游客服核对；与本地 rid 同时落台账，两边才能对上号。空 = 上游没给。
+	upstreamRequestID string
 
 	// 调用来源（客户端 IP / User-Agent）。空 = 未采集（logging.request_client_info
 	// 关闭，或非 chat 路径），展示层一律以 "-" 兜底。
@@ -463,6 +466,7 @@ func (t *requestTrace) event(status int) reqlog.Event {
 		e.HasCredit = s.hasCredit
 		e.CacheHitTokens = s.cacheHit
 		e.CacheMissTokens = s.cacheMiss
+		e.UpstreamRequestID = s.upstreamRequestID
 	}
 	e.ClientIP = t.clientIP
 	e.UserAgent = t.userAgent

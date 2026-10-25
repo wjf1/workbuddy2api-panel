@@ -84,6 +84,10 @@ type Event struct {
 	CacheMissTokens int64  `json:"cache_miss_tokens,omitempty"`
 	ClientIP        string `json:"client_ip,omitempty"`
 	UserAgent       string `json:"user_agent,omitempty"`
+	// UpstreamRequestID 上游错误体里回的 requestId（requestId/request_id/error.requestId）。
+	// 与本地 RequestID 并列落盘：用户报障时给出的是上游 ID，运维手里的是本地 rid，
+	// 这一列就是两者之间的唯一关联。成功请求上游不给该字段，故省略。
+	UpstreamRequestID string `json:"upstream_request_id,omitempty"`
 }
 
 // Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），

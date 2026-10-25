@@ -83,6 +83,37 @@ type Error struct {
 	// 冷却时长回落调用方计算值。挂载点选在 Error 信封：Kind 决定「罚不罚」，
 	// RetryAfter 决定「罚多久」，同为上游响应的一等公民。
 	RetryAfter time.Duration
+	// RequestID 上游在错误体里回的业务请求 ID（requestId / request_id / error.requestId）。
+	// 上游客服排查只认这个 ID，而它**只出现在错误体里**（成功响应没有），所以随
+	// Error 信封带出来，供网关日志与请求台账记录——出问题时用户报这个 ID 就能
+	// 直接找上游核对，不必再让用户翻客户端原始响应。空串 = 上游没给（不编造）。
+	RequestID string
+}
+
+// ParseUpstreamRequestID 从上游错误体里提取 requestId。
+//
+// 兼容三种形态：顶层 `requestId`、顶层 `request_id`、嵌套 `error.requestId`
+// （OpenAI 风格）。解析失败或没有该字段返回 ""。只在错误路径调用，成本可忽略。
+func ParseUpstreamRequestID(body string) string {
+	if body == "" {
+		return ""
+	}
+	var v struct {
+		A string `json:"requestId"`
+		B string `json:"request_id"`
+		E struct {
+			C string `json:"requestId"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		return ""
+	}
+	for _, s := range []string{v.A, v.B, v.E.C} {
+		if s = strings.TrimSpace(s); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func (e *Error) Error() string {
