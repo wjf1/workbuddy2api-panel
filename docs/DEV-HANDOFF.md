@@ -40,11 +40,11 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `6deb1b5` | `git log --oneline -1` |
+| HEAD | `3c1a87f` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 105 文件 / 33,007 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 96 文件 / 24,949 行 / 850 个 Test 函数 | 同上 |
-| `go test ./...` | **22 包全绿，约 11 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
+| 非测试代码 | 106 文件 / 33,056 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 97 文件 / 25,018 行 / 852 个 Test 函数 | 同上 |
+| `go test ./...` | **22 包全绿，约 10–12 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
 | 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 976 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 858 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
@@ -91,6 +91,7 @@ internal/
 | `9f0b9be` | 新增 `features.strip_tool_metadata`（默认 false）：出站剥除 tool-call 的追踪 `metaData`，无字段可删时字节不变 | `go test ./internal/upstream -run TestStripToolMetaData -v`（4 个用例） |
 | `8160b3b` | `handler.go` 1962 行按端点族拆 5 文件（纯搬运） | 47 个声明零缺失、行多重集丢失 0 行 |
 | `6deb1b5` | 入站限流 `server.rate_limit_rps`（默认关）：令牌桶按 TCP 对端 IP、429+`Retry-After`、豁免 `/status` 与 `/healthz` | `go test ./internal/server -run 'TestRateLimiter\|TestHandlerRateLimit\|TestHandlerRejectsWith429' -v`（9 个用例） |
+| `3c1a87f` | 上游错误类别→HTTP 状态码收敛到 `errmap.go` 的单一表（此前散在 6 处）；附「每个 ErrKind 都必须表态」的完整性测试 | `go test ./internal/server -run TestHTTPStatusForKind -v`（2 个用例）。**注意：v1 审计说映射分散在 `backoff.go`/`degrade.go`/`handler.go` 三处是错的**，实际是 `handler_chat.go` 内 6 处 |
 
 ---
 
@@ -100,27 +101,21 @@ internal/
 
 ### P1 — 直接影响可用性、费用或后续开发效率
 
-**4.1 上游码 → HTTP 状态/错误体映射抽单一函数**
-- 现状：映射散在 `handler_chat.go` 等多处（`StatusTooManyRequests`/`StatusBadGateway` 直接赋值，共 8 处）。
-- 注意：**v1 审计报告说映射分散在 `backoff.go`/`degrade.go`/`handler.go` 三处，这是错的** —— 前者是退避抖动单一来源，后者是降级状态机，都不做状态映射。
-- 改法：抽 `mapUpstreamErr(kind upstream.ErrKind) (status int, typ string)`，handler 只调它。
-- 风险：改变对外错误语义，属契约变更 → 单独发版。
+**4.1 上游 `requestId` 关联进日志**
+- 现状：网关自己的 `X-Request-Id` 和日志 `rid` 都有；**缺的是上游返回的 `requestId` 没被记录**，跨端排查接不上。
+- 改法：`Classify`/响应解析时把上游 `requestId` 取出，随流水行输出（如 `up_rid=...`）。HTTP 状态码映射已在 `errmap.go` 收口，这条只剩"把 ID 塞进日志"。
 
-**4.2 上游 `requestId` 关联进日志**
-- 现状：网关自己的 `X-Request-Id`（`handler.go` 一带）和日志 `rid` 都有；**缺的是上游返回的 `requestId` 没被记录**，跨端排查接不上。
-- 改法：`Classify`/响应解析时把上游 `requestId` 取出，随流水行输出（如 `up_rid=...`）。
-
-**4.3 开启 `-race` 门禁**
+**4.2 开启 `-race` 门禁**
 - 只能加在 Linux CI（本机无 gcc）。步骤：先在 CI 单独跑 `go test ./internal/pool ./internal/server ./internal/scheduler -race`，**确认全绿后再设为阻断**；项目 mutex+goroutine 密集，很可能暴露新问题，要有心理准备。
 
 ### P2 — 结构性债务
 
-- **4.4 弹窗改原生 `<dialog>`**：现在是 `div.veil` + 自建焦点陷阱（已可用），缺 top-layer / 背景 `inert` / `::backdrop`；读屏仍能浏览背景内容。
-- **4.5 三态一致性**：`pool`（内存）↔ `state.json`（快照）↔ `redisstore`（镜像）靠 `main.go` 的 `RestoreFromSnapshot()`「择新恢复」，并发写或时钟漂移可能回滚数据。需要单一真相源或版本号/租约。
-- **4.6 日志结构化**：全仓 249 处 `log.Printf`（非测试），级别靠字符串前缀；`internal/logfmt` 已存在未全量采用。建议迁 `log/slog` 并保留面板 ring 的频道分类。
-- **4.7 pprof / metrics 端点**：目前只有 `/status` 聚合计数，线上无法定位 CPU/内存热点。
-- **4.8 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。建议 README 拆「索引 + 专题页」，HANDOFF 只留「当前状态 + 下一步 + 避坑」。
-- **4.9 前端行为测试**：`app.js`(3449 行) 只有 `node --check` 语法检查 + CSP 断言，**无 node 时静默跳过**；73 处 `innerHTML` 无回归网。
+- **4.3 弹窗改原生 `<dialog>`**：现在是 `div.veil` + 自建焦点陷阱（已可用），缺 top-layer / 背景 `inert` / `::backdrop`；读屏仍能浏览背景内容。
+- **4.4 三态一致性**：`pool`（内存）↔ `state.json`（快照）↔ `redisstore`（镜像）靠 `main.go` 的 `RestoreFromSnapshot()`「择新恢复」，并发写或时钟漂移可能回滚数据。需要单一真相源或版本号/租约。
+- **4.5 日志结构化**：全仓 249 处 `log.Printf`（非测试），级别靠字符串前缀；`internal/logfmt` 已存在未全量采用。建议迁 `log/slog` 并保留面板 ring 的频道分类。
+- **4.6 pprof / metrics 端点**：目前只有 `/status` 聚合计数，线上无法定位 CPU/内存热点。
+- **4.7 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。建议 README 拆「索引 + 专题页」，HANDOFF 只留「当前状态 + 下一步 + 避坑」。
+- **4.8 前端行为测试**：`app.js`(3449 行) 只有 `node --check` 语法检查 + CSP 断言，**无 node 时静默跳过**；73 处 `innerHTML` 无回归网。
 
 ### P3 — 低成本清理
 圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）｜`cmd/*` 冒烟测试（signin/trial/credit 零测试）｜`go.mod` 加 `toolchain`｜`panel/ring.go` 覆盖率 7.5% / `upstream/dump.go` 0%
@@ -212,3 +207,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | 建立本文档；记录 6 个提交（测试顺序依赖、SSE fatal、测试去网络、scheduler 提速、client.go 拆分、gofmt+CI 门禁）与全部待办 | `0b3c664` |
 | 2026-10-25 | 完成 4 项 P1：面板字号 6 档令牌化、账号表表头吸附、`handler.go` 拆 5 文件、`strip_tool_metadata`（opt-in）；顺带统一工作区行尾为 LF（此前本地 gofmt 会误报 100+ 文件），补 1 处漏网格式问题 | `8160b3b` |
 | 2026-10-25 | 完成入站限流 `server.rate_limit_rps`（opt-in，与 `max_body_mb` 配套）；待办缩到 9 项 | `6deb1b5` |
+| 2026-10-25 | 上游错误类别→HTTP 状态码收敛到 `errmap.go` 单表（原散在 6 处），附完整性测试；待办缩到 8 项，P1 只剩 2 项 | `3c1a87f` |
