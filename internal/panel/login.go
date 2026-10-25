@@ -257,14 +257,14 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		// 失败不阻断登录结果（auth 已落盘），只在返回字段里体现。
 		if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
 			checkinMsg = "注册激活失败: " + err.Error()
-			logx.Infof("panel: global 注册激活 uid=%s: %v", acct.UID, err)
+			logx.Warnf("panel: global 注册激活 uid=%s: %v", acct.UID, err)
 		} else if activated {
 			logx.Infof("panel: global 注册激活 uid=%s 完成", acct.UID)
 		}
 		// trial 加油包（幂等 14051 = 已领过，非错误）。
 		if claimed, err := p.cfg.Upstream.ClaimTrial(a); err != nil {
 			checkinMsg = joinMsg(checkinMsg, "trial 领取失败: "+err.Error())
-			logx.Infof("panel: global trial uid=%s: %v", acct.UID, err)
+			logx.Warnf("panel: global trial uid=%s: %v", acct.UID, err)
 		} else if claimed {
 			logx.Infof("panel: global trial uid=%s 已领", acct.UID)
 		}

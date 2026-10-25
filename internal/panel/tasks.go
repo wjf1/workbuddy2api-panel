@@ -115,7 +115,7 @@ func (p *Panel) taskAcceptAll(w http.ResponseWriter, r *http.Request) {
 			end = len(codes)
 		}
 		if err := p.cfg.Upstream.AcceptTasks(a, codes[i:end]); err != nil {
-			logx.Infof("panel: 批量接受失败 uid=%s codes=%v err=%v", uid, codes[i:end], err)
+			logx.Warnf("panel: 批量接受失败 uid=%s codes=%v err=%v", uid, codes[i:end], err)
 			failed = append(failed, codes[i:end]...)
 			continue
 		}
@@ -133,7 +133,7 @@ func (p *Panel) taskAcceptAll(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(mpCodes) > 0 {
 			if err := p.cfg.Upstream.AcceptTasksMP(a, mpCodes); err != nil {
-				logx.Infof("panel: mp 批量接受失败 uid=%s err=%v", uid, err)
+				logx.Warnf("panel: mp 批量接受失败 uid=%s err=%v", uid, err)
 				failed = append(failed, mpCodes...)
 			} else {
 				accepted += len(mpCodes)

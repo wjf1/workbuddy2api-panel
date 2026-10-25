@@ -396,7 +396,7 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
 		return 0
 	}
 	if err := p.cfg.Upstream.AcceptTasks(a, codes); err != nil {
-		logx.Infof("panel: 队列 accept uid=%s: %v（不阻塞）", a.UID, err)
+		logx.Warnf("panel: 队列 accept uid=%s: %v（不阻塞）", a.UID, err)
 		return 0
 	}
 	logx.Infof("panel: 队列 accept uid=%s: 已接受 %d 个任务", a.UID, len(codes))

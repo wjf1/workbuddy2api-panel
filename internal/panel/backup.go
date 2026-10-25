@@ -83,7 +83,7 @@ func (p *Panel) StartBackupLoop(ctx context.Context) {
 				continue
 			}
 			if name, err := p.RunBackupNow(); err != nil {
-				logx.Infof("panel: 定时备份失败: %v（明日 %d 点重试）", err, hour)
+				logx.Errorf("panel: 定时备份失败: %v（明日 %d 点重试）", err, hour)
 			} else {
 				logx.Infof("panel: 定时备份完成: %s", name)
 			}
@@ -223,7 +223,7 @@ func (p *Panel) backupRun(w http.ResponseWriter, r *http.Request) {
 	}
 	name, err := p.RunBackupNow()
 	if err != nil {
-		logx.Infof("panel: 手动备份失败: %v", err)
+		logx.Errorf("panel: 手动备份失败: %v", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}

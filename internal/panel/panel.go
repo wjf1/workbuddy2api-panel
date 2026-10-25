@@ -763,7 +763,7 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if fileMsg != "" {
-			logx.Infof("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
+			logx.Warnf("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": fileMsg})
 			return
 		}
@@ -774,7 +774,7 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 	name, err := p.moveToTrash(a)
 	if err != nil {
 		// 出池已成功、文件仍在原地：如实告知（文件残留比静默丢失好）。
-		logx.Infof("panel: remove uid=%s 出池成功但移入回收站失败: %v", uid, err)
+		logx.Warnf("panel: remove uid=%s 出池成功但移入回收站失败: %v", uid, err)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": err.Error()})
 		return
 	}

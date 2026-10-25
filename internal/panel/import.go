@@ -194,18 +194,18 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 		if p.cfg.Upstream != nil {
 			if realm == "global" {
 				if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
-					logx.Infof("panel: import global 注册激活 uid=%s: %v", uid, err)
+					logx.Warnf("panel: import global 注册激活 uid=%s: %v", uid, err)
 				} else if activated {
 					logx.Infof("panel: import global 注册激活 uid=%s 完成", uid)
 				}
 				if claimed, err := p.cfg.Upstream.ClaimTrial(a); err != nil {
-					logx.Infof("panel: import global trial uid=%s: %v", uid, err)
+					logx.Warnf("panel: import global trial uid=%s: %v", uid, err)
 				} else if claimed {
 					logx.Infof("panel: import global trial uid=%s 已领", uid)
 				}
 			} else {
 				if err := p.cfg.Upstream.DailyCheckin(a); err != nil {
-					logx.Infof("panel: import checkin uid=%s: %v", uid, err)
+					logx.Warnf("panel: import checkin uid=%s: %v", uid, err)
 				}
 			}
 			if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {

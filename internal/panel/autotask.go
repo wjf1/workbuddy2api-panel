@@ -291,7 +291,7 @@ func (p *Panel) taskByCodeMP(a *auth.Auth, code string) (*upstream.Task, error) 
 func (p *Panel) acceptWithVerifyMP(a *auth.Auth, code string) bool {
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := p.cfg.Upstream.AcceptTasksMP(a, []string{code}); err != nil {
-			logx.Infof("autotask %s %s: accept 尝试%d: %v", logfmt.Label(a.UID, a.Nickname), code, attempt, err)
+			logx.Warnf("autotask %s %s: accept 尝试%d: %v", logfmt.Label(a.UID, a.Nickname), code, attempt, err)
 			continue
 		}
 		time.Sleep(mpActionGap)
@@ -299,7 +299,7 @@ func (p *Panel) acceptWithVerifyMP(a *auth.Auth, code string) bool {
 		if err == nil && t != nil && t.AcceptStatus != "not_accepted" && t.AcceptStatus != "" {
 			return true
 		}
-		logx.Infof("autotask %s %s: accept 尝试%d 未登记生效（回读=%q）", logfmt.Label(a.UID, a.Nickname), code, attempt, acceptStatusOr(t))
+		logx.Warnf("autotask %s %s: accept 尝试%d 未登记生效（回读=%q）", logfmt.Label(a.UID, a.Nickname), code, attempt, acceptStatusOr(t))
 	}
 	return false
 }
@@ -798,7 +798,7 @@ func runModelChat(p *Panel, a *auth.Auth) (string, error) {
 	const code, modelID, modelName = "Model_chat_GLM5.2", "glm-5.2", "GLM-5.2"
 	// 1. accept（报名；失败不阻塞——行为事件才是判据）
 	if err := p.cfg.Upstream.AcceptTasks(a, []string{code}); err != nil {
-		logx.Infof("panel: accept %s: %v（继续走行为链路）", code, err)
+		logx.Warnf("panel: accept %s: %v（继续走行为链路）", code, err)
 	}
 	time.Sleep(reportGap)
 	// 2. 真实对话一次（判据的最直接证据）

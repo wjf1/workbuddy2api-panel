@@ -60,7 +60,7 @@ func (p *Panel) moveToTrash(a *auth.Auth) (string, error) {
 	// mtime = 删除时刻：sweepTrash 的保留期依据 + 列表展示，双用。
 	now := time.Now()
 	if err := os.Chtimes(dst, now, now); err != nil {
-		logx.Infof("panel: trash %s set mtime: %v（不影响功能，仅清理时刻取创建时间）", dst, err)
+		logx.Warnf("panel: trash %s set mtime: %v（不影响功能，仅清理时刻取创建时间）", dst, err)
 	}
 	return filepath.Base(dst), nil
 }
