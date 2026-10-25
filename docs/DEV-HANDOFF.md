@@ -40,10 +40,10 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `9fee070` | `git log --oneline -1` |
+| HEAD | `0f9e896` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 108 文件 / 33,457 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 104 文件 / 878 个 Test 函数 | 同上 |
+| 非测试代码 | 108 文件 / 33,486 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 105 文件 / 884 个 Test 函数 | 同上 |
 | `go test ./...` | **23 包全绿，约 11 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
@@ -104,6 +104,8 @@ internal/
 | `4b50049` | 新增 `internal/logx`（保形 slog Handler）+ `internal/usage` 6 处迁移为样板 | `go test ./internal/logx -v`（8 用例，含「Info 与 log.Printf 逐字一致」「不出现 level=」） |
 | `1a65902`…`b32673c` | **日志全仓迁 `logx`**：safefile/session/auth/authlease/alert（26）、rotaudit/redisstore（16）、pool（19）、server（18）、upstream（22，跳过 payload.go）、cmd/server（32，`log.Fatalf` 保留）、panel（59）、scheduler（59）、cmd/signin（1）；分级 = Infof/Warnf/Errorf，失败行按语义升级 | `grep -rn 'log\.Print' internal cmd \| grep -v _test.go` 只剩 `logx/logx.go` 与 `upstream/payload.go`；`go test ./...` |
 | `9fee070` | 装配契约测试：main 的 `MultiWriter(stderr, ring)` 搬进测试，断言 logx 输出的频道/文本/无 `level=` | `go test ./internal/panel -run TestLogxOutput -v` |
+| `513840c` | 抽出前端纯函数层 `internal/panel/logic.js`（14 个函数：esc/ago/dur/parseAPITime/fmtLocalDateTime/fmtK/fmtBytes/fmtTok/fmtMs/fmtRate/trimFixed/fmtCredit/fmtCreditRatio/fmtModelRate）；app.js 3506→3438 行；新增 `/panel/logic.js` 路由，`index.html` 先加载它再加载 app.js | `go test ./internal/panel -run TestIndexLoadsLogicBeforeApp`；`node --check internal/panel/app.js` |
+| `0f9e896` | 前端行为断言：`logic_test.js` 60 条（零依赖，node 直接跑）+ Go 侧 `TestLogicJSBehavior`/`TestWBLogicDestructureMatches`/`TestLogicJSNeedsNoDOM`；三处反证实测 | `go test ./internal/panel -run 'TestLogic\|TestWBLogic\|TestIndexLoadsLogic' -v` |
 
 ---
 
@@ -138,7 +140,20 @@ internal/
 
 - **4.3 弹窗完整迁移原生 `<dialog>`**：`inert` 与 `role/aria-modal` 已补（`94799e5`），剩下 top-layer（`showModal()` 天然置顶，不受 z-index 影响）与 `::backdrop`。属于结构性重写 8 个弹窗，需要人眼验收，建议单独一轮做。
 - **4.4 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。拆的时候注意仓库内外已有大量 `#锚点` 引用，改标题会断链；建议先加索引页再加专题页，最后才收缩主文档。
-- **4.5 前端行为测试**：`app.js`(3449 行) 只有 `node --check` + CSP 断言，且**无 node 时静默跳过**。要写行为测试得先把可测函数（`esc` / `dur` / 时间格式化 / 模型名解析）抽成可导出模块，是一次结构性改动，不建议在功能迭代中途做。
+- **4.5 前端行为测试 — 第一步已完成**（`513840c` / `0f9e896`）
+
+  app.js 的「纯函数」部分已抽到 `internal/panel/logic.js`（14 个：esc/ago/dur/
+  parseAPITime/fmtLocalDateTime/fmtK/fmtBytes/fmtTok/fmtMs/fmtRate/trimFixed/
+  fmtCredit/fmtCreditRatio/fmtModelRate），双环境导出（浏览器 `window.WBLogic` /
+  node `module.exports`），断言在 `logic_test.js`（60 条，零依赖）。
+
+  **仍未被行为测试覆盖的是 app.js 里的 DOM 逻辑**（渲染、事件、弹窗、轮询）。要覆盖
+  它们得引入 DOM 实现（jsdom）或做浏览器端测试（Playwright），两者都要新增依赖/运行时
+  ——本仓库刻意零 npm 依赖，这一步要单独立项，不要顺手加。
+
+  **写新前端代码的规矩**：纯函数（入参出参、不碰 DOM）一律写进 `logic.js` 并在
+  `logic_test.js` 补断言；碰 DOM 的留在 `app.js`。`TestLogicJSNeedsNoDOM` 会拦住
+  往 logic.js 里塞 document/localStorage 的行为。
 
 ### 明确不做的（及原因）
 
@@ -179,12 +194,21 @@ internal/
 9. **`strip_tool_metadata` 的技术债**：配置项落在 `features` 段（与 `sanitize_blacklist_fingerprints` 同段，复用其热加载路径），实现放在独立文件 `internal/upstream/strip_metadata.go`，调用点挂在 `client.go` 的 `prepareBody`，**没有并进 `payload.go` 的归一化链**。原因是当时 `payload.go` 有他人未提交改动，并进去会把两个工作搅在同一个 diff 里。代价：开关开启时多一次 parse+marshal（默认关闭时零成本）。后续若要优化，可把它合并进 `PrepareBodyOptWithEffortsAndDefault` 的同一次解析。
 10. **限流键刻意不用 `X-Forwarded-For`**：`internal/server/ratelimit.go` 的 `rateKey()` 取的是 `RemoteAddr` 的主机部分。XFF / X-Real-IP 客户端可任意伪造，按它限流等于"每请求换一个伪造 IP 拿无限额度"，限流形同虚设。代价是反代后面所有请求对端都是代理地址，桶退化为全局限流——**这是有意的安全方向退化，别"顺手优化"成读 XFF**。同理也别改成按 `api_key` 限流：本网关只有一个 key，按 key 限等价于全局限流。
 
-12. **别裸用 `slog.TextHandler`**：它输出 `time=… level=… msg=…`，而 `panel/ring.go` 的
+11. **别裸用 `slog.TextHandler`**：它输出 `time=… level=… msg=…`，而 `panel/ring.go` 的
    `tsPrefixRe` 只认 log 包默认的 `2026/10/25 23:00:13 `，且 task 频道靠行首前缀匹配。
    直接换 TextHandler 的结果是面板日志视图**静默**丢掉时间戳与任务筛选（不报错、只是难用）。
    迁移一律走 `internal/logx`（`4b50049`），它把这两点都钉死了。
 
-11. **诊断端点必须独立端口**：`server.debug_addr` 刻意不开在主 mux 上。Go 的 `net/http/pprof` 无鉴权，`profile` 能导出 CPU/heap，heap 里含请求体与账号 token；主端口通常绑 `0.0.0.0`。回归测试 `TestMainMuxHasNoDebugEndpoints` 钉住这一点——**别为了"顺手"把它加回主路由**。`/metrics` 也只放低基数指标（状态枚举 + goroutine 数），加 per-model 标签会先崩 Prometheus。
+12. **文件名带 `_js_` 会被 Go 静默排除**：`js` 是合法 GOOS（wasm），所以
+   `logic_js_test.go` 被当成「仅 wasm 的测试文件」跳过，症状是 `go test -run X` 报
+   `no tests to run` 而文件明明存在。已改名 `logic_behavior_test.go`。
+
+13. **`logic.js` 必须在 `app.js` 之前加载**：app.js 顶部就解构 `window.WBLogic`，
+   顺序反了会在首行抛 TypeError（整份面板白屏），而 `node --check` 与 Go 测试都看不出。
+   `TestIndexLoadsLogicBeforeApp` 钉住顺序，`TestWBLogicDestructureMatches` 钉住
+   解构名与导出键一致（解构失败是静默的，拿到 undefined 不会当场报错）。
+
+14. **诊断端点必须独立端口**：`server.debug_addr` 刻意不开在主 mux 上。Go 的 `net/http/pprof` 无鉴权，`profile` 能导出 CPU/heap，heap 里含请求体与账号 token；主端口通常绑 `0.0.0.0`。回归测试 `TestMainMuxHasNoDebugEndpoints` 钉住这一点——**别为了"顺手"把它加回主路由**。`/metrics` 也只放低基数指标（状态枚举 + goroutine 数），加 per-model 标签会先崩 Prometheus。
 
 ---
 
@@ -250,3 +274,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | 补 `upstream/dump.go` 保留期清理测试（原 0%）；顺带纠正 P3 里过时的覆盖率数字 | `15c0dd5` |
 | 2026-10-25 | P2-4.2 第 1 步：`internal/logx` 保形分级日志门面 + `usage` 包试点迁移；顺带修「任务失败行掉频道」的隐藏回归 | `4b50049` |
 | 2026-10-25 | P2-4.2 收尾：其余 12 个包 229 处日志全部迁到 `logx`（含 panel/scheduler 两个最大的包），补装配契约测试；**4.2 完成** | `9fee070` |
+| 2026-10-26 | P2-4.5 第一步：前端纯函数层抽出 + 60 条行为断言（含 3 处反证）；DOM 逻辑仍无测试，需 DOM 运行时才能覆盖 | `0f9e896` |
