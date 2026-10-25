@@ -14,13 +14,55 @@ let pollLastOKAt = 0; // 最近一次轮询成功时刻（离线指示用）
    中段的注册调用（btnCloseAdd 等绑定处）先于本段执行，const 会 TDZ。 */
 const veilClosers = new Map(); // veilId -> closeFn
 function registerVeilCloser(id, fn) { veilClosers.set(id, fn); }
+
+/* ── 弹窗无障碍：语义 + 焦点 ─────────────────────────────────────────
+   .veil/.dlg 是纯 div，浏览器与读屏都不知道它是对话框：没有 role/aria-modal，
+   焦点也不受约束，键盘用户 Tab 会跑到遮罩背后的页面上。这里统一补语义，并在
+   打开时把焦点移入、关闭时还给触发元素、Tab 循环锁在弹窗内。
+   不动结构与 CSS；各调用点只把 classList 开关换成 showVeil/hideVeil。 */
+let veilReturnFocus = null;
+const VEIL_FOCUSABLE = 'a[href],button:not([disabled]),input:not([type=hidden]),select,textarea,[tabindex]:not([tabindex="-1"])';
+function showVeil(id) {
+  const v = $(id);
+  if (!v) return;
+  const dlg = v.querySelector('.dlg');
+  if (dlg) {
+    dlg.setAttribute('role', 'dialog');
+    dlg.setAttribute('aria-modal', 'true');
+    const h = dlg.querySelector('h3');
+    const label = h && h.textContent.trim();
+    if (label) dlg.setAttribute('aria-label', label); // 无 h3 时保留原样，不编造名字
+  }
+  if (!v.classList.contains('on')) veilReturnFocus = document.activeElement;
+  v.classList.add('on');
+  const first = v.querySelector(VEIL_FOCUSABLE);
+  // 与既有的 openKey() 手写 focus 不冲突：都指向弹窗内首个可聚焦元素。
+  if (first) setTimeout(() => { if (v.classList.contains('on')) first.focus(); }, 30);
+}
+function hideVeil(id) {
+  const v = $(id);
+  if (!v) return;
+  v.classList.remove('on');
+  if (veilReturnFocus && document.contains(veilReturnFocus)) veilReturnFocus.focus();
+  veilReturnFocus = null;
+}
+addEventListener('keydown', e => {
+  if (e.key !== 'Tab') return;
+  const v = document.querySelector('.veil.on');
+  if (!v) return;
+  const f = Array.from(v.querySelectorAll(VEIL_FOCUSABLE)).filter(el => el.offsetParent !== null);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
 addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   const on = document.querySelector('.veil.on');
   if (!on || on.dataset.lock) return;
   const fn = veilClosers.get(on.id);
   if (fn) fn();
-  else on.classList.remove('on');
+  else hideVeil(on.id);
 });
 let theme = lsGet(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
@@ -325,7 +367,7 @@ function formatRate(rate) {
 }
 
 /* ── 密钥门 ───────────────────────────────────────────────────────── */
-function openKey() { $('keyVeil').classList.add('on'); setTimeout(() => $('keyInput').focus(), 60); }
+function openKey() { showVeil('keyVeil'); setTimeout(() => $('keyInput').focus(), 60); }
 $('btnKey').onclick = async () => {
   const v = $('keyInput').value.trim();
   if (!v) return;
@@ -333,7 +375,7 @@ $('btnKey').onclick = async () => {
   try {
     await api('overview');
     $('keyErr').hidden = true;
-    $('keyVeil').classList.remove('on');
+    hideVeil('keyVeil');
     start();
   } catch (e) { $('keyErr').hidden = false; }
 };
@@ -1296,7 +1338,7 @@ $('cfgForm').onsubmit = async ev => {
 
 /* ── 添加账号 ─────────────────────────────────────────────────────── */
 function openAdd() {
-  $('addVeil').classList.add('on');
+  showVeil('addVeil');
   // 重置到登录标签
   switchAddTab('login');
   $('addPick').hidden = false;
@@ -1357,7 +1399,7 @@ function closeAdd() {
   stopPoll();
   if (loginCloseTimer) { clearTimeout(loginCloseTimer); loginCloseTimer = null; } // 手动关闭清定时器：防旧定时器误关下一次打开的弹窗
   loginState = null;
-  $('addVeil').classList.remove('on');
+  hideVeil('addVeil');
 }
 $('btnCloseAdd').onclick = closeAdd;
 registerVeilCloser('addVeil', closeAdd);
@@ -1382,7 +1424,7 @@ function openRelogin(uid) {
   $('btnStartRelogin').hidden = false; $('btnStartRelogin').disabled = false;
   $('btnCopyReloginUrl').hidden = true; $('btnOpenReloginUrl').hidden = true;
   stopReloginPoll();
-  $('reloginVeil').classList.add('on');
+  showVeil('reloginVeil');
 }
 function startRelogin() {
   if (!reloginUid) return;
@@ -1434,7 +1476,7 @@ function closeRelogin() {
   stopReloginPoll();
   reloginState = null; reloginUid = null;
   if (reloginCloseTimer) { clearTimeout(reloginCloseTimer); reloginCloseTimer = null; } // 同 closeAdd
-  $('reloginVeil').classList.remove('on');
+  hideVeil('reloginVeil');
 }
 $('btnCloseRelogin').onclick = closeRelogin;
 registerVeilCloser('reloginVeil', closeRelogin);
@@ -1476,7 +1518,7 @@ $('btnExport').onclick = openExport;
 
 /* ── 导出账号（弹窗：单选 / 多选 / 全选）──────────────────────────── */
 async function openExport() {
-  $('exportVeil').classList.add('on');
+  showVeil('exportVeil');
   $('expErr').hidden = true;
   const listEl = $('expAccList');
   listEl.innerHTML = '<div class="exp-loading">正在获取账号列表…</div>';
@@ -1564,7 +1606,7 @@ function expSetAll(on) {
   $('expAccList').querySelectorAll('input[type=checkbox]').forEach(b => b.checked = on);
 }
 $('expAll').onchange = () => { expSetAll($('expAll').checked); expSync(); };
-$('btnCloseExport').onclick = () => { $('exportVeil').classList.remove('on'); };
+$('btnCloseExport').onclick = () => { hideVeil('exportVeil'); };
 $('btnDoExport').onclick = async () => {
   const boxes = [...$('expAccList').querySelectorAll('input[type=checkbox]')];
   const sel = boxes.filter(b => b.checked).map(b => b.value);
@@ -1580,7 +1622,7 @@ $('btnDoExport').onclick = async () => {
     const qs = sel.length === boxes.length ? '' : '?uids=' + encodeURIComponent(sel.join(','));
     const data = await fetchExportJson(qs);
     downloadAccounts(data);
-    $('exportVeil').classList.remove('on');
+    hideVeil('exportVeil');
     toast('已导出 ' + data.length + ' 个账号（cockpit tools 兼容格式）', 'ok');
   } catch (e) {
     $('expErr').hidden = false; $('expErr').textContent = '导出失败：' + e.message;
@@ -1615,10 +1657,10 @@ function openTagModal(uid) {
   $('tagTarget').textContent = '账号：' + ((st && st.nickname) || '未命名') + '（uid ' + uid + '）';
   $('tagInput').value = tags.join(', ');
   $('tagErr').hidden = true;
-  $('tagVeil').classList.add('on');
+  showVeil('tagVeil');
   setTimeout(() => $('tagInput').focus(), 60);
 }
-$('btnCloseTag').onclick = () => $('tagVeil').classList.remove('on');
+$('btnCloseTag').onclick = () => hideVeil('tagVeil');
 $('btnTagSave').onclick = async () => {
   if (!tagUid) return;
   const tags = $('tagInput').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
@@ -1627,7 +1669,7 @@ $('btnTagSave').onclick = async () => {
       method: 'POST', body: JSON.stringify({ tags })
     });
     toast(r.changed ? '标签已保存' : '标签未变化', 'ok');
-    $('tagVeil').classList.remove('on');
+    hideVeil('tagVeil');
     loadOverview(true);
   } catch (e) {
     $('tagErr').textContent = e.message;
@@ -1637,13 +1679,13 @@ $('btnTagSave').onclick = async () => {
 
 /* ── 回收站 + 定时备份 ────────────────────────────────────────────── */
 function openTrash() {
-  $('trashVeil').classList.add('on');
+  showVeil('trashVeil');
   $('trashErr').hidden = true;
   loadTrash();
   loadBackups();
 }
 $('btnTrash').onclick = openTrash;
-$('btnCloseTrash').onclick = () => $('trashVeil').classList.remove('on');
+$('btnCloseTrash').onclick = () => hideVeil('trashVeil');
 
 async function loadTrash() {
   const wrap = $('trashList');
@@ -1852,11 +1894,11 @@ const AUTO_TASKS = {
 function openTasks(uid) {
   taskUID = uid;
   $('taskWho').textContent = uid.slice(0, 16);
-  $('taskVeil').classList.add('on');
+  showVeil('taskVeil');
   $('btnTaskReload').hidden = false;
   loadTasks();
 }
-function closeTasks() { $('taskVeil').classList.remove('on'); taskUID = null; }
+function closeTasks() { hideVeil('taskVeil'); taskUID = null; }
 $('btnCloseTask').onclick = closeTasks;
 registerVeilCloser('taskVeil', closeTasks);
 $('btnTaskReload').onclick = loadTasks;
@@ -2194,7 +2236,7 @@ function vcCard(v) {
 
 async function loadSchoolVouchers() {
   const body = $('vcBody');
-  $('vcVeil').classList.add('on');
+  showVeil('vcVeil');
   body.innerHTML = '<div class="state"><span class="dots">查询中</span></div>';
   $('vcNote').textContent = '';
   try {
@@ -2233,7 +2275,7 @@ async function loadSchoolVouchers() {
   }
 }
 $('btnSchoolVouchers').onclick = loadSchoolVouchers;
-$('btnVcClose').onclick = () => $('vcVeil').classList.remove('on');
+$('btnVcClose').onclick = () => hideVeil('vcVeil');
 $('btnVcRefresh').onclick = loadSchoolVouchers;
 
 /* 成长任务队列。lastQueueSeq 记录本页启动过的队列代次：执行结束后的残留 items
@@ -2489,11 +2531,11 @@ function usSortRows(rows, sort) {
 
 function usDimHead(dim) {
   const m = US_DIMS[dim] || US_DIMS.account;
-  return '<tr><th class="mark" aria-hidden="true"></th><th>' + esc(m.title) + '</th>' +
-    (m.withRealm ? '<th>域</th>' : '') +
-    '<th class="num">请求</th><th class="num">失败</th>' +
-    '<th class="num">输入</th><th class="num">输出</th><th class="num">合计</th>' +
-    (m.withPerf ? '<th class="num">均延迟</th><th class="num">均速率</th>' : '') +
+  return '<tr><th class="mark" aria-hidden="true"></th><th scope="col">' + esc(m.title) + '</th>' +
+    (m.withRealm ? '<th scope="col">域</th>' : '') +
+    '<th scope="col" class="num">请求</th><th scope="col" class="num">失败</th>' +
+    '<th scope="col" class="num">输入</th><th scope="col" class="num">输出</th><th scope="col" class="num">合计</th>' +
+    (m.withPerf ? '<th scope="col" class="num">均延迟</th><th scope="col" class="num">均速率</th>' : '') +
     '</tr>';
 }
 
@@ -2532,12 +2574,12 @@ function renderUsageDim() {
 /* 积分扣除：按账号 / 按模型两个维度共用一张表（同上，两个 box 合成一个）。 */
 function usCreditHead(dim) {
   return dim === 'model'
-    ? '<tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th>' +
-      '<th class="num">请求</th><th class="num">扣除积分</th>' +
-      '<th class="num">有效样本 Token</th><th class="num">积分 / 1M Token</th><th class="num">缓存命中率</th></tr>'
-    : '<tr><th class="mark" aria-hidden="true"></th><th>账号</th>' +
-      '<th class="num">请求</th><th class="num">扣除积分</th>' +
-      '<th class="num">有效样本 Token</th><th class="num">积分 / 1M Token</th><th class="num">缓存命中率</th></tr>';
+    ? '<tr><th class="mark" aria-hidden="true"></th><th scope="col">模型</th><th scope="col">积分倍率</th>' +
+      '<th scope="col" class="num">请求</th><th scope="col" class="num">扣除积分</th>' +
+      '<th scope="col" class="num">有效样本 Token</th><th scope="col" class="num">积分 / 1M Token</th><th scope="col" class="num">缓存命中率</th></tr>'
+    : '<tr><th class="mark" aria-hidden="true"></th><th scope="col">账号</th>' +
+      '<th scope="col" class="num">请求</th><th scope="col" class="num">扣除积分</th>' +
+      '<th scope="col" class="num">有效样本 Token</th><th scope="col" class="num">积分 / 1M Token</th><th scope="col" class="num">缓存命中率</th></tr>';
 }
 
 /* 缓存命中率（issue #92）：颜色即健康度——≥90% 绿 / 80–90% 黄 / <80% 红，
@@ -3273,9 +3315,9 @@ function renderPackages(d, detailLimit) {
       ' · 默认展示最早到期 ' + pkDetailLimitValue(detailLimit) + ' 条（' +
       esc(PK_SORT_LABELS[pkSortMode] || '') + '）</span>' +
       '</header><div class="tbl-wrap"><table class="acc"><thead><tr>' +
-      '<th class="mark" aria-hidden="true"></th><th>包名 / 来源</th>' +
-      '<th class="num">面额</th><th class="num">剩余</th><th class="num">已用</th>' +
-      '<th class="num">发放</th><th class="num">到期</th>' +
+      '<th class="mark" aria-hidden="true"></th><th scope="col">包名 / 来源</th>' +
+      '<th scope="col" class="num">面额</th><th scope="col" class="num">剩余</th><th scope="col" class="num">已用</th>' +
+      '<th scope="col" class="num">发放</th><th scope="col" class="num">到期</th>' +
       '</tr></thead><tbody>' + rows + restSummary + usedSummary + '</tbody></table></div></div>';
   }).join('');
 }

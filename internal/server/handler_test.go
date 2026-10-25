@@ -1171,7 +1171,13 @@ func TestChatHTTP4xxClientDoesNotPenalize(t *testing.T) {
 }
 
 func TestModelsEndpoint(t *testing.T) {
-	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: upstream.New()})
+	// 造桩而非 upstream.New()（后者带真实凭证打上游：无网络/凭证失效即空列表，
+	// 且会把 lastFail 写进包级缓存污染后续用例）。目录内容由假上游固定下发。
+	resetDynamicModelsCache(t)
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, `{"code":0,"data":{"models":[{"id":"glm-5.2","maxInputTokens":131072,"maxOutputTokens":8192},{"id":"glm-5.1"},{"id":"deepseek-v3"},{"id":"kimi-k3"},{"id":"glm-5.3"}],"agents":[{"name":"cli","models":["glm-5.2","glm-5.1","deepseek-v3","kimi-k3","glm-5.3"]}]}}`, false
+	})
+	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: up})
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -1200,11 +1206,7 @@ func TestModelsEndpoint(t *testing.T) {
 
 func TestModelsDynamic(t *testing.T) {
 	// 清缓存
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+	resetDynamicModelsCache(t)
 
 	// 假上游返回动态模型（含 agents + maxInputTokens/maxOutputTokens + reasoning 档位）
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -1280,11 +1282,7 @@ func TestModelsDynamic(t *testing.T) {
 func TestModelsDynamicFallsBackToStatic(t *testing.T) {
 	// 纯动态化（产品决策）：上游失败 → 空列表（200），不再回落静态表——
 	// 拉不出目录即意味着上游不可用，假名单只会让客户端选到 11102 的模型。
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+	resetDynamicModelsCache(t)
 
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -1307,11 +1305,7 @@ func TestModelsDynamicFallsBackToStatic(t *testing.T) {
 func TestModelsFetchFailurePenalizesAccount(t *testing.T) {
 	// 吸收上游 9832283：models 拉取失败只进负缓存，不 NoteError——
 	// NoteError 喂的是 chat 熔断器，models 端点 5xx 跨界惩罚 chat 通道健康号。
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+	resetDynamicModelsCache(t)
 
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	p.SetBreaker(1, time.Hour, time.Hour) // 熔断阈值 1：若仍罚号，一次 fetch 失败即熔断
@@ -1331,11 +1325,7 @@ func TestModelsFetchFailurePenalizesAccount(t *testing.T) {
 }
 
 func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
-	dynamicModelsCache.Lock()
-	dynamicModelsCache.ids = nil
-	dynamicModelsCache.fetched = time.Time{}
-	dynamicModelsCache.lastFail = time.Time{}
-	dynamicModelsCache.Unlock()
+	resetDynamicModelsCache(t)
 
 	var calls atomic.Int32 // FetchModels 企业/v3 两路并发探测回调，计数须原子
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -1374,9 +1364,12 @@ func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
 }
 
 func TestAPIKeyAuth(t *testing.T) {
+	// 本用例末尾的 /v1/models 会触发目录拉取：造桩 + 清缓存，避免走真实网络
+	// 丢下 lastFail 负缓存污染后续用例。
+	resetDynamicModelsCache(t)
 	h := NewHandler(Config{
 		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
-		Upstream: upstream.New(),
+		Upstream: newFakeUpstream(t, func(string) (int, string, bool) { return 500, `boom`, false }),
 		APIKey:   "secret",
 	})
 	// 无 key

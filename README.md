@@ -401,6 +401,7 @@ curl -sN http://localhost:7863/v1/messages \
 | `auth_dir` | `./auths` | 账号凭证目录 |
 | `state_file` | `./data/state.json` | 账号池状态持久化文件 |
 | `server.read_timeout` | `300s` | 入站请求读取（含 body 上传）总时长上限；大上下文/文件块经反代转发超时会 400 `read body: i/o timeout`；`0` = 不限制；改动需重启（#100） |
+| `server.max_body_mb` | `0` | 入站请求体大小上限（MB）。`0` = 不限制（缺省，与历史行为一致）；配正值时超限请求在读 body 前被拒，返回 413（Anthropic 端点回 `request_too_large`），不消耗选号与上游配额 |
 | `panel.package_detail_limit` | `5` | 积分构成页单账号默认展示的最早到期包数；其余未用完包与已用完包聚合折叠 |
 | `logging.request_archive_enabled` | `true` | 请求元数据 JSONL 归档开关；不记录提示词、响应正文或 Authorization |
 | `logging.request_retention_days` | `7` | 请求归档保留天数；超期文件在启动和周期清理时删除 |
@@ -671,10 +672,10 @@ http://127.0.0.1:7863/panel/
 
 | 端点 | 鉴权 | 说明 |
 |---|---|---|
-| `POST /v1/chat/completions` | Bearer（`api_key` 非空时） | OpenAI 兼容补全；流式/非流式；请求体上限 8 MiB |
+| `POST /v1/chat/completions` | Bearer（`api_key` 非空时） | OpenAI 兼容补全；流式/非流式；请求体默认不限制，`server.max_body_mb` > 0 时超限返回 413 |
 | `POST /v1/messages` | `x-api-key` 或 Bearer（`api_key` 非空时） | **Anthropic Messages API 兼容层**（流式 / 非流式）：支持服务端 `web_search_*` 工具（检索由网关执行）、客户端自定义工具回传（`stop_reason: tool_use`）与图片块；错误体为 Anthropic 形状（`{"type":"error","error":{...}}`） |
 | `POST /v1/messages/count_tokens` | `x-api-key` 或 Bearer（`api_key` 非空时） | token 数**估算**（无 tokenizer，按请求 JSON 字节数 / 3 折算） |
-| `GET /v1/models` | Bearer（`api_key` 非空时） | 模型列表（纯动态拉取，缓存 1h；失败返回空列表 + 5min 负缓存）；每模型带 `context_length`/`max_output_tokens`（四级查找链：上游目录 → 内置知识表 → model.json 缓存 → models.dev）、`reasoning_supported_efforts`/`reasoning_default_effort` 思考档位及描述/标签/倍率等全字段（上游有返回时） |
+| `GET /v1/models` | Bearer（`api_key` 非空时） | 模型列表（纯动态拉取，缓存 10min；失败返回空列表 + 5min 负缓存）；每模型带 `context_length`/`max_output_tokens`（四级查找链：上游目录 → 内置知识表 → model.json 缓存 → models.dev）、`reasoning_supported_efforts`/`reasoning_default_effort` 思考档位及描述/标签/倍率等全字段（上游有返回时） |
 | `GET /status` | Bearer（`api_key` 非空时） | 账号状态汇总 + 每账号详情（积分/冷却/熔断/在途/粘性） |
 | `GET /healthz` | 无 | 健康检查：有 healthy 且未占满账号返回 200，否则 503；响应带身份标识（见下） |
 
@@ -683,10 +684,10 @@ http://127.0.0.1:7863/panel/
 `/healthz` 响应示例（200 / 503 同结构，仅状态码与计数变化）：
 
 ```json
-{"healthy": 2, "total": 3, "service": "workbuddy2api"}
+{"healthy": 2, "total": 3, "service": "workbuddy2api", "realm_servable": {"cn": true, "global": false}}
 ```
 
-响应同时带 `X-Service: workbuddy2api` 头。这两个身份标识用于区分**本网关**与同端口上可能残留的其他服务——对方即使返回 2xx 也不会带该字段 / 头，宿主探测据此避免"假成功"。
+响应同时带 `X-Service: workbuddy2api` 头。这两个身份标识用于区分**本网关**与同端口上可能残留的其他服务——对方即使返回 2xx 也不会带该字段 / 头，宿主探测据此避免"假成功"。`realm_servable` 给出 `cn` / `global` 两域各自当前是否可服务（双域部署时用于分域告警，不影响上面的 200/503 判活语义）。
 
 **宿主健康探测指引**：强校验（推荐）用 `/status` + `api_key`——只有持有正确 `api_key` 的本网关返回 200，其他服务返回 401 / 404；弱校验（不适合持 key 的负载均衡器）用 `/healthz` + `service` 字段判据（`/healthz` 恒无鉴权，`service == "workbuddy2api"` 才算命中本网关）。容器自带 `HEALTHCHECK` 用的就是弱校验（仅进程内自检，够用）。
 
@@ -863,7 +864,7 @@ python3 scripts/probe_max_tokens.py   --base http://127.0.0.1:7863/v1 --key sk-x
 
 ### 多图会话请求体超限怎么办？
 
-网关**不再设请求体上限**（`server.max_body_mb` 已移除，对齐上游）：任意大小的请求体都会完整读入并转发上游，超限类问题由上游自然返回错误——其响应信息量更大（能看到上游的真实策略），网关不再以 413 提前拦截。
+网关**默认不设请求体上限**（`server.max_body_mb` 缺省为 `0`）：任意大小的请求体都会完整读入并转发上游，超限类问题由上游自然返回错误——其响应信息量更大（能看到上游的真实策略），网关不以 413 提前拦截。若部署在公网、需要一道本地防线，把 `server.max_body_mb` 设为正值（如 `32`）即启用：超过上限的请求在读取 body 前就被 `http.MaxBytesReader` 拒绝，返回 413（Anthropic 端点回 `request_too_large`），不再消耗选号与上游配额。这是纯 opt-in 开关，改回 `0` 即恢复原行为。
 
 - 多图/长上下文会话（历史图片每轮以 base64 重发，编码再膨胀约 37%）不会再撞网关侧 413
 - 若上游真的返回 413/超限错误，网关按既有错误分类链路如实透传（不打码、不罚号——超限是请求侧问题）
@@ -905,7 +906,7 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 | 断言 | 出处 |
 |---|---|
 | `prompt.mode` 默认 `custom` | `cmd/server/config.go:148` |
-| 请求体无网关侧上限（max_body_mb 已移除） | `internal/server/handler.go` chatCompletions 读 body 段 |
+| 请求体默认无网关侧上限（`server.max_body_mb` = 0）；配正值时读 body 前套 `http.MaxBytesReader` 回 413 | `internal/server/handler.go` chatCompletions 读 body 段 · `requestBody()` |
 | 出站强制 `stream:true` | `internal/upstream/payload.go:28` |
 | DeepSeek 思维链注入（`thinking.type=enabled`） | `internal/upstream/thinking.go:110` |
 | 默认 `reasoning_effort` 档位 = `high` | `internal/upstream/thinking.go:32` |

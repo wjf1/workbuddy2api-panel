@@ -96,6 +96,12 @@ type Config struct {
 	SearchMaxResults int
 	// SearchTimeout 单次检索超时（缺省 10s）。
 	SearchTimeout time.Duration
+
+	// MaxBodyBytes 入站请求体上限（字节，来自 config server.max_body_mb）。
+	// 0 = 不限制（缺省：与 max_body_mb 移除后的现状完全一致，读 body 路径零差异）。
+	// >0 时仅在 /v1/chat/completions 与 /v1/messages（含 count_tokens）读 body 前
+	// 套 http.MaxBytesReader，超限就地 413——是纯 opt-in 的防护旋钮，不是默认行为。
+	MaxBodyBytes int64
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -667,16 +673,43 @@ func cachedModelsSnapshot() []upstream.ModelInfo {
 	return dynamicModelsCache.ids
 }
 
+// requestBody 返回入站 body 的读取源：limit<=0（缺省）时原样返回 r.Body，
+// 与「网关侧无上限」的既有读法完全一致；limit>0 时才套 http.MaxBytesReader，
+// 读超限返回 *http.MaxBytesError（调用方据此回 413）。
+func requestBody(w http.ResponseWriter, r *http.Request, limit int64) io.Reader {
+	if limit <= 0 {
+		return r.Body
+	}
+	return http.MaxBytesReader(w, r.Body, limit)
+}
+
+// isBodyTooLarge 报告读 body 的错误是否来自 requestBody 的上限（区别于客户端断流）。
+func isBodyTooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
+}
+
+// bodyTooLargeMsg 413 文案：带配置项名与生效的 MB 值，便于用户定位到旋钮。
+func (h *Handler) bodyTooLargeMsg() string {
+	return fmt.Sprintf("request body too large: limit %d MB (server.max_body_mb)", h.cfg.MaxBodyBytes>>20)
+}
+
 func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 客户端 IP 提取（按请求传递到 ChatStream，不透传时 upstream 侧忽略）；
 	// 消除早年共享字段方案的并发交叉污染（issue：ClientIP 竞态）。
 	clientIP := upstream.ExtractClientIP(r)
-	// 请求体无大小上限（max_body_mb 已移除，对齐上游）：完整读入，超限类问题交由
-	// 上游自然返回错误（其响应经既有错误分类链路透出，信息量更大）。#41 的截断
-	// 防御语义保留在读错误路径——移除预拦截后，截断只可能来自客户端自己断流，
+	// 请求体缺省无大小上限（max_body_mb 缺省 0，对齐上游）：完整读入，超限类问题
+	// 交由上游自然返回错误（其响应经既有错误分类链路透出，信息量更大）。仅当
+	// server.max_body_mb>0 显式开启时才套 MaxBytesReader 就地 413。#41 的截断
+	// 防御语义保留在读错误路径——未开上限时截断只可能来自客户端自己断流，
 	// 读 body 出错就地 400，不把半截 JSON 喂上游 unmarshal 报 unexpected EOF 冤枉罚号。
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(requestBody(w, r, h.cfg.MaxBodyBytes))
 	if err != nil {
+		if isBodyTooLarge(err) {
+			log.Printf("WARN: [server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, clientIP)
+			writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request_too_large", h.bodyTooLargeMsg())
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}

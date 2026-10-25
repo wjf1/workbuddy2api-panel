@@ -465,6 +465,9 @@ func TestChatLogsErrorRow(t *testing.T) {
 
 func TestHealthzDoesNotLogTableRow(t *testing.T) {
 	withChatLog(t) // 日志开启也应无表格行：非 chat 路由根本不走 logChatRow
+	// 本用例会打 /v1/models（假上游返回非目录 JSON → 拉取失败写 lastFail），
+	// 不清缓存就会把 5min 负缓存留给后续用例。
+	resetDynamicModelsCache(t)
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	h := NewHandler(Config{Pool: p, Upstream: newFakeUpstream(t, func(string) (int, string, bool) {
 		return 200, sseOK, true

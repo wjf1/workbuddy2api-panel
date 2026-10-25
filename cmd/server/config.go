@@ -52,6 +52,12 @@ type Config struct {
 		// 400 "read body: ... i/o timeout"。缺省 "300s"；"0" = 不限制
 		//（慢速 body 可无限占用连接，自担风险）；改动需重启进程。
 		ReadTimeout string `json:"read_timeout"` // "300s"；"0" = 不限制
+		// MaxBodyMB 入站请求体大小上限（MB），对 /v1/chat/completions 与
+		// /v1/messages（含 count_tokens）生效。**缺省 0 = 不限制**（与
+		// max_body_mb 移除后的现状完全一致，零行为差异）；只在显式配 >0 时
+		// 才套 http.MaxBytesReader，超限就地 413，不打上游、不罚号。
+		// 负数按 0 处理（normalize）。改动需重启进程。
+		MaxBodyMB int `json:"max_body_mb"`
 	} `json:"server"`
 
 	Cooldown struct {
@@ -328,6 +334,8 @@ type Config struct {
 	CostExploreIntervalDur time.Duration `json:"-"`
 	// ServerReadTimeoutDur 解析后的入站请求读取上限（issue #100）；0 = 不限制。
 	ServerReadTimeoutDur time.Duration `json:"-"`
+	// ServerMaxBodyBytes 解析后的入站请求体上限（server.max_body_mb）；0 = 不限制。
+	ServerMaxBodyBytes int64 `json:"-"`
 }
 
 // Default 默认配置。
@@ -619,6 +627,12 @@ func (c *Config) normalize() error {
 	if c.ServerReadTimeoutDur < 0 {
 		return fmt.Errorf("server.read_timeout: 负时长 %q 无意义", c.Server.ReadTimeout)
 	}
+	// 请求体上限（server.max_body_mb）：0 = 不限制（缺省，与移除后的现状一致）；
+	// 负数无语义，按 0 处理（等同于不限制，不报错——纯可选项，配错不至于起不来）。
+	if c.Server.MaxBodyMB < 0 {
+		c.Server.MaxBodyMB = 0
+	}
+	c.ServerMaxBodyBytes = int64(c.Server.MaxBodyMB) << 20
 	if c.SoftRateDur, err = time.ParseDuration(c.Cooldown.SoftRate); err != nil {
 		return fmt.Errorf("cooldown.soft_rate: %w", err)
 	}

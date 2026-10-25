@@ -4,8 +4,10 @@
 //   - index.html  页面骨架
 //   - app.js      全部前端逻辑（独立文件而非内联，为了启用无需 unsafe-inline 的严格 CSP）
 //
-// 安全头对"面板页面与全部 /panel/api/* 响应"统一生效：CSP 限制脚本只能来自本服务，
+// 安全头只作用于面板的两个静态响应（index/appScript）：CSP 限制脚本只能来自本服务，
 // 禁止被 iframe 嵌套（防点击劫持），禁 MIME 嗅探，并声明不泄露 Referer 出去。
+// /panel/api/* 是 JSON 数据接口，不带这组头——它们靠 Bearer 鉴权 + JSON 内容类型，
+// CSP 对 JSON 无意义。（早期注释写成"页面与全部 api 统一生效"，与实现不符，已纠正。）
 package panel
 
 import (

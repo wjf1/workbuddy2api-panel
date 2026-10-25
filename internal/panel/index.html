@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,7 +12,12 @@
   --bg: #0c0e14; --surface: #14171f; --surface-2: #1a1e28; --raise: #202531;
   --line: #262c3a; --line-soft: #1e232e;
   --ink: #e8ebf2; --ink-2: #a8b0c2; --ink-3: #85909f;
+  /* accent 用于描边/焦点/链接；accent-btn 专给实心按钮底色——白字在 #5b7cfa 上
+     只有 3.68:1（不达 AA 4.5），压深到 #4a63d8 后 5.16:1。两者分开，避免为了按钮
+     文字对比而把全局强调色压暗。accent-on-soft 用于「强调色文字落在 accent-soft
+     底色上」的场景（导航激活项，原 #5b7cfa 仅 4.17:1）。 */
   --accent: #5b7cfa; --accent-ink: #ffffff; --accent-soft: rgba(91,124,250,.13);
+  --accent-btn: #4a63d8; --accent-on-soft: #7d97ff;
   --ok: #3ddc97; --ok-soft: rgba(61,220,151,.12);
   --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
   --bad: #f0655f; --bad-soft: rgba(240,101,95,.12);
@@ -20,14 +25,33 @@
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
+/* ── 浅色令牌 ────────────────────────────────────────────────────────
+   两处生效：① 用户显式切浅色（[data-theme="light"]）；② 系统偏好浅色且尚未选过
+   主题（首帧，:root:not([data-theme])）。②是为了消除 FOUC——data-theme 由 app.js
+   末尾写入，若只留①，浅色系统用户会先看到一帧深色。**两块内容必须同值**。
+   对比度均为实测值（WCAG AA 4.5:1 门槛，见各值后标注），改色请重新验算。 */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f8f9fb; --raise: #ffffff;
+    --line: #e2e5ec; --line-soft: #eceef3;
+    --ink: #14171f; --ink-2: #545c6e; --ink-3: #646d7d;
+    --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
+    --accent-btn: #3d5fe0; --accent-on-soft: #3d5fe0;
+    --ok: #0a7d4e; --ok-soft: rgba(10,125,78,.1);
+    --warn: #9c6410; --warn-soft: rgba(156,100,16,.11);
+    --bad: #c2352e; --bad-soft: rgba(194,53,46,.09);
+    --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
+  }
+}
 [data-theme="light"] {
   --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f8f9fb; --raise: #ffffff;
   --line: #e2e5ec; --line-soft: #eceef3;
-  --ink: #14171f; --ink-2: #545c6e; --ink-3: #6f7889;
+  --ink: #14171f; --ink-2: #545c6e; --ink-3: #646d7d;
   --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
-  --ok: #0f9d63; --ok-soft: rgba(15,157,99,.1);
-  --warn: #b47611; --warn-soft: rgba(180,118,17,.11);
-  --bad: #cf3b34; --bad-soft: rgba(207,59,52,.09);
+  --accent-btn: #3d5fe0; --accent-on-soft: #3d5fe0;
+  --ok: #0a7d4e; --ok-soft: rgba(10,125,78,.1);
+  --warn: #9c6410; --warn-soft: rgba(156,100,16,.11);
+  --bad: #c2352e; --bad-soft: rgba(194,53,46,.09);
   --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -56,16 +80,16 @@ body {
   color: var(--ink-2); text-decoration: none; border-radius: 7px; font-size: 13.5px;
 }
 .nav a:hover { background: var(--surface-2); color: var(--ink); }
-.nav a.on { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
+.nav a.on { background: var(--accent-soft); color: var(--accent-on-soft); font-weight: 550; }
 .nav a svg { width: 15px; height: 15px; flex: none; opacity: .85; }
 .nav .sig { padding: 12px 16px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--ink-3); }
 .nav .sig .row { display: flex; align-items: center; gap: 7px; }
 /* 日志频道筛选 chips */
 .chips { display: inline-flex; gap: 4px; align-items: center; }
 .chips .chip { padding: 2px 10px; border-radius: 999px; }
-.chips .chip.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 550; }
+.chips .chip.on { background: var(--accent-soft); color: var(--accent-on-soft); border-color: transparent; font-weight: 550; }
 .ln .lch { font-style: normal; display: inline-block; font-size: 10px; line-height: 1; padding: 2px 6px; border-radius: 4px; margin-right: 8px; vertical-align: 1px; }
-.ln .lch.c-task { background: var(--accent-soft); color: var(--accent); }
+.ln .lch.c-task { background: var(--accent-soft); color: var(--accent-on-soft); }
 .ln .lch.c-chat { background: var(--ok-soft); color: var(--ok); }
 .ln .lch.c-sys { background: var(--surface-2); color: var(--ink-3); }
 
@@ -155,7 +179,7 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 550; }
+button.primary { background: var(--accent-btn); border-color: var(--accent-btn); color: var(--accent-ink); font-weight: 550; }
 button.primary:hover:not(:disabled) { filter: brightness(1.08); }
 button.ghost { background: transparent; }
 button.danger { color: var(--bad); }
@@ -263,7 +287,7 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 #taskTable .who .nm, #taskTable .who .id { white-space: normal; word-break: break-all; }
 .who .nm { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .who .id { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.realm-tag { display: inline-block; margin-left: 6px; padding: 1px 5px; border-radius: 4px; font: 500 10px/1 var(--sans); color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); vertical-align: 1px; }
+.realm-tag { display: inline-block; margin-left: 6px; padding: 1px 5px; border-radius: 4px; font: 500 10px/1 var(--sans); color: var(--accent-on-soft); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); vertical-align: 1px; }
 .realm-row { display: flex; align-items: center; gap: 14px; padding: 4px 0 10px; }
 .realm-opt { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .realm-opt input { accent-color: var(--accent); margin: 0; }
@@ -279,9 +303,9 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 }
 .usage-item b { font-weight: 650; }
 .usage-item em { margin-left: 2px; font: 500 10px/1 var(--sans); font-style: normal; }
-.usage-count { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 18%, transparent); }
+.usage-count { color: var(--accent-on-soft); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 18%, transparent); }
 .usage-total {
-  color: var(--accent); background: var(--accent-soft);
+  color: var(--accent-on-soft); background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 6%, transparent);
 }
@@ -764,8 +788,8 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <table class="acc" id="accTable">
           <thead><tr>
             <th class="mark" aria-hidden="true"></th>
-            <th>账号</th><th>状态</th><th>积分</th>
-            <th>成功 / 失败</th><th>在途</th><th>用量</th><th>最近成功</th><th class="c-acts"></th>
+            <th scope="col">账号</th><th scope="col">状态</th><th scope="col">积分</th>
+            <th scope="col">成功 / 失败</th><th scope="col">在途</th><th scope="col">用量</th><th scope="col">最近成功</th><th scope="col" class="c-acts"></th>
           </tr></thead>
           <tbody id="accBody"></tbody>
         </table>
@@ -855,7 +879,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
         <div class="tbl-wrap">
         <table class="acc md">
-          <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th><th>默认档</th><th>支持的思考档位</th><th>上下文长度</th><th>最大输出</th></tr></thead>
+          <thead><tr><th class="mark" aria-hidden="true"></th><th scope="col">模型</th><th scope="col">积分倍率</th><th scope="col">默认档</th><th scope="col">支持的思考档位</th><th scope="col">上下文长度</th><th scope="col">最大输出</th></tr></thead>
           <tbody id="mdBody"></tbody>
         </table>
         </div>
@@ -1273,9 +1297,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="tbl-wrap req-wrap">
           <table class="acc req">
             <thead><tr>
-              <th>时间</th><th>结果</th><th>模型</th><th>账号</th>
-              <th>来源 IP</th><th>User-Agent</th>
-              <th class="num">耗时</th><th class="num">Token</th><th class="num">积分</th><th>请求 ID</th>
+              <th scope="col">时间</th><th scope="col">结果</th><th scope="col">模型</th><th scope="col">账号</th>
+              <th scope="col">来源 IP</th><th scope="col">User-Agent</th>
+              <th scope="col" class="num">耗时</th><th scope="col" class="num">Token</th><th scope="col" class="num">积分</th><th scope="col">请求 ID</th>
             </tr></thead>
             <tbody id="reqBody"></tbody>
           </table>
@@ -1312,7 +1336,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <div class="state" id="taskState"><span class="dots">加载中</span></div>
       <div class="tbl-wrap">
         <table class="acc md" id="taskTable" hidden>
-          <thead><tr><th class="mark" aria-hidden="true"></th><th>任务</th><th>进度</th><th>奖励</th><th>状态</th><th class="c-acts"></th></tr></thead>
+          <thead><tr><th class="mark" aria-hidden="true"></th><th scope="col">任务</th><th scope="col">进度</th><th scope="col">奖励</th><th scope="col">状态</th><th scope="col" class="c-acts"></th></tr></thead>
           <tbody id="taskBody"></tbody>
         </table>
       </div>

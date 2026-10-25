@@ -254,6 +254,37 @@ func TestNegativeExpiringSoonClampsToDisabled(t *testing.T) {
 	}
 }
 
+func TestServerMaxBodyMBNormalize(t *testing.T) {
+	// 缺省 0 = 不限制（不在 config 里出现也不写默认值，行为同 max_body_mb 移除后）。
+	c := Default()
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.MaxBodyMB != 0 || c.ServerMaxBodyBytes != 0 {
+		t.Fatalf("default max_body_mb=%d/%d want 0/0", c.Server.MaxBodyMB, c.ServerMaxBodyBytes)
+	}
+	// 显式 >0 → 折算字节数；负数按 0（不限制）处理。
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+	os.WriteFile(fp, []byte(`{"server":{"max_body_mb":8}}`), 0o600)
+	c, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ServerMaxBodyBytes != 8<<20 {
+		t.Fatalf("max_body_mb=8 → %d bytes, want %d", c.ServerMaxBodyBytes, 8<<20)
+	}
+	fp2 := filepath.Join(dir, "c2.json")
+	os.WriteFile(fp2, []byte(`{"server":{"max_body_mb":-3}}`), 0o600)
+	c2, err := Load(fp2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Server.MaxBodyMB != 0 || c2.ServerMaxBodyBytes != 0 {
+		t.Fatalf("negative max_body_mb=%d/%d want 0/0", c2.Server.MaxBodyMB, c2.ServerMaxBodyBytes)
+	}
+}
+
 func TestSoftRateMaxEmptyFallsBackToDefault(t *testing.T) {
 	// 键缺席 → Default() 的 2h 保留（空串无法 ParseDuration）。
 	dir := t.TempDir()

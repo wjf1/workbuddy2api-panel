@@ -13,7 +13,8 @@
     "request_client_info": true
   },
   "server": {
-    "read_timeout": "300s"
+    "read_timeout": "300s",
+    "max_body_mb": 0
   },
   "cooldown": {
     "soft_rate": "600s",

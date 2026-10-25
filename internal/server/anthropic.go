@@ -27,8 +27,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
 // ---------------------------------------------------------------------------
@@ -378,8 +381,13 @@ func convertAnthropicToolChoice(raw json.RawMessage) any {
 
 // messagesAnthropic POST /v1/messages 入口。
 func (h *Handler) messagesAnthropic(w http.ResponseWriter, r *http.Request) {
-	raw, err := io.ReadAll(r.Body)
+	raw, err := io.ReadAll(requestBody(w, r, h.cfg.MaxBodyBytes))
 	if err != nil {
+		if isBodyTooLarge(err) {
+			log.Printf("WARN: [server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, upstream.ExtractClientIP(r))
+			writeAnthropicError(w, http.StatusRequestEntityTooLarge, "request_too_large", h.bodyTooLargeMsg())
+			return
+		}
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "read body: "+err.Error())
 		return
 	}
@@ -431,8 +439,13 @@ func (h *Handler) messagesAnthropic(w http.ResponseWriter, r *http.Request) {
 // 接近 1 token/字，对英文偏保守（约 4 字节/token，高估 ~30%）。仅用于客户端
 // 上下文管理的近似判断，不承诺精确值。
 func (h *Handler) countTokensAnthropic(w http.ResponseWriter, r *http.Request) {
-	raw, err := io.ReadAll(r.Body)
+	raw, err := io.ReadAll(requestBody(w, r, h.cfg.MaxBodyBytes))
 	if err != nil {
+		if isBodyTooLarge(err) {
+			log.Printf("WARN: [server] reject oversized body: path=%s limit=%dMB ip=%s", r.URL.Path, h.cfg.MaxBodyBytes>>20, upstream.ExtractClientIP(r))
+			writeAnthropicError(w, http.StatusRequestEntityTooLarge, "request_too_large", h.bodyTooLargeMsg())
+			return
+		}
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "read body: "+err.Error())
 		return
 	}

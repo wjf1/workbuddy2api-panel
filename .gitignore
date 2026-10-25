@@ -51,3 +51,8 @@ server.exe
 # 发布产物与本地缓存（不入版本库）
 /dist/
 /rel.json
+
+# 设计文档纳入版本库（原 docs/ 整目录被忽略，导致 DESIGN-v1.16.0.md 从未入库；
+# 上面的 *.md 通配同样会命中，故目录与其下文件都要白名单——gitignore 规则后者优先）
+!docs/
+!docs/**

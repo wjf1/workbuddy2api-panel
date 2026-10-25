@@ -400,6 +400,8 @@ func main() {
 		Search:           searcher,
 		SearchMaxResults: cfg.Search.MaxResults,
 		SearchTimeout:    time.Duration(cfg.Search.TimeoutSeconds) * time.Second,
+		// 入站请求体上限（server.max_body_mb；0 = 不限制，缺省即现状）。
+		MaxBodyBytes: cfg.ServerMaxBodyBytes,
 	})
 	// 上游排队门控快照注入面板：排队（6020/6021）是上游服务端队列水位、与账号无关，
 	// 面板横幅据此区分它与账号限流（handler 已装配完，此处才拿得到 h）。
@@ -430,7 +432,8 @@ func main() {
 		Handler:           h,
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout 覆盖整个请求读取（含 body 上传）：防慢速 body 拖死连接。
-		// 请求体已无网关侧上限（max_body_mb 移除）。缺省 300s（issue #100：旧固定
+		// 请求体缺省无网关侧上限（server.max_body_mb 缺省 0；显式 >0 时由 handler
+		// 在 /v1 入口套 MaxBytesReader 回 413）。缺省 300s（issue #100：旧固定
 		// 60s 会掐掉大上下文/文件块经反代链的慢速上传，客户端收到
 		// 400 "read body: ... i/o timeout"）；server.read_timeout="0" 显式关闭。
 		// 改动需重启进程。
@@ -679,6 +682,7 @@ func restartRequiredDiff(oldC, newC *Config) []string {
 	add(oldC.Logging.RequestRetentionDays != newC.Logging.RequestRetentionDays, "logging.request_retention_days")
 	add(oldC.Logging.RequestArchiveMaxMB != newC.Logging.RequestArchiveMaxMB, "logging.request_archive_max_mb")
 	add(oldC.ServerReadTimeoutDur != newC.ServerReadTimeoutDur, "server.read_timeout")
+	add(oldC.ServerMaxBodyBytes != newC.ServerMaxBodyBytes, "server.max_body_mb")
 	add(oldC.Auths.StrictLease != newC.Auths.StrictLease, "auths.strict_lease")
 	add(oldC.Prompt.Mode != newC.Prompt.Mode, "prompt.mode")
 	add(oldC.Prompt.File != newC.Prompt.File, "prompt.file")
