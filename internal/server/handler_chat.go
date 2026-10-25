@@ -528,9 +528,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					// 空 body 兜底：无上游原文可透传，保留可读分类文案（不编造原文）。
 					msg = "content blocked by upstream content firewall"
 				}
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "content_blocked", msg,
+				writeOpenAIErrorHint(w, httpStatusForKind(kind), "content_blocked", msg,
 					h.hintOf(upstream.ErrContentBlocked, string(respBody), bareModel, reqHasImage, uerr))
-				st.status = http.StatusBadRequest
+				st.status = httpStatusForKind(kind)
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
@@ -543,9 +543,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if kind == upstream.ErrPromptTooLong {
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 				fail(acct.UID)
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "prompt_too_long", promptTooLongMessage(string(respBody)),
+				writeOpenAIErrorHint(w, httpStatusForKind(kind), "prompt_too_long", promptTooLongMessage(string(respBody)),
 					h.hintOf(upstream.ErrPromptTooLong, string(respBody), bareModel, reqHasImage, uerr))
-				st.status = http.StatusBadRequest
+				st.status = httpStatusForKind(kind)
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
@@ -558,9 +558,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				if strings.TrimSpace(msg) == "" {
 					msg = "image request was rejected by upstream"
 				}
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "image_invalid", msg,
+				writeOpenAIErrorHint(w, httpStatusForKind(kind), "image_invalid", msg,
 					h.hintOf(upstream.ErrImageInvalid, string(respBody), bareModel, reqHasImage, uerr))
-				st.status = http.StatusBadRequest
+				st.status = httpStatusForKind(kind)
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
@@ -576,9 +576,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				if strings.TrimSpace(msg) == "" {
 					msg = "chat request body was rejected by upstream"
 				}
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "bad_params", msg,
+				writeOpenAIErrorHint(w, httpStatusForKind(kind), "bad_params", msg,
 					h.hintOf(upstream.ErrBadParams, string(respBody), bareModel, reqHasImage, uerr))
-				st.status = http.StatusBadRequest
+				st.status = httpStatusForKind(kind)
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
@@ -595,9 +595,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				if strings.TrimSpace(msg) == "" {
 					msg = "chat request parameters were rejected by upstream"
 				}
-				writeOpenAIErrorHint(w, http.StatusBadRequest, "model_param_invalid", msg,
+				writeOpenAIErrorHint(w, httpStatusForKind(kind), "model_param_invalid", msg,
 					h.hintOf(upstream.ErrModelParamInvalid, string(respBody), bareModel, reqHasImage, uerr))
-				st.status = http.StatusBadRequest
+				st.status = httpStatusForKind(kind)
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
@@ -810,10 +810,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if queueBusy {
-		writeOpenAIErrorHint(w, http.StatusTooManyRequests, "upstream_queue_busy",
+		// 状态码同样取自映射表（ERRUpstreamQueue → 429），与末端 UpstreamQueue 分支一致。
+		qStatus := httpStatusForKind(upstream.ErrUpstreamQueue)
+		writeOpenAIErrorHint(w, qStatus, "upstream_queue_busy",
 			queueBusyMessage(queueInfo),
 			upstream.GatewayHint(upstream.ErrUpstreamQueue, "", upstream.HintContext{}))
-		st.status = http.StatusTooManyRequests
+		st.status = qStatus
 		st.outcome = reqlog.OutcomeHTTPError
 		return
 	}
@@ -832,9 +834,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var ue *upstream.Error
 	if errors.As(lastErr, &ue) {
 		hint = h.hintOf(ue.Kind, ue.Msg, bareModel, reqHasImage, ue)
+		// 状态码统一由 errmap.go 的 httpStatusForKind 决定（单一事实来源）；
+		// 下面只组装 code 与文案——同类别在不同场景文案不同，但状态码必须一致。
+		status = httpStatusForKind(ue.Kind)
 		switch ue.Kind {
 		case upstream.ErrSoftRate:
-			status = http.StatusTooManyRequests
 			code = "rate_limit_exceeded"
 			msg = "rate limited: all accounts are cooling down, please wait a moment and try again"
 		case upstream.ErrUpstreamQueue:
@@ -842,7 +846,6 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// fail-fast 终止。回 429（客户端"等一会儿再试"的语义与限流一致），但 code
 			// 与 hint 明确区分「上游队列忙」而非「你的账号被限流」——否则面板与客户端
 			// 都会读成账号问题（2026-10-15 全池误冷却的认知根源）。
-			status = http.StatusTooManyRequests
 			code = "upstream_queue_busy"
 		case upstream.ErrWafBlock:
 			if h.wafIP.active() {
@@ -858,7 +861,6 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 客户端据此会不断重试（#81 里就是 503 → 客户端自动重试 5 次），而真正
 			// 该做的是换个模型。用 400 + 明确的 code 把不可重试的性质讲清楚。
 			code = "model_unavailable"
-			status = http.StatusBadRequest
 		}
 		if s := strings.TrimSpace(ue.Msg); s != "" {
 			// 上游原文优先：透传 code/msg/requestId，不拼接本地前缀。
