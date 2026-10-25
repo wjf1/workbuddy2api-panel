@@ -28,8 +28,13 @@ import (
 
 // TestMain 默认关闭聊天表格日志（chatLogEnabled=false），消除 go test 期间的 stdout 噪音。
 // 断言表格行输出的测试（logging_test.go 中的 ChatLogs/LogChatRow 系列）用 withChatLog 临时开启。
+//
+// 同时把轮转退避基数置 0：backoff.go 的注释一直声称「TestMain 已置 0」，实际从未设置，
+// 于是 16 个多轮转用例各白等 500ms（合计约 9s，占本包耗时大头）。没有任何用例断言退避
+// 时长；需要验证退避区间的用例可自行临时恢复该值。
 func TestMain(m *testing.M) {
 	chatLogEnabled = false
+	rotateBackoffBase = 0
 	os.Exit(m.Run())
 }
 
@@ -63,6 +68,26 @@ func newFakeUpstream(t *testing.T, behavior func(auth string) (status int, body 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// notCalledUpstream 返回一个"绝不该被调用"的假上游，以及校验函数。
+// 用于网关侧就地处置的用例（鉴权 401、参数校验、无可用号、纯本地读状态）：
+// 请求本就不该出网关，断言上游零调用比"打到真上游再拿 401/500"更严格，
+// 同时彻底去掉外网依赖（离线/CI 不再受上游可达性影响）。
+func notCalledUpstream(t *testing.T) (*upstream.Client, func()) {
+	t.Helper()
+	var n atomic.Int64
+	up := newFakeUpstream(t, func(string) (int, string, bool) {
+		n.Add(1)
+		// 用不可重试的 400 兜底：万一真被调到，快速失败而不是拖着轮转重试。
+		return 400, `{"code":400,"msg":"upstream must not be called (request should be settled at gateway)"}`, false
+	})
+	return up, func() {
+		t.Helper()
+		if got := n.Load(); got != 0 {
+			t.Errorf("upstream called %d time(s), want 0: request must be settled at gateway without any egress", got)
+		}
+	}
+}
 
 // bindStore 记录粘性绑定镜像调用（不联网），供 D4 端到端断言绑定收敛到最终成功号。
 type bindStore struct {
@@ -1401,7 +1426,9 @@ func TestStatusEndpoint(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", Nickname: "nick", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetCredits("u1", 42, 0)
 	// 配置 key 的部署：accounts 全量透出（1.18.1 起未配 key 的部署脱敏 accounts）。
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New(), APIKey: "sk-test"})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up, APIKey: "sk-test"})
 	req := httptest.NewRequest("GET", "/status", nil)
 	req.Header.Set("Authorization", "Bearer sk-test")
 	rec := httptest.NewRecorder()
@@ -1415,7 +1442,7 @@ func TestStatusEndpoint(t *testing.T) {
 	}
 	// 未配 key：accounts 脱敏为 null（计数汇总保留）——uid/昵称/成本台账不得
 	// 对任何能连到端口的人可见。
-	h2 := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	h2 := NewHandler(Config{Pool: p, Upstream: up})
 	rec2 := httptest.NewRecorder()
 	h2.ServeHTTP(rec2, httptest.NewRequest("GET", "/status", nil))
 	if rec2.Code != 200 {
@@ -1459,7 +1486,9 @@ func TestStatusInFlightFull(t *testing.T) {
 	p.Acquire("full")
 	defer p.Release("full")
 
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
 	if rec.Code != 200 {
@@ -1484,7 +1513,9 @@ func TestStatusPortraitFields(t *testing.T) {
 	p.NoteSuccess("u1")
 	p.NoteError("u1") // 记录 last_err + err_total（累计，不冷却）
 	p.Cooldown("u1", pool.CoolSoft, time.Hour, "429 rate limit")
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New(), APIKey: "sk-test"})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up, APIKey: "sk-test"})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/status", nil)
 	req.Header.Set("Authorization", "Bearer sk-test")
@@ -1521,7 +1552,9 @@ func TestStatusPortraitFields(t *testing.T) {
 
 // TestHealthzEmptyPool 空池（healthy=0）→ 503，表示暂不可服务。
 func TestHealthzEmptyPool(t *testing.T) {
-	h := NewHandler(Config{Pool: pool.New(""), Upstream: upstream.New()})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: pool.New(""), Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -1540,7 +1573,9 @@ func TestHealthzEmptyPool(t *testing.T) {
 func TestHealthz503WhenNoHealthy(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 	p.Disable("u1", "session dead")
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -1570,7 +1605,9 @@ func TestHealthz503WhenAllInFlightFull(t *testing.T) {
 	if p.ServableNow() {
 		t.Fatal("servable should be false when the only healthy account is in-flight full")
 	}
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -1589,7 +1626,9 @@ func TestHealthz503WhenAllInFlightFull(t *testing.T) {
 // TestHealthz200WhenHealthy 有健康账号 → 200。
 func TestHealthz200WithHealthy(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusOK {
@@ -1620,7 +1659,9 @@ func TestHealthzServiceIdentity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 			tc.setup(p)
-			h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+			up, assertNoUpstream := notCalledUpstream(t)
+			defer assertNoUpstream()
+			h := NewHandler(Config{Pool: p, Upstream: up})
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 			if rec.Code != tc.wantCode {
@@ -1643,9 +1684,11 @@ func TestHealthzServiceIdentity(t *testing.T) {
 // TestHealthzServiceIdentityWithoutAuth /healthz 保持无鉴权（负载均衡友好）：
 // 配了 api_key 也不要求 Bearer，身份字段照常返回。
 func TestHealthzServiceIdentityWithoutAuth(t *testing.T) {
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
 	h := NewHandler(Config{
 		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
-		Upstream: upstream.New(),
+		Upstream: up,
 		APIKey:   "secret",
 	})
 	rec := httptest.NewRecorder()
@@ -1660,7 +1703,9 @@ func TestHealthzServiceIdentityWithoutAuth(t *testing.T) {
 
 func TestStatusRequiresAuth(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", Nickname: "nick", AccessToken: "at", ExpiresAt: 9999999999})
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New(), APIKey: "secret"})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up, APIKey: "secret"})
 
 	// 无 token → 401
 	rec := httptest.NewRecorder()

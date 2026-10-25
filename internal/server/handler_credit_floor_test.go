@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
 // TestStatusCreditFloor /status 透出 pool 层的 credit_floor 生效值：
@@ -18,7 +17,9 @@ import (
 func TestStatusCreditFloor(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetCreditFloor(100)
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
 	if rec.Code != 200 {
@@ -36,7 +37,9 @@ func TestStatusCreditFloor(t *testing.T) {
 // TestStatusCreditFloorZeroOff 未配置（默认 0）同样透出 0（显式写出，零值不省略）。
 func TestStatusCreditFloorZeroOff(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
 	var body map[string]any
@@ -51,10 +54,10 @@ func TestStatusCreditFloorZeroOff(t *testing.T) {
 // TestCreditFloorBlocksPaidRequest 端到端：触底 + 实测收费模型 → 选号无候选，
 // 网关回 503（硬语义：宁 503 不打穿；免费模型照常可用）。
 //
-// 诚实性约束：本用例的 upstream 是打不通的假上游，floor 开与关最终都回 503——
+// 诚实性约束：本用例的 upstream 是"被调用即判失败"的毒桩——
 // 若只断言 503，就无法区分「floor 拦的」与「上游不可达」，断言会被虚假原因满足。
-// 真正证明拦截落在选号层的是**对照断言**：对照组（不开 floor）必须能选到 poor，
-// 实验组（开 floor）必须在同一条件下选不到号。
+// 因此除 503 外还断言上游零调用（请求根本没出网关）。真正证明拦截落在选号层的是
+// **对照断言**：对照组（不开 floor）必须能选到 poor，实验组（开 floor）必须在同一条件下选不到号。
 func TestCreditFloorBlocksPaidRequest(t *testing.T) {
 	const body = `{"model":"paid-model","messages":[{"role":"user","content":"hi"}]}`
 	// 对照组：不设 floor，其余逐字相同（同一触底号、同一 tier 2 观测）。
@@ -74,7 +77,9 @@ func TestCreditFloorBlocksPaidRequest(t *testing.T) {
 		t.Fatalf("floor 应在 pool 层拦住触底号，got %v（拦截必须发生在选号层，而非靠上游报错）", a.UID)
 	}
 
-	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
+	up, assertNoUpstream := notCalledUpstream(t)
+	defer assertNoUpstream()
+	h := NewHandler(Config{Pool: p, Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
 	if rec.Code != 503 {
