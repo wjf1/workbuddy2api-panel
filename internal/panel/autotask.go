@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
@@ -737,9 +738,15 @@ func taskProgressText(t *upstream.Task) string {
 }
 
 // truncateStr 截断错误文本（避免把上游长响应原样透给前端）。
+//
+// 上游错误文本多为中文，按字节硬切会把末尾字符切成半个（输出非法 UTF-8，面板显示 �）。
+// 回退到最近的 rune 起点，保证截断结果始终是合法 UTF-8。
 func truncateStr(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "…"
 }

@@ -3,6 +3,7 @@ package panel
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
@@ -148,5 +149,30 @@ func TestTruncateStr(t *testing.T) {
 	}
 	if got := truncateStr("0123456789abc", 10); !strings.HasSuffix(got, "…") {
 		t.Fatalf("截断结果应带省略号，got %q", got)
+	}
+}
+
+// TestTruncateStrKeepsValidUTF8 中文错误文本截断后必须仍是合法 UTF-8。
+//
+// 回归场景：s[:n] 按字节硬切，"任务未完成，请稍后再试" 这类中文报错会被切成半个字，
+// 面板 toast 与日志里显示成 �。
+func TestTruncateStrKeepsValidUTF8(t *testing.T) {
+	const msg = "任务未完成，请稍后再试" // 每字 3 字节
+	if !utf8.ValidString(truncateStr(msg, 10)) {
+		t.Fatalf("truncateStr(%q,10) = %q，含非法 UTF-8", msg, truncateStr(msg, 10))
+	}
+	// 10 落在第 4 个字中间（9 是三字边界）→ 回退到 9 字节。
+	if got := truncateStr(msg, 10); got != "任务未…" {
+		t.Fatalf("truncateStr 截断结果 = %q，want %q", got, "任务未…")
+	}
+	for n := 0; n <= len(msg)+2; n++ {
+		out := truncateStr(msg, n)
+		if !utf8.ValidString(out) {
+			t.Fatalf("truncateStr(%q,%d) = %q，含非法 UTF-8", msg, n, out)
+		}
+		// 前缀长度不许超过上限（省略号是额外加的，不算进去）。
+		if body := strings.TrimSuffix(out, "…"); len(body) > n {
+			t.Fatalf("truncateStr(%q,%d) 前缀长度 %d 超过上限", msg, n, len(body))
+		}
 	}
 }
