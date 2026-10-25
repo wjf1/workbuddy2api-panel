@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -74,7 +74,7 @@ func main() {
 			}
 			// refresh 后写回文件（权限问题已修复）；落盘失败必须暴露，否则重启回旧 token
 			if err := a.SaveAtomicRetry(); err != nil {
-				log.Printf("signin %s save: %v", a.UID, err)
+				logx.Warnf("signin %s save: %v", a.UID, err)
 			}
 		}
 
