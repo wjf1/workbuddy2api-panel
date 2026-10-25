@@ -40,10 +40,10 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `936750a` | `git log --oneline -1` |
+| HEAD | `e91fcc4` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 108 文件 / 33,501 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 108 文件 / 894 个 Test 函数 | 同上 |
+| 非测试代码 | 108 文件 / 33,513 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 109 文件 / 901 个 Test 函数 | 同上 |
 | `go test ./...` | **26 包全绿，0 个 no test files，约 11 秒**（scheduler 占 7.7s，panel 2.2s，其余 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
@@ -109,6 +109,9 @@ internal/
 | `0f9e896` | 前端行为断言：`logic_test.js` 60 条（零依赖，node 直接跑）+ Go 侧 `TestLogicJSBehavior`/`TestWBLogicDestructureMatches`/`TestLogicJSNeedsNoDOM`；三处反证实测 | `go test ./internal/panel -run 'TestLogic\|TestWBLogic\|TestIndexLoadsLogic' -v` |
 | `356498c` | 补齐 `cmd/credit`/`cmd/trial`/`cmd/signin` 三个工具的纯函数测试（此前零测试）：`packageRemainUsed`+不变量、`billingBaseFor`、`classifyTrial`、`isAlready`/`short`/`trunc`；4 处反证实测。**全仓 26 包，0 个 no test files** | `go test ./cmd/credit ./cmd/trial ./cmd/signin -count=1` |
 | `936750a` | `trunc` 改按 rune 边界截断（原来 `s[:n]` 会把中文昵称切成非法 UTF-8：`"张三李四"` 取 11 字节得到 `"张三李\xe5\x9b"`）；signin/trial 各加 `TestTruncKeepsValidUTF8` | `go test ./cmd/signin -run TestTruncKeepsValidUTF8 -v` |
+| `ee87353` | `internal/panel/autotask.go` 纯函数测试（`autoActionFor`/`autoActionIndex`/`isMPTaskCode`/`acceptStatusOr`/`taskProgressText`/`truncateStr`），5 处反证 | `go test ./internal/panel -run 'TestAutoAction\|TestIsMPTaskCode\|TestAcceptStatusOr\|TestTaskProgressText\|TestTruncateStr' -v` |
+| `d99ae1b` | `autoActionIndex` 补 `TrimSpace`，与 `autoActionFor` 同口径（原来带空白的 task_code 一侧命中、另一侧当未知，排序打乱依赖序） | `go test ./internal/panel -run TestAutoActionIndex -v` |
+| `e91fcc4` | `truncateStr` 改按 rune 边界截断（中文错误文本 `s[:n]+"…"` 会切出非法 UTF-8） | `go test ./internal/panel -run TestTruncateStr -v` |
 
 ---
 
@@ -166,7 +169,17 @@ internal/
 - **`go.mod` 加 `toolchain`**：`go 1.22.5` 已是 `toolchain` 能表达的同一件事（它同样会在 go 版本不够时触发工具链下载）。再加一行 `toolchain go1.22.5` 是空操作；写成更高的版本则会在 CI/运维机上多一次工具链下载，收益为 0。真需要固定工具链时用 `GOTOOLCHAIN` 环境变量按环境设，别写进仓库。
 
 ### P3 — 低成本清理
-圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）｜`panel/ring.go` 函数级覆盖率 67–100%（旧说的 7.5% 已过时）/ `upstream/dump.go` 仅剩 `dumpUpstream` 89.5%
+圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）
+
+**覆盖率缺口（按实际测量，别再引用旧数字）**：
+
+| 包 | 语句覆盖 | 说明 |
+|---|---|---|
+| `internal/panel` | **29.6%** | 全仓最低。`autotask.go`（1264 行 / 40 个函数）几乎全 0%，只覆盖了 6 个纯函数；`taskcenter.go`、`trash.go`、`backup.go`、`login.go`、`import.go` 基本未测。这是目前最大的测试缺口 |
+| `internal/panel/ring.go` | 函数级 67–100% | 旧文写的 7.5% 是文件级误读，已作废 |
+| `internal/upstream/dump.go` | 仅剩 `dumpUpstream` 89.5% | 其余函数已满覆盖 |
+
+补 `autotask.go` 的 `run*` 动作需要打桩上游（仓库里 `upstream.New` + `roundTripFunc` 的既有手法可用），属于「单独立项」级别，不要顺手塞进功能提交。
 
 > `cmd/*` 冒烟测试已在 `356498c` / `936750a` 完成，从本清单移除。
 
@@ -187,6 +200,7 @@ internal/
 ### 已知的坑
 1. **SSE 响应头只能设一次**：`anthropicStreamWriter.ensureSSEHeaders()` 在 `headerWritten` 后必须直接返回。它同时被当作 `ResponseWriter` 下传给 `chatCompletions`，其 `Header()` 直通底层 map 且**不持 `wmu`**；心跳在锁内改头 → 两个写者 → `fatal error: concurrent map writes`（进程级 abort，不可 recover）。**这是真实发生过的 P0。**
 2. **本机 `gofmt` 曾误报 149 个文件**：那是 CRLF 造成的，`*.go` 真实不合规是 25 个，已清理。现在 `.gitattributes` 固定 LF，本地与 CI 判定一致。改完代码先 `gofmt -w` 再提交，否则 CI 红。
+   **用脚本批量改文件时**：Python 的 `Path.write_text()` 在 Windows 上会把 `\n` 自动转成 `\r\n`，改完 `gofmt -l` 立刻点名该文件。要么 `write_text(s, newline='')` / `write_bytes(s.encode())`，要么顺手 `gofmt -w`，否则很容易把整文件行尾改掉混进 diff。
 3. **面板改完必须重新编译**：资源是 `go:embed`，不重新 build 等于没改。
 4. **仓库里可能挂着别人未提交的改动**（如 `internal/upstream/payload.go`、`payload_test.go` 的 `$ref` 解引用工作）。**提交前用 `git status` 确认，只 `git add` 你改的文件**，不要 `git add -A`。
 5. **`/v1/models` 是纯动态无兜底**：拉不到就返回空列表 + 5min 负缓存。`dynamicModelsCache` 是包级全局，测试里必须用 `resetDynamicModelsCache(t)`，否则会污染后续用例（曾被误判为"偶发 flaky"）。
@@ -282,3 +296,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | P2-4.2 收尾：其余 12 个包 229 处日志全部迁到 `logx`（含 panel/scheduler 两个最大的包），补装配契约测试；**4.2 完成** | `9fee070` |
 | 2026-10-26 | P2-4.5 第一步：前端纯函数层抽出 + 60 条行为断言（含 3 处反证）；DOM 逻辑仍无测试，需 DOM 运行时才能覆盖 | `0f9e896` |
 | 2026-10-26 | P3 第一批：`cmd/credit`/`cmd/trial`/`cmd/signin` 补纯函数测试（26 包全绿、0 个 no test files）；顺带修 `trunc` 切中文产生非法 UTF-8 | `936750a` |
+| 2026-10-26 | 任务中心纯函数测试（`autotask.go` 6 个）+ 两处同源修复：`autoActionIndex` 与 `autoActionFor` 对齐 TrimSpace、`truncateStr` 改 rune 边界；panel 覆盖 28.4% → 29.6% | `e91fcc4` |
