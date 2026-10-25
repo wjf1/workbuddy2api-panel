@@ -38,13 +38,21 @@ var taskPrefixes = []string{
 // tsPrefixRe log 包默认 flags（日期 时间）产生的行首时间戳。
 var tsPrefixRe = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
 
+// levelPrefixRe 分级日志（internal/logx）给 Warn/Error 行加的前缀。
+//
+// 为什么分类前要剥掉：任务类日志一旦按 Warn 记录，行首就变成 "WARN: checkin …"，
+// 前缀匹配失效 → 该行掉进 sys 频道。而"任务失败"正是运维在「任务」筛选里要找的东西，
+// 掉频道等于在最需要看到的时候消失。剥掉只影响分类，Text 仍保留前缀供人眼识别级别。
+var levelPrefixRe = regexp.MustCompile(`^(?:WARN|ERR): `)
+
 // classifyLine 按行首特征归类频道。
 func classifyLine(line string) string {
 	if strings.HasPrefix(line, "| #") { // chat 表格日志（server/logging.go logChatRow）
 		return ChChat
 	}
+	body := levelPrefixRe.ReplaceAllString(line, "")
 	for _, p := range taskPrefixes {
-		if strings.HasPrefix(line, p) {
+		if strings.HasPrefix(body, p) {
 			return ChTask
 		}
 	}

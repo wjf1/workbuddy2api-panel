@@ -18,6 +18,13 @@ func TestClassifyLine(t *testing.T) {
 		"panel: revive uid=x":                                           ChSys,
 		"workbuddy2api listening on :7863":                              ChSys,
 		"scheduler: 余额后台刷新每 5m0s":                                       ChSys,
+
+		// 分级日志（internal/logx）的级别前缀：任务行加了 WARN:/ERR: 之后
+		// 仍必须落在任务频道——"任务失败"正是运维在任务筛选里要找的行。
+		"WARN: checkin 5c162cc9: 签到失败: 429":         ChTask,
+		"ERR: travel c8a3e793: 领取失败":                ChTask,
+		"WARN: [usage] 读取 data/usage.json 失败（从零开始）": ChSys,
+		"ERR: 无模块前缀的失败行":                            ChSys,
 	}
 	for line, want := range cases {
 		if got := classifyLine(line); got != want {
@@ -46,5 +53,25 @@ func TestRingWriteStripsTimestamp(t *testing.T) {
 	}
 	if time.Since(es[0].TS) > 5*time.Second {
 		t.Errorf("stale ts: %v", es[0].TS)
+	}
+}
+
+// TestRingKeepsLevelPrefixInText 级别前缀只用于「剥掉后分类」，显示文字必须原样保留：
+// 运维要一眼看出这条任务是失败还是正常，剥掉等于把级别信息弄丢。
+func TestRingKeepsLevelPrefixInText(t *testing.T) {
+	r := NewRing(4)
+	const line = "2026/10/25 23:00:13 WARN: checkin x: 签到失败: 429"
+	if _, err := r.Write([]byte(line + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	es := r.Snapshot()
+	if len(es) != 1 {
+		t.Fatalf("entries=%d want 1", len(es))
+	}
+	if es[0].Ch != ChTask {
+		t.Errorf("channel=%q want %q", es[0].Ch, ChTask)
+	}
+	if want := "WARN: checkin x: 签到失败: 429"; es[0].Text != want {
+		t.Errorf("text=%q want %q", es[0].Text, want)
 	}
 }
