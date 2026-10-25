@@ -40,10 +40,10 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `3c1a87f` | `git log --oneline -1` |
+| HEAD | `94799e5` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 106 文件 / 33,056 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 97 文件 / 25,018 行 / 852 个 Test 函数 | 同上 |
+| 非测试代码 | 107 文件 / 33,204 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 101 文件 / 858 个 Test 函数 | 同上 |
 | `go test ./...` | **22 包全绿，约 10–12 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
@@ -92,6 +92,10 @@ internal/
 | `8160b3b` | `handler.go` 1962 行按端点族拆 5 文件（纯搬运） | 47 个声明零缺失、行多重集丢失 0 行 |
 | `6deb1b5` | 入站限流 `server.rate_limit_rps`（默认关）：令牌桶按 TCP 对端 IP、429+`Retry-After`、豁免 `/status` 与 `/healthz` | `go test ./internal/server -run 'TestRateLimiter\|TestHandlerRateLimit\|TestHandlerRejectsWith429' -v`（9 个用例） |
 | `3c1a87f` | 上游错误类别→HTTP 状态码收敛到 `errmap.go` 的单一表（此前散在 6 处）；附「每个 ErrKind 都必须表态」的完整性测试 | `go test ./internal/server -run TestHTTPStatusForKind -v`（2 个用例）。**注意：v1 审计说映射分散在 `backoff.go`/`degrade.go`/`handler.go` 三处是错的**，实际是 `handler_chat.go` 内 6 处 |
+| `92011e4` | 上游 `requestId` 与本地 rid 同列落台账：`Error.RequestID` + `ParseUpstreamRequestID`（三种形态）+ `reqlog.Event.upstream_request_id` | `go test ./internal/upstream -run 'TestParseUpstreamRequestID\|TestChatStreamErrorCarries' -v`；`go test ./internal/server -run TestRequestEventCarries -v` |
+| `be7747f` | 可选诊断监听 `server.debug_addr`（pprof + 低基数 `/metrics`），默认空关闭，**独立端口** | `go test ./cmd/server -run TestDebugServer -v`；`go test ./internal/server -run TestMainMuxHasNoDebug -v` |
+| `d4410a5` | CI 增加 `-race` 作业（pool/server/scheduler 三个包，首轮 `continue-on-error`） | 看 Actions 里 race job；本机无 gcc 跑不了 |
+| `94799e5` | 弹窗打开时给 `.shell` 加 `inert`（读屏不再能浏览遮罩背后内容） | `node --check internal/panel/app.js`；面板测试 |
 
 ---
 
@@ -99,23 +103,29 @@ internal/
 
 > 每条都写了「改哪里 / 怎么改 / 风险 / 验收」，可直接照做。完成后请删除该条并记入第 8 节日志。
 
-### P1 — 直接影响可用性、费用或后续开发效率
+### P1 — 需要先设计，不能盲改
 
-**4.1 上游 `requestId` 关联进日志**
-- 现状：网关自己的 `X-Request-Id` 和日志 `rid` 都有；**缺的是上游返回的 `requestId` 没被记录**，跨端排查接不上。
-- 改法：`Classify`/响应解析时把上游 `requestId` 取出，随流水行输出（如 `up_rid=...`）。HTTP 状态码映射已在 `errmap.go` 收口，这条只剩"把 ID 塞进日志"。
-
-**4.2 开启 `-race` 门禁**
-- 只能加在 Linux CI（本机无 gcc）。步骤：先在 CI 单独跑 `go test ./internal/pool ./internal/server ./internal/scheduler -race`，**确认全绿后再设为阻断**；项目 mutex+goroutine 密集，很可能暴露新问题，要有心理准备。
+**4.1 状态三源一致性（pool 内存 ↔ `state.json` ↔ Redis 镜像）**
+- 现状：`main.go` 的 `RestoreFromSnapshot()` 取"较新"的那份（比 `saved_at` / 文件 mtime），三处都能写，没有版本号也没有租约。并发写或时钟漂移时可能把**较旧的快照**覆盖上去。
+- 为什么没做（重点）：这不是"抽个函数"能解决的，盲改的后果是**账号冷却状态回滚**——被冷却的号重新进入轮换，轻则继续被上游拒（白烧请求），重则触底号被打穿、账号被判死。改之前必须先有"冲突场景会怎样"的测试，而当前 `pool` 的持久化测试只覆盖单源读写。
+- 建议路线（按顺序）：
+  1. 给状态快照加单调整数 `revision`（每次 Flush +1），恢复时**只接受 revision 更大**的那份，`saved_at` 降级为观测字段；
+  2. 补测试：本地旧 + Redis 新 → 采用 Redis；本地新 + Redis 旧 → 采用本地；revision 相同 → 采用本地（确定性，不靠时钟）；
+  3. 再考虑多实例写冲突（租约或 CAS），那需要 `redisstore` 支持 WATCH/MULTI。
+- 验收：上述三种组合的测试全绿 + 手工把 Redis 的 revision 调低后重启，状态不被回滚。
 
 ### P2 — 结构性债务
 
-- **4.3 弹窗改原生 `<dialog>`**：现在是 `div.veil` + 自建焦点陷阱（已可用），缺 top-layer / 背景 `inert` / `::backdrop`；读屏仍能浏览背景内容。
-- **4.4 三态一致性**：`pool`（内存）↔ `state.json`（快照）↔ `redisstore`（镜像）靠 `main.go` 的 `RestoreFromSnapshot()`「择新恢复」，并发写或时钟漂移可能回滚数据。需要单一真相源或版本号/租约。
-- **4.5 日志结构化**：全仓 249 处 `log.Printf`（非测试），级别靠字符串前缀；`internal/logfmt` 已存在未全量采用。建议迁 `log/slog` 并保留面板 ring 的频道分类。
-- **4.6 pprof / metrics 端点**：目前只有 `/status` 聚合计数，线上无法定位 CPU/内存热点。
-- **4.7 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。建议 README 拆「索引 + 专题页」，HANDOFF 只留「当前状态 + 下一步 + 避坑」。
-- **4.8 前端行为测试**：`app.js`(3449 行) 只有 `node --check` 语法检查 + CSP 断言，**无 node 时静默跳过**；73 处 `innerHTML` 无回归网。
+- **4.2 日志结构化（迁 `log/slog`）**：全仓 249 处 `log.Printf`（非测试），级别靠字符串前缀。**注意**：面板的 ring 与 `logfmt` 是按前缀/频道解析的，迁移必须保留输出形状（或同步改解析侧），否则面板会静默丢日志。建议一个包一个包迁，每迁一个包跑一次面板回归。
+- **4.3 弹窗完整迁移原生 `<dialog>`**：`inert` 与 `role/aria-modal` 已补（`94799e5`），剩下 top-layer（`showModal()` 天然置顶，不受 z-index 影响）与 `::backdrop`。属于结构性重写 8 个弹窗，需要人眼验收，建议单独一轮做。
+- **4.4 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。拆的时候注意仓库内外已有大量 `#锚点` 引用，改标题会断链；建议先加索引页再加专题页，最后才收缩主文档。
+- **4.5 前端行为测试**：`app.js`(3449 行) 只有 `node --check` + CSP 断言，且**无 node 时静默跳过**。要写行为测试得先把可测函数（`esc` / `dur` / 时间格式化 / 模型名解析）抽成可导出模块，是一次结构性改动，不建议在功能迭代中途做。
+
+### 明确不做的（及原因）
+
+- **给 `/metrics` 加 per-model / per-account 标签**：基数会炸到几千，先崩的是 Prometheus。要按维度拆，先上 exemplar 或降采样。
+- **全量 `-race` 阻断**：`-race` 作业目前是观察态（`continue-on-error`）。等它在 CI 里连续几轮全绿再转阻断——现在直接阻断大概率一次红到底。
+- **把 `strip_tool_metadata` 并进 `payload.go` 归一化链**：纯性能优化（省一次 parse），等 `payload.go` 没有在途改动时再做，避免两个工作混进同一 diff（见坑 #9）。
 
 ### P3 — 低成本清理
 圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）｜`cmd/*` 冒烟测试（signin/trial/credit 零测试）｜`go.mod` 加 `toolchain`｜`panel/ring.go` 覆盖率 7.5% / `upstream/dump.go` 0%
@@ -149,6 +159,8 @@ internal/
    这些文件内容与索引一致，`git add` 只刷新 stat 缓存、不会产生提交内容（用 `git diff --cached --name-only` 确认为空）。之后 `gofmt -l` 才会与 CI 结论一致。
 9. **`strip_tool_metadata` 的技术债**：配置项落在 `features` 段（与 `sanitize_blacklist_fingerprints` 同段，复用其热加载路径），实现放在独立文件 `internal/upstream/strip_metadata.go`，调用点挂在 `client.go` 的 `prepareBody`，**没有并进 `payload.go` 的归一化链**。原因是当时 `payload.go` 有他人未提交改动，并进去会把两个工作搅在同一个 diff 里。代价：开关开启时多一次 parse+marshal（默认关闭时零成本）。后续若要优化，可把它合并进 `PrepareBodyOptWithEffortsAndDefault` 的同一次解析。
 10. **限流键刻意不用 `X-Forwarded-For`**：`internal/server/ratelimit.go` 的 `rateKey()` 取的是 `RemoteAddr` 的主机部分。XFF / X-Real-IP 客户端可任意伪造，按它限流等于"每请求换一个伪造 IP 拿无限额度"，限流形同虚设。代价是反代后面所有请求对端都是代理地址，桶退化为全局限流——**这是有意的安全方向退化，别"顺手优化"成读 XFF**。同理也别改成按 `api_key` 限流：本网关只有一个 key，按 key 限等价于全局限流。
+
+11. **诊断端点必须独立端口**：`server.debug_addr` 刻意不开在主 mux 上。Go 的 `net/http/pprof` 无鉴权，`profile` 能导出 CPU/heap，heap 里含请求体与账号 token；主端口通常绑 `0.0.0.0`。回归测试 `TestMainMuxHasNoDebugEndpoints` 钉住这一点——**别为了"顺手"把它加回主路由**。`/metrics` 也只放低基数指标（状态枚举 + goroutine 数），加 per-model 标签会先崩 Prometheus。
 
 ---
 
@@ -208,3 +220,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | 完成 4 项 P1：面板字号 6 档令牌化、账号表表头吸附、`handler.go` 拆 5 文件、`strip_tool_metadata`（opt-in）；顺带统一工作区行尾为 LF（此前本地 gofmt 会误报 100+ 文件），补 1 处漏网格式问题 | `8160b3b` |
 | 2026-10-25 | 完成入站限流 `server.rate_limit_rps`（opt-in，与 `max_body_mb` 配套）；待办缩到 9 项 | `6deb1b5` |
 | 2026-10-25 | 上游错误类别→HTTP 状态码收敛到 `errmap.go` 单表（原散在 6 处），附完整性测试；待办缩到 8 项，P1 只剩 2 项 | `3c1a87f` |
+| 2026-10-25 | 完成剩余可安全落地的 4 项：上游 requestId 落台账、pprof/metrics 独立诊断监听、CI `-race` 观察作业、弹窗 `inert`；其余 4 项因「需先设计/需人眼验收/会与在途改动冲突」明确保留（见第 4 节末尾） | `94799e5` |
