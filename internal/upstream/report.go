@@ -65,6 +65,21 @@ func (c *Client) billingMeterJSON(a *auth.Auth, paths []string, method string, b
 // 独立变量供测试缩短（生产固定 2s：第 1 次重试等 2s、第 2 次等 4s）。
 var billingRetryDelay = 2 * time.Second
 
+// SetBillingRetryDelayForTest 临时替换维护类计费调用的重试间隔，返回恢复函数。
+//
+// 供包外测试使用：本变量是包私有的，而重试等待直接决定用例耗时——默认 2s/4s 两次
+// 重试意味着每个撞上 5xx 的用例要空等 6s，scheduler 的
+// TestCheckinErrorDoesNotCrash 曾因此单条耗时 12s（两路调用）。生产值恒为 2s，
+// 非正值忽略以免测试把重试变成紧循环。
+func SetBillingRetryDelayForTest(d time.Duration) (restore func()) {
+	if d <= 0 {
+		return func() {}
+	}
+	old := billingRetryDelay
+	billingRetryDelay = d
+	return func() { billingRetryDelay = old }
+}
+
 // isTransientBillingErr 报告 err 是否值得对计费维护类调用做有界重试：
 // 上游 5xx（ErrServer，实测偶发 "code 10000 / API request failed with status
 // code: 500"）或网络层错误（非 *Error 的传输失败）。业务错误（code!=0 的

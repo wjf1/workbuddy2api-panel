@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -377,10 +376,21 @@ func TestRunKeepaliveSessionDeadResetBySuccess(t *testing.T) {
 	}
 }
 
+// TestCheckinErrorDoesNotCrash 签到/保活撞上上游 5xx 时的契约：
+// 不 panic、确实打到了上游（否则用例空转）、重试有界、且不因瞬时 5xx 禁用账号。
+//
+// 原先本用例只有「不 panic」一句注释、零断言，还带着一行死代码；且因账单重试的
+// 2s/4s 基数不可注入，单条耗时 12s（占 scheduler 包 19.5s 的六成）。现在用
+// upstream.SetBillingRetryDelayForTest 把等待压到毫秒级，省下的时间换成真断言。
 func TestCheckinErrorDoesNotCrash(t *testing.T) {
+	restore := upstream.SetBillingRetryDelayForTest(time.Millisecond)
+	defer restore()
+
+	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
 		w.WriteHeader(500)
-		w.Write([]byte(`boom`))
+		_, _ = w.Write([]byte(`boom`))
 	}))
 	defer srv.Close()
 
@@ -392,10 +402,30 @@ func TestCheckinErrorDoesNotCrash(t *testing.T) {
 		BillingBaseCN: srv.URL,
 	}
 	s := New(Config{Pool: p, Upstream: up})
-	// 不应 panic
-	s.RunCheckinNow()
+
+	start := time.Now()
+	s.RunCheckinNow() // 不应 panic
 	s.RunKeepaliveNow()
-	_ = errors.New("unused")
+	elapsed := time.Since(start)
+
+	n := atomic.LoadInt32(&hits)
+	t.Logf("上游被调用 %d 次，耗时 %v", n, elapsed)
+
+	if n == 0 {
+		t.Fatal("上游一次都没被调用：本用例没有覆盖到 5xx 处理路径")
+	}
+	// 每次维护类调用最多 3 次尝试（首试 + 2 次重试）；这里只求"没变成无限重试"，
+	// 不做精确计数以免与具体任务编排耦合。
+	if n > 24 {
+		t.Fatalf("重试未被有界约束：上游被调用 %d 次（单次调用上限 3 尝试）", n)
+	}
+	// 注入生效则整条路径应在毫秒级完成；退火到 2s 说明注入没起作用、用例又在空等。
+	if elapsed > 2*time.Second {
+		t.Fatalf("重试等待未按注入值缩短：耗时 %v", elapsed)
+	}
+	if st, _ := p.Status("u1"); st.Disabled {
+		t.Fatalf("瞬时 5xx 不应直接禁用账号: %+v", st)
+	}
 }
 
 // TestRunBalanceRefreshNowUpdatesCreditsAndRevives 只查余额（不签到）即可更新 credits
