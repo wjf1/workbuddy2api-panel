@@ -396,7 +396,8 @@ func (s *anthropicStreamWriter) startWith(usageOverride map[string]any) {
 		return
 	}
 	s.started = true
-	s.ensureSSEHeaders()
+	// 不再在此处直接调 ensureSSEHeaders：它必须在 wmu 内执行，紧随其后的
+	// s.event("message_start", ...) 会在锁内完成同样的头设置（幂等）。
 	usage := usageOverride
 	if usage == nil {
 		usage = map[string]any{
@@ -558,7 +559,18 @@ func (s *anthropicStreamWriter) writeConvertedError() {
 
 // ensureSSEHeaders 设置 Anthropic SSE 响应头（幂等；静态路径首调，
 // 实时路径 StreamHint 已设同名头，这里只补 charset 与缺失项）。
+//
+// 首帧写出后必须彻底停止改头，理由有两条：
+//  1. 语义上：s.w.WriteHeader(200) 已把响应头刷给客户端，此后再 Set 不会生效；
+//  2. 并发上：本 writer 同时被当作 ResponseWriter 下传给 chatCompletions，其错误
+//     分支走 writeJSON→w.Header().Set，而本函数经心跳 goroutine 在 wmu 内执行。
+//     两边写同一个 header map，其中一个不持锁 → Go runtime 直接
+//     "fatal error: concurrent map writes"（进程级 abort，不可 recover）。
+//     只需保证「头只在首帧前改一次」，就不再存在两个并发写者。
 func (s *anthropicStreamWriter) ensureSSEHeaders() {
+	if s.headerWritten {
+		return
+	}
 	h := s.w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
 	h.Set("Cache-Control", "no-cache")
@@ -606,13 +618,17 @@ func (s *anthropicStreamWriter) startHeartbeat() {
 		return
 	}
 	s.hbStarted = true
-	s.hbStop = make(chan struct{})
+	// stop 取局部变量：goroutine 只在启动时抓一次 channel。若每轮 select 重读
+	// s.hbStop，stopHeartbeat 把字段置 nil 后这里会永久阻塞在 nil channel 上，
+	// 心跳 goroutine 既退不出、又继续按 tick 尝试写已结束的响应（泄漏 + 噪音）。
+	stop := make(chan struct{})
+	s.hbStop = stop
 	go func() {
 		t := time.NewTicker(anthropicPingInterval)
 		defer t.Stop()
 		for {
 			select {
-			case <-s.hbStop:
+			case <-stop:
 				return
 			case <-t.C:
 				raw, err := json.Marshal(map[string]any{"type": "ping"})
