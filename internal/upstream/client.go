@@ -80,6 +80,11 @@ type Client struct {
 	// 面板保存配置热改 + chat 热路径并发读写，用 atomic.Bool 消除数据竞争。
 	SanitizeFingerprints atomic.Bool
 
+	// StripToolMeta 出站请求体剥除 tool-call 的追踪 metaData（默认 false = 透传）。
+	// 详见 strip_metadata.go：这类字段对模型无语义价值，但一条历史消息可占 55–70KB。
+	// 是否可删取决于上游是否用它做链路关联，故做成 opt-in，见 features.strip_tool_metadata。
+	StripToolMeta atomic.Bool
+
 	// UserAgent 出站 User-Agent 显式覆盖（非空时全路径生效，优先于默认三段式）。
 	// 空 = 默认官方形态：chat/refresh/FetchModels 走
 	// `WorkBuddy/<ver> WorkBuddy/<ver> CLI/<cliVer>`；billing 走 `WorkBuddy/<ver>`
@@ -216,6 +221,12 @@ func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) []b
 		efforts, defs = globalEffortMap(efforts, defs)
 	}
 	body = PrepareBodyOptWithEffortsAndDefault(body, c.SanitizeFingerprints.Load(), efforts, defs)
+	// tool-call 追踪元数据剥除（opt-in，features.strip_tool_metadata）。放在归一化之后、
+	// 注入 cache_key 之前：先做完结构化改写，再一次性瘦身，避免中间产物被缓存键裹住。
+	// 开关关闭时完全不进这条分支，出站报文与改动前逐字节一致。
+	if c.StripToolMeta.Load() {
+		body = StripToolMetaData(body)
+	}
 	// prompt_cache_key 注入（P0 费用优化，费用降 ~17×）：按账号隔离的稳定缓存键，
 	// 让同一客户端对同一账号的连续请求命中上游前缀缓存。
 	body = InjectPromptCacheKey(body, uid, conversationID)

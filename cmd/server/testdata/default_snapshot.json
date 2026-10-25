@@ -88,7 +88,8 @@
     "dump_max_bytes": 0
   },
   "features": {
-    "sanitize_blacklist_fingerprints": true
+    "sanitize_blacklist_fingerprints": true,
+    "strip_tool_metadata": false
   },
   "models": {
     "hidden": null,

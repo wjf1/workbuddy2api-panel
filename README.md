@@ -436,6 +436,7 @@ curl -sN http://localhost:7863/v1/messages \
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中空闲上限（活跃续命，静默断流） |
 | `upstream.user_agent` | 空 | 出站 User-Agent 覆盖（空 = 现状 `CLI/2.63.2 CodeBuddy/2.63.2`）。官网「使用端」列按出站 UA 服务端归因；官方 WorkBuddy 桌面 UA 为 `WorkBuddy/<version>`，需要时可配 |
 | `features.sanitize_blacklist_fingerprints` | `true` | 出站请求体黑名单指纹脱敏 |
+| `features.strip_tool_metadata` | `false` | 出站时剥除 tool-call 块里的 `metaData`（traceId / traceparent / baggage / rawResponse / 时间戳等约 20 个纯观测字段）。默认 `false` = 原样透传，出站报文与历史行为逐字节一致；开启后每条带工具调用的历史消息可省数十 KB 上下文（实测 39 个 tool-call 约 55–70KB）。只删 `tool.metaData` / `result.metaData`，`id`/`name`/`args`/`result.text` 与 `reasoning` 块不动。**开启前建议先用 `upstream.dump_dir` 落一份真实出站报文做 A/B**，确认上游不依赖这些字段做链路关联 |
 | `models.hidden` | `[]` | 模型黑名单：不对外暴露的模型。裸名=两域都藏；`"cn:xxx"`/`"global:xxx"`=只藏该域。`GET /v1/models` 列表过滤 + `POST /v1/chat/completions` 点名拒绝（400 `model_unavailable`）。面板保存后热生效 |
 | `models.aliases` | `[]` | 模型映射：条目 `"客户端名=真实模型名"`。键裸名=两域生效，带 `cn:`/`global:` 前缀只在该域生效（大小写不敏感）；值可带前缀跨域指向（`my-glm=global:glm-5.2`）。命中时出站 body 的 `model` 改写为真实名、响应回显客户端原发名；目标仍受 `models.hidden` 约束。面板保存后热生效 |
 | `prompt.mode` | `custom` | 系统提示词模式：`custom` = 网关用自有提示词替换客户端 system；`append` = 开头连续 system/developer 块后插网关提示词（既有消息逐字不动）；`passthrough` = 透传客户端原始 system（降级重试仍切中性提示词） |

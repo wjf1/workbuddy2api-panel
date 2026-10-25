@@ -212,6 +212,9 @@ type Config struct {
 	Features struct {
 		// SanitizeBlacklistFingerprints 出站请求体黑名单指纹脱敏（默认 true；false 完全还原）。
 		SanitizeBlacklistFingerprints bool `json:"sanitize_blacklist_fingerprints"`
+		// StripToolMetadata 出站请求体剥除 tool-call 的追踪 metaData（默认 false = 透传）。
+		// 关闭时出站报文与历史行为逐字节一致；开启后每条历史消息可省数十 KB 上下文。
+		StripToolMetadata bool `json:"strip_tool_metadata"`
 	} `json:"features"`
 
 	Models struct {
