@@ -404,6 +404,8 @@ curl -sN http://localhost:7863/v1/messages \
 | `state_file` | `./data/state.json` | 账号池状态持久化文件 |
 | `server.read_timeout` | `300s` | 入站请求读取（含 body 上传）总时长上限；大上下文/文件块经反代转发超时会 400 `read body: i/o timeout`；`0` = 不限制；改动需重启（#100） |
 | `server.max_body_mb` | `0` | 入站请求体大小上限（MB）。`0` = 不限制（缺省，与历史行为一致）；配正值时超限请求在读 body 前被拒，返回 413（Anthropic 端点回 `request_too_large`），不消耗选号与上游配额 |
+| `server.rate_limit_rps` | `0` | 入站限流速率（请求/秒，令牌桶按 **TCP 对端主机**划分）。`0` = 不限制（缺省）。只作用于 `/v1/chat/completions`、`/v1/models`、`/v1/messages`、`/v1/messages/count_tokens`，**不含 `/status` 与 `/healthz`**（监控/探活被限流会被误判成服务挂了）。超限返回 429 + `Retry-After`（Anthropic 面为 `rate_limit_error`）。与 `max_body_mb` 配套：一个管单请求多大，一个管单客户端多快 |
+| `server.rate_limit_burst` | `0` | 令牌桶容量（允许的瞬时突发）。`0` = 取 `ceil(rps)`，至少 1 |
 | `panel.package_detail_limit` | `5` | 积分构成页单账号默认展示的最早到期包数；其余未用完包与已用完包聚合折叠 |
 | `logging.request_archive_enabled` | `true` | 请求元数据 JSONL 归档开关；不记录提示词、响应正文或 Authorization |
 | `logging.request_retention_days` | `7` | 请求归档保留天数；超期文件在启动和周期清理时删除 |
@@ -868,6 +870,13 @@ python3 scripts/probe_max_tokens.py   --base http://127.0.0.1:7863/v1 --key sk-x
 ### 多图会话请求体超限怎么办？
 
 网关**默认不设请求体上限**（`server.max_body_mb` 缺省为 `0`）：任意大小的请求体都会完整读入并转发上游，超限类问题由上游自然返回错误——其响应信息量更大（能看到上游的真实策略），网关不以 413 提前拦截。若部署在公网、需要一道本地防线，把 `server.max_body_mb` 设为正值（如 `32`）即启用：超过上限的请求在读取 body 前就被 `http.MaxBytesReader` 拒绝，返回 413（Anthropic 端点回 `request_too_large`），不再消耗选号与上游配额。这是纯 opt-in 开关，改回 `0` 即恢复原行为。
+
+**入站限流**（`server.rate_limit_rps`）与上面的体积上限是一对：一个管"单个请求多大"，一个管"单个客户端多快"。同样默认 `0` = 不启用。启发式起点：单机自用可从 `5`~`10` 起步（够正常对话与工具调用，又拦得住跑飞的脚本）。
+
+两点设计取舍值得知道：
+
+1. **限流维度是 TCP 对端地址，不是 `X-Forwarded-For`**。XFF / X-Real-IP 由客户端任意构造，按它限流等于让攻击者每请求换个伪造 IP 拿无限额度。代价是：部署在反向代理后面时所有请求的对端都是代理地址，限流退化为"全局 RPS 上限"——这是安全方向的退化（限不住单机，但一定能兜住总量），而"跑飞的脚本打满账号池"正是要防的主要事故。
+2. **按 IP 而不是按 `api_key`**：本网关本来只有一个 key，按 key 限流等价于全局限流，起不到隔离作用。
 
 - 多图/长上下文会话（历史图片每轮以 base64 重发，编码再膨胀约 37%）不会再撞网关侧 413
 - 若上游真的返回 413/超限错误，网关按既有错误分类链路如实透传（不打码、不罚号——超限是请求侧问题）

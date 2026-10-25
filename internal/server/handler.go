@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,6 +94,10 @@ type Config struct {
 	// >0 时仅在 /v1/chat/completions 与 /v1/messages（含 count_tokens）读 body 前
 	// 套 http.MaxBytesReader，超限就地 413——是纯 opt-in 的防护旋钮，不是默认行为。
 	MaxBodyBytes int64
+	// RateLimit 入站限流器（nil = 不启用，缺省即如此）。由 server.NewRateLimiter
+	// 构造，按 TCP 对端主机做令牌桶；只作用于 /v1/* 四个推理端点，
+	// 不含 /status 与 /healthz（监控/探活被限流会被误判成服务挂了）。
+	RateLimit *RateLimiter
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -226,6 +231,10 @@ func NewHandler(cfg Config) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 限流在最外层：被拒的请求不进台账、不占用 X-Request-Id、不消耗选号。
+	if !h.allowRate(w, r) {
+		return
+	}
 	if h.cfg.RequestLog != nil && r.Method == http.MethodPost &&
 		(r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/messages") {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now()}
@@ -247,6 +256,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// allowRate 入站限流闸门。未配置限流器时恒放行——只多一次 nil 判断，热路径无感。
+//
+// 返回 false 时已写好响应（429 + Retry-After），调用方直接 return。
+// 错误体按路径前缀分协议：Anthropic 面用 rate_limit_error（Claude Code / ZCode
+// 按该类型决定退避），OpenAI 面用 rate_limit_exceeded。
+func (h *Handler) allowRate(w http.ResponseWriter, r *http.Request) bool {
+	if h.cfg.RateLimit == nil || !rateLimitedPath(r.URL.Path) {
+		return true
+	}
+	ok, retry := h.cfg.RateLimit.Allow(rateKey(r))
+	if ok {
+		return true
+	}
+	secs := int(retry.Seconds() + 0.999) // 向上取整：宁可多等，别让客户端立刻重试
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	msg := "gateway rate limit exceeded; retry after " + strconv.Itoa(secs) + "s"
+	if strings.HasPrefix(r.URL.Path, "/v1/messages") {
+		writeAnthropicError(w, http.StatusTooManyRequests, "rate_limit_error", msg)
+		return false
+	}
+	writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_exceeded", msg)
+	return false
 }
 
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {

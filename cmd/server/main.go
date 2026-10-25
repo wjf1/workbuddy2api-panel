@@ -403,6 +403,9 @@ func main() {
 		SearchTimeout:    time.Duration(cfg.Search.TimeoutSeconds) * time.Second,
 		// 入站请求体上限（server.max_body_mb；0 = 不限制，缺省即现状）。
 		MaxBodyBytes: cfg.ServerMaxBodyBytes,
+		// 入站限流（server.rate_limit_rps；rps<=0 时返回 nil = 不启用，缺省即现状）。
+		// 与 max_body_mb 配套：前者管单客户端速率，后者管单请求体积。
+		RateLimit: server.NewRateLimiter(cfg.ServerRateLimitRPS, cfg.ServerRateLimitBurst),
 	})
 	// 上游排队门控快照注入面板：排队（6020/6021）是上游服务端队列水位、与账号无关，
 	// 面板横幅据此区分它与账号限流（handler 已装配完，此处才拿得到 h）。
@@ -685,6 +688,8 @@ func restartRequiredDiff(oldC, newC *Config) []string {
 	add(oldC.Logging.RequestArchiveMaxMB != newC.Logging.RequestArchiveMaxMB, "logging.request_archive_max_mb")
 	add(oldC.ServerReadTimeoutDur != newC.ServerReadTimeoutDur, "server.read_timeout")
 	add(oldC.ServerMaxBodyBytes != newC.ServerMaxBodyBytes, "server.max_body_mb")
+	add(oldC.ServerRateLimitRPS != newC.ServerRateLimitRPS ||
+		oldC.ServerRateLimitBurst != newC.ServerRateLimitBurst, "server.rate_limit_rps")
 	add(oldC.Auths.StrictLease != newC.Auths.StrictLease, "auths.strict_lease")
 	add(oldC.Prompt.Mode != newC.Prompt.Mode, "prompt.mode")
 	add(oldC.Prompt.File != newC.Prompt.File, "prompt.file")

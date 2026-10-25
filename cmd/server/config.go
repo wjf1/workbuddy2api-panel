@@ -58,6 +58,15 @@ type Config struct {
 		// 才套 http.MaxBytesReader，超限就地 413，不打上游、不罚号。
 		// 负数按 0 处理（normalize）。改动需重启进程。
 		MaxBodyMB int `json:"max_body_mb"`
+		// RateLimitRPS 入站限流速率（桶按 TCP 对端主机划分，单位：请求/秒）。
+		// **缺省 0 = 不限制**（零行为差异）；只作用于 /v1/chat/completions、
+		// /v1/models、/v1/messages、/v1/messages/count_tokens，不含 /status 与
+		// /healthz——监控轮询与探活被限流会被误判成服务挂了。负数按 0 处理。
+		// 与 max_body_mb 配套：一个管"单请求多大"，一个管"单客户端多快"。
+		// 改动需重启进程。
+		RateLimitRPS float64 `json:"rate_limit_rps"`
+		// RateLimitBurst 令牌桶容量（允许的瞬时突发）。<=0 时取 ceil(rps)，至少 1。
+		RateLimitBurst int `json:"rate_limit_burst"`
 	} `json:"server"`
 
 	Cooldown struct {
@@ -339,6 +348,10 @@ type Config struct {
 	ServerReadTimeoutDur time.Duration `json:"-"`
 	// ServerMaxBodyBytes 解析后的入站请求体上限（server.max_body_mb）；0 = 不限制。
 	ServerMaxBodyBytes int64 `json:"-"`
+	// ServerRateLimitRPS / ServerRateLimitBurst 解析后的入站限流参数
+	// （server.rate_limit_rps / rate_limit_burst）；rps=0 表示不启用限流。
+	ServerRateLimitRPS   float64 `json:"-"`
+	ServerRateLimitBurst int     `json:"-"`
 }
 
 // Default 默认配置。
@@ -636,6 +649,17 @@ func (c *Config) normalize() error {
 		c.Server.MaxBodyMB = 0
 	}
 	c.ServerMaxBodyBytes = int64(c.Server.MaxBodyMB) << 20
+	// 入站限流（server.rate_limit_rps）：0 = 关闭（缺省）。负数按 0 处理，
+	// 与 max_body_mb 同口径——纯可选项，配错不至于起不来。
+	// burst 只做非负归一，<=0 的具体取值交给 server.NewRateLimiter（ceil(rps)，至少 1）。
+	if c.Server.RateLimitRPS < 0 {
+		c.Server.RateLimitRPS = 0
+	}
+	if c.Server.RateLimitBurst < 0 {
+		c.Server.RateLimitBurst = 0
+	}
+	c.ServerRateLimitRPS = c.Server.RateLimitRPS
+	c.ServerRateLimitBurst = c.Server.RateLimitBurst
 	if c.SoftRateDur, err = time.ParseDuration(c.Cooldown.SoftRate); err != nil {
 		return fmt.Errorf("cooldown.soft_rate: %w", err)
 	}
