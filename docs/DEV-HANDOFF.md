@@ -40,10 +40,10 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `3e05c4d` | `git log --oneline -1` |
+| HEAD | `9fee070` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
 | 非测试代码 | 108 文件 / 33,457 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 103 文件 / 877 个 Test 函数 | 同上 |
+| 测试代码 | 104 文件 / 878 个 Test 函数 | 同上 |
 | `go test ./...` | **23 包全绿，约 11 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
@@ -102,6 +102,8 @@ internal/
 | `15c0dd5` | `upstream/dump.go` 保留期清理补测试（原 0%）：只删过期且有 15 字符时间戳前缀的文件、窗口内与用户手放样本保留、未配置时静默返回、启动即清一次 | `go test ./internal/upstream -run 'TestCleanDumpDir\|TestStartDumpCleaner' -v`（4 用例）；CleanDumpDir 0%→100% |
 | `2a8771f` | 面板频道分类忽略 `WARN: `/`ERR: ` 前缀（否则任务失败行会掉进 sys 频道） | `go test ./internal/panel -run 'TestClassifyLine\|TestRingKeepsLevelPrefix' -v`；反证：去掉剥离即红 |
 | `4b50049` | 新增 `internal/logx`（保形 slog Handler）+ `internal/usage` 6 处迁移为样板 | `go test ./internal/logx -v`（8 用例，含「Info 与 log.Printf 逐字一致」「不出现 level=」） |
+| `1a65902`…`b32673c` | **日志全仓迁 `logx`**：safefile/session/auth/authlease/alert（26）、rotaudit/redisstore（16）、pool（19）、server（18）、upstream（22，跳过 payload.go）、cmd/server（32，`log.Fatalf` 保留）、panel（59）、scheduler（59）、cmd/signin（1）；分级 = Infof/Warnf/Errorf，失败行按语义升级 | `grep -rn 'log\.Print' internal cmd \| grep -v _test.go` 只剩 `logx/logx.go` 与 `upstream/payload.go`；`go test ./...` |
+| `9fee070` | 装配契约测试：main 的 `MultiWriter(stderr, ring)` 搬进测试，断言 logx 输出的频道/文本/无 `level=` | `go test ./internal/panel -run TestLogxOutput -v` |
 
 ---
 
@@ -120,25 +122,20 @@ internal/
 
 ### P2 — 结构性债务
 
-- **4.2 日志结构化（迁 `log/slog`）— 门面与试点已落地（`4b50049` / `2a8771f`）**
+- **4.2 日志结构化（迁 `log/slog`）— 已完成**（`4b50049` 门面 + `1a65902`…`b32673c` 全仓迁移）
 
-  现状：`internal/logx` 提供**保形** Handler——时间戳仍由 log 包 flags 打、级别写成
-  `WARN: `/`ERR: ` 前缀（不写 `level=`）、结构化属性以 ` k=v` 追加行尾。`internal/usage`
-  6 处已迁完作样板，其余包仍是裸 `log.Printf`（约 255 处）。
+  `internal/logx` 是唯一出口：时间戳仍由 log 包 flags 打、级别写成 `WARN: `/`ERR: `
+  前缀（**不写 `level=`**）、结构化属性以 ` k=v` 追加行尾。全仓 255 处 `log.Printf`
+  已迁完，分级实测 **Infof 129 / Warnf 105 / Errorf 21**（合计 255），失败行按语义升级而不是一律 Info。
 
-  **迁一个包的配方**（三分钟）：
-  1. `log.Printf(...)` → `logx.Infof(...)`（逐字等价，无文本变化）
-  2. 失败/降级行按语义改 `logx.Warnf` / `logx.Errorf`（行首会多出 `WARN: `/`ERR: `）
-  3. 删掉 `"log"` import，加 `internal/logx`；`go build ./... && go test ./<pkg>`
-  4. 任务类日志（`checkin `/`travel `/`panel: 任务` 等前缀）**加级别前缀是安全的**：
-     `panel/ring.go` 分类前会剥掉前缀（`2a8771f`），仍落 task 频道
-  5. 该包迁完跑一次面板日志视图回归（三频道筛选是否正常）
+  **唯一例外：`internal/upstream/payload.go` 的 4 处没动**——该文件挂着用户未提交的
+  `$ref` 解引用改动（坑 #9），等下一个人接手时如果 `git status` 里它已经干净，顺手迁掉即可。
 
-  **剩余量**（`log.Printf` 非测试）：scheduler 59 / panel 59 / cmd/server 32 /
-  upstream 26 / pool 19 / server 18 / rotaudit 8 / redisstore 8 / usage 0（已迁）/
-  authlease 6 / alert 6 / auth 5 / safefile 2 / session 1。建议顺序：小包先行
-  （safefile → session → auth → authlease → alert），每包一提交，最后碰 panel/scheduler
-  这两个日志量最大、且与任务频道耦合最紧的包。
+  新增代码请直接用 `logx.Infof/Warnf/Errorf`，不要再用 `log.Printf`；需要结构化字段时用
+  `logx.Default().Slog().With(...)`。任务类日志哪怕按 Warn 记录也不会掉频道——
+  `panel/ring.go` 分类前会剥 `WARN: `/`ERR: `（`2a8771f`），且 `panel/logx_wiring_test.go`
+  把「logx → ring 装配」钉住了。
+
 - **4.3 弹窗完整迁移原生 `<dialog>`**：`inert` 与 `role/aria-modal` 已补（`94799e5`），剩下 top-layer（`showModal()` 天然置顶，不受 z-index 影响）与 `::backdrop`。属于结构性重写 8 个弹窗，需要人眼验收，建议单独一轮做。
 - **4.4 文档拆分**：README 87KB / HANDOFF 83KB / CHANGELOG 82KB。拆的时候注意仓库内外已有大量 `#锚点` 引用，改标题会断链；建议先加索引页再加专题页，最后才收缩主文档。
 - **4.5 前端行为测试**：`app.js`(3449 行) 只有 `node --check` + CSP 断言，且**无 node 时静默跳过**。要写行为测试得先把可测函数（`esc` / `dur` / 时间格式化 / 模型名解析）抽成可导出模块，是一次结构性改动，不建议在功能迭代中途做。
@@ -252,3 +249,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | 状态三源一致性第 2 步：`RestoreFromSnapshot` 改以 `revision` 为主判据（取大者 / 相等取本地 / 一侧为 0 回落 mtime），**P1 清空** | `dc1534a` |
 | 2026-10-25 | 补 `upstream/dump.go` 保留期清理测试（原 0%）；顺带纠正 P3 里过时的覆盖率数字 | `15c0dd5` |
 | 2026-10-25 | P2-4.2 第 1 步：`internal/logx` 保形分级日志门面 + `usage` 包试点迁移；顺带修「任务失败行掉频道」的隐藏回归 | `4b50049` |
+| 2026-10-25 | P2-4.2 收尾：其余 12 个包 229 处日志全部迁到 `logx`（含 panel/scheduler 两个最大的包），补装配契约测试；**4.2 完成** | `9fee070` |
