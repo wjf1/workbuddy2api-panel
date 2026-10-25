@@ -40,14 +40,14 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `62f67f5` | `git log --oneline -1` |
+| HEAD | `dc1534a` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
 | 非测试代码 | 107 文件 / 33,247 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 102 文件 / 863 个 Test 函数 | 同上 |
+| 测试代码 | 102 文件 / 864 个 Test 函数 | 同上 |
 | `go test ./...` | **22 包全绿，约 10–12 秒**（scheduler 占 7s，其余均 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
-| 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 976 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 858 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
+| 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 989 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 888 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
 | 最慢包 | `internal/scheduler` 约 7.3s（其余均 < 2s） | 见测试输出 |
 
 ### 目录职责（18 个 internal 包）
@@ -97,6 +97,7 @@ internal/
 | `d4410a5` | CI 增加 `-race` 作业（pool/server/scheduler 三个包，首轮 `continue-on-error`） | 看 Actions 里 race job；本机无 gcc 跑不了 |
 | `94799e5` | 弹窗打开时给 `.shell` 加 `inert`（读屏不再能浏览遮罩背后内容） | `node --check internal/panel/app.js`；面板测试 |
 | `62f67f5` | 状态快照加单调 `revision`（本步只写+打日志，**不改恢复判定**）：5 个测试覆盖递增/快照一致/续号/旧文件/采纳快照 | `go test ./internal/pool -run 'TestRevision\|TestAdoptSnapshotKeepsRevision' -v` |
+| `dc1534a` | 择新恢复改以 `revision` 为主判据：两侧可比且不等取大者 / 相等取本地 / 一侧为 0 回落 mtime（旧文件行为不变）；4 个子用例故意让 mtime 指向相反结论 | `go test ./internal/pool -run TestRestoreByRevision -v`（4 子用例）；回退判定后前 3 个子用例即红 |
 
 ---
 
@@ -106,13 +107,12 @@ internal/
 
 ### P1 — 需要先设计，不能盲改
 
-**4.1 状态三源一致性（pool 内存 ↔ `state.json` ↔ Redis 镜像）— 第 1 步已完成**
+（当前无未完成项。状态三源一致性两步已落地：`62f67f5` 埋单调 `revision` 并观测一轮、
+`dc1534a` 把判定切成「revision 优先、mtime 回落」，旧文件行为不变。）
 
-- 现状：`RestoreFromSnapshot()` 靠「文件 mtime vs 快照 `saved_at`」择新。mtime 会被无关操作改写（备份还原、拷贝、杀软扫描），时钟也可能漂移。
-- **已完成（`62f67f5`）**：快照加单调 `revision`，每次落盘 +1，本地文件与 Redis 快照共用同一份 `stateFile` 所以两侧天然一致；`load()` / `applySnapshotLocked()` 各自续号；恢复日志现在会打出「本地 rev / 快照 rev / mtime / saved_at」四项。**判定逻辑一行未改**，旧文件（无该字段 → 0）行为与历史完全一致。
-- **下一步（第 2 步，未做）**：把判定改成——两侧 revision 均 >0 且不等时取大者；否则回落现有 mtime/`saved_at` 逻辑。切换前先在生产日志里观察几轮：确认 revision 在单调增长、两侧没有出现"本地 rev > 快照 rev 但 mtime 更旧"这类互斥信号。
-- 切换时必须补三种冲突组合的测试（本地旧+快照新 → 取快照；本地新+快照旧 → 取本地；revision 相等 → 取本地，确定性、不靠时钟）。
-- 再往后才考虑多实例写冲突（`redisstore` 支持 WATCH/MULTI）。**注意**：`authlease` 已经禁止同一 `auths` 目录挂两个执行体，所以"同目录双写"不成立；真正的多实例风险来自**两个不同 auths 目录共享同一个 Redis**，那才是 CAS 要解决的问题。
+仍未做的只有**多实例写冲突**：`authlease` 已禁止同一 `auths` 目录挂两个执行体，所以真正的
+风险来自**两个不同 auths 目录共享同一个 Redis**。那需要 `redisstore` 上 WATCH/MULTI 的 CAS，
+属于新功能而非修缺陷，等真有跨实例部署需求再立项，别提前做。
 
 ### P2 — 结构性债务
 
@@ -222,3 +222,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | 上游错误类别→HTTP 状态码收敛到 `errmap.go` 单表（原散在 6 处），附完整性测试；待办缩到 8 项，P1 只剩 2 项 | `3c1a87f` |
 | 2026-10-25 | 完成剩余可安全落地的 4 项：上游 requestId 落台账、pprof/metrics 独立诊断监听、CI `-race` 观察作业、弹窗 `inert`；其余 4 项因「需先设计/需人眼验收/会与在途改动冲突」明确保留（见第 4 节末尾） | `94799e5` |
 | 2026-10-25 | 状态三源一致性第 1 步：快照加单调 `revision`（只写不改判定），恢复日志带四项观测值；5 个测试钉住递增/续号/快照一致/旧文件/采纳快照 | `62f67f5` |
+| 2026-10-25 | 状态三源一致性第 2 步：`RestoreFromSnapshot` 改以 `revision` 为主判据（取大者 / 相等取本地 / 一侧为 0 回落 mtime），**P1 清空** | `dc1534a` |
