@@ -19,11 +19,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // Bak 返回 path 的上一份好副本路径。
@@ -58,7 +59,7 @@ func Read(path string, valid func([]byte) bool) ([]byte, error) {
 	}
 	why := describe(b)
 	if bak, bakErr := os.ReadFile(Bak(path)); bakErr == nil && valid(bak) {
-		log.Printf("WARN: safefile: %s %s，已回退到 %s（原文件保持不动，下次写入前会另存 .bad）", path, why, Bak(path))
+		logx.Warnf("safefile: %s %s，已回退到 %s（原文件保持不动，下次写入前会另存 .bad）", path, why, Bak(path))
 		return bak, nil
 	}
 	return nil, fmt.Errorf("%s %s，且没有可用的 %s", path, why, filepath.Base(Bak(path)))
@@ -78,7 +79,7 @@ func keep(path string, perm fs.FileMode) error {
 		if err := replace(bad, prev, perm); err != nil {
 			return err
 		}
-		log.Printf("WARN: safefile: %s %s，已另存 %s", path, describe(prev), bad)
+		logx.Warnf("safefile: %s %s，已另存 %s", path, describe(prev), bad)
 		return nil
 	}
 	if old, err := os.ReadFile(Bak(path)); err == nil && bytes.Equal(old, prev) {

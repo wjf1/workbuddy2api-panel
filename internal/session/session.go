@@ -13,11 +13,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
 )
 
@@ -127,7 +127,7 @@ func (r *Router) LoadFromStore() {
 	}
 	r.mu.Unlock()
 	if loaded > 0 {
-		log.Printf("[session] 从 Redis 恢复 %d 条粘性会话绑定", loaded)
+		logx.Infof("[session] 从 Redis 恢复 %d 条粘性会话绑定", loaded)
 	}
 }
 

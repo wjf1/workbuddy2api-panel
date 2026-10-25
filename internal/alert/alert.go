@@ -16,13 +16,13 @@ package alert
 import (
 	"bytes"
 	"encoding/json"
-	"log"
 	"net/http"
 	"os"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 )
 
@@ -345,7 +345,7 @@ func (m *Manager) sendWebhook(url string, evts []evt, count, windowMin int) {
 	}
 	body, err := json.Marshal(pl)
 	if err != nil {
-		log.Printf("[alert] webhook marshal: %v", err)
+		logx.Errorf("[alert] webhook marshal: %v", err)
 		return
 	}
 	var lastErr error
@@ -354,7 +354,7 @@ func (m *Manager) sendWebhook(url string, evts []evt, count, windowMin int) {
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				log.Printf("[alert] webhook 已外发：mass_session_dead ×%d → %s", count, url)
+				logx.Infof("[alert] webhook 已外发：mass_session_dead ×%d → %s", count, url)
 				return
 			}
 			lastErr = &statusError{Code: resp.StatusCode}
@@ -362,14 +362,14 @@ func (m *Manager) sendWebhook(url string, evts []evt, count, windowMin int) {
 			lastErr = err
 		}
 	}
-	log.Printf("[alert] ERROR: webhook 外发失败（已重试 1 次，%dm 内不再重试）: %v", int(DefaultCooldown.Minutes()), lastErr)
+	logx.Errorf("[alert] webhook 外发失败（已重试 1 次，%dm 内不再重试）: %v", int(DefaultCooldown.Minutes()), lastErr)
 }
 
 // sendWebhook2 通用载荷外发（外部轮换等非常规事件；与 sendWebhook 共用重试与日志口径）。
 func (m *Manager) sendWebhook2(event, url string, payload any) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("[alert] webhook marshal(%s): %v", event, err)
+		logx.Errorf("[alert] webhook marshal(%s): %v", event, err)
 		return
 	}
 	var lastErr error
@@ -378,7 +378,7 @@ func (m *Manager) sendWebhook2(event, url string, payload any) {
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				log.Printf("[alert] webhook 已外发：%s → %s", event, url)
+				logx.Infof("[alert] webhook 已外发：%s → %s", event, url)
 				return
 			}
 			lastErr = &statusError{Code: resp.StatusCode}
@@ -386,7 +386,7 @@ func (m *Manager) sendWebhook2(event, url string, payload any) {
 			lastErr = err
 		}
 	}
-	log.Printf("[alert] ERROR: webhook 外发失败（%s，已重试 1 次，%dm 内不再重试）: %v",
+	logx.Errorf("[alert] webhook 外发失败（%s，已重试 1 次，%dm 内不再重试）: %v",
 		event, int(DefaultCooldown.Minutes()), lastErr)
 }
 

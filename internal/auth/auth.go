@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
@@ -482,26 +482,26 @@ func LoadDir(dir string) ([]*Auth, error) {
 			return perr == nil
 		})
 		if err != nil {
-			log.Printf("ERROR: auth 文件 %s 无法读取: %v —— 该账号本次不在池里，修好文件或重新登录", f, err)
+			logx.Errorf("auth 文件 %s 无法读取: %v —— 该账号本次不在池里，修好文件或重新登录", f, err)
 			continue
 		}
 		a, err := Parse(raw)
 		if err != nil {
-			log.Printf("ERROR: auth 文件 %s 解析失败: %v —— 该账号本次不在池里", f, err)
+			logx.Errorf("auth 文件 %s 解析失败: %v —— 该账号本次不在池里", f, err)
 			continue
 		}
 		a.FilePath = f
 		if prev, ok := seenUID[a.UID]; ok {
-			log.Printf("WARN: uid %s duplicated across %s and %s — 后者覆盖（不同 realm 同名 UID？）",
+			logx.Warnf("uid %s duplicated across %s and %s — 后者覆盖（不同 realm 同名 UID？）",
 				logfmt.Label(a.UID, a.Nickname), prev, f)
 		}
 		seenUID[a.UID] = f
 		if a.RealmStored() == "" {
 			if changed, r := a.BackfillRealm(); changed {
 				if err := a.SaveAtomic(); err != nil {
-					log.Printf("WARN: auth %s realm backfill save: %v", logfmt.Label(a.UID, a.Nickname), err)
+					logx.Warnf("auth %s realm backfill save: %v", logfmt.Label(a.UID, a.Nickname), err)
 				} else if r == "global" {
-					log.Printf("auth %s 存量迁移: 补 realm=global（domain=%s）", logfmt.Label(a.UID, a.Nickname), a.Domain)
+					logx.Infof("auth %s 存量迁移: 补 realm=global（domain=%s）", logfmt.Label(a.UID, a.Nickname), a.Domain)
 				}
 			}
 		}

@@ -20,11 +20,12 @@ package authlease
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // 心跳与新鲜度参数。
@@ -83,10 +84,10 @@ func Acquire(dir string, strict bool) (*Lease, error) {
 			}
 			switch {
 			case age > freshThreshold:
-				log.Printf("[authlease] 旧租约已过期（%.0f 秒无心跳，宿主 %s pid %d，疑似崩溃残留），接管",
+				logx.Infof("[authlease] 旧租约已过期（%.0f 秒无心跳，宿主 %s pid %d，疑似崩溃残留），接管",
 					age.Seconds(), lf.Hostname, lf.PID)
 			case lf.Hostname == host:
-				log.Printf("[authlease] WARN: 检测到同机租约（pid %d，心跳 %.0f 秒前）——可能是双进程或残留；已接管。同机多进程由 RT 轮换审计兜底观察",
+				logx.Warnf("[authlease] 检测到同机租约（pid %d，心跳 %.0f 秒前）——可能是双进程或残留；已接管。同机多进程由 RT 轮换审计兜底观察",
 					lf.PID, age.Seconds())
 			default:
 				msg := fmt.Sprintf("authlease: 检测到异机新鲜租约：宿主 %s pid %d 心跳 %.0f 秒前 —— 另一实例正在使用同一 auths 目录（RT 双花会连坐吊销整条令牌链）",
@@ -94,7 +95,7 @@ func Acquire(dir string, strict bool) (*Lease, error) {
 				if strict {
 					return nil, fmt.Errorf("%s；已拒绝启动（auths.strict_lease=true，改 false 可放行）", msg)
 				}
-				log.Printf("[authlease] WARN: %s；strict_lease=false 已放行", msg)
+				logx.Warnf("[authlease] %s；strict_lease=false 已放行", msg)
 			}
 		}
 	}
@@ -106,7 +107,7 @@ func Acquire(dir string, strict bool) (*Lease, error) {
 		HeartbeatAt: now.Format(time.RFC3339),
 	}
 	if err := writeLease(fp, lf); err != nil {
-		log.Printf("[authlease] WARN: 写租约失败（防线降级为尽力而为）: %v", err)
+		logx.Warnf("[authlease] 写租约失败（防线降级为尽力而为）: %v", err)
 	}
 
 	l := &Lease{dir: dir, stop: make(chan struct{})}
@@ -135,7 +136,7 @@ func (l *Lease) heartbeat(base leaseFile) {
 		case now := <-t.C:
 			base.HeartbeatAt = now.Format(time.RFC3339)
 			if err := writeLease(filepath.Join(l.dir, leaseFileName), base); err != nil {
-				log.Printf("[authlease] WARN: 心跳写失败: %v", err)
+				logx.Warnf("[authlease] 心跳写失败: %v", err)
 			}
 		}
 	}
@@ -149,7 +150,7 @@ func (l *Lease) Release() {
 	l.once.Do(func() {
 		close(l.stop)
 		if err := os.Remove(filepath.Join(l.dir, leaseFileName)); err != nil && !os.IsNotExist(err) {
-			log.Printf("[authlease] WARN: 删除租约: %v", err)
+			logx.Warnf("[authlease] 删除租约: %v", err)
 		}
 	})
 }
