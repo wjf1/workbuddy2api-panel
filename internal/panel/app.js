@@ -22,6 +22,18 @@ function registerVeilCloser(id, fn) { veilClosers.set(id, fn); }
    不动结构与 CSS；各调用点只把 classList 开关换成 showVeil/hideVeil。 */
 let veilReturnFocus = null;
 const VEIL_FOCUSABLE = 'a[href],button:not([disabled]),input:not([type=hidden]),select,textarea,[tabindex]:not([tabindex="-1"])';
+
+/* 弹窗打开时给主容器加 inert：Tab 陷阱只管键盘，读屏仍能浏览遮罩背后的内容
+   （aria-modal 只是提示，不强制隔离）。inert 让整棵子树退出可聚焦树与无障碍树，
+   是 aria-modal 缺的那一半。.veil 是 .shell 的兄弟节点，所以不会把自己也封掉。
+   老浏览器不认识 inert 就退化为原来的行为，无副作用。 */
+function setShellInert(on) {
+  const shell = document.querySelector('.shell');
+  if (!shell) return;
+  if (on) shell.setAttribute('inert', '');
+  else shell.removeAttribute('inert');
+}
+
 function showVeil(id) {
   const v = $(id);
   if (!v) return;
@@ -35,6 +47,7 @@ function showVeil(id) {
   }
   if (!v.classList.contains('on')) veilReturnFocus = document.activeElement;
   v.classList.add('on');
+  setShellInert(true);
   const first = v.querySelector(VEIL_FOCUSABLE);
   // 与既有的 openKey() 手写 focus 不冲突：都指向弹窗内首个可聚焦元素。
   if (first) setTimeout(() => { if (v.classList.contains('on')) first.focus(); }, 30);
@@ -43,6 +56,8 @@ function hideVeil(id) {
   const v = $(id);
   if (!v) return;
   v.classList.remove('on');
+  // 只有确实没有弹窗留在屏上时才解锁背景（当前不支持嵌套弹窗，防御性写法）。
+  if (!document.querySelector('.veil.on')) setShellInert(false);
   if (veilReturnFocus && document.contains(veilReturnFocus)) veilReturnFocus.focus();
   veilReturnFocus = null;
 }
