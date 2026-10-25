@@ -528,14 +528,14 @@ type stateFile struct {
 	Accounts map[string]stateAccount `json:"accounts"`
 	// Revision 单调递增的状态版本号：每落盘一次 +1。
 	//
-	// 为什么需要：本地 state.json 与 Redis 快照的一致性目前靠「文件 mtime vs 快照
+	// 为什么需要：本地 state.json 与 Redis 快照的一致性原先靠「文件 mtime vs 快照
 	// saved_at」比较。mtime 会被无关操作改写（备份还原、拷贝、杀软扫描），时钟也可能
 	// 漂移，于是"较新"的判断并不可靠。revision 是同一进程内单调的序号，不受时钟影响，
 	// 是比时间戳更硬的排序依据。
 	//
-	// 当前阶段只做**记录与观测**（落盘时写入、恢复时打日志），不参与"择新恢复"的
-	// 判定——先在生产日志里确认两侧 revision 真的在按预期增长、有没有回退，再切换
-	// 判定逻辑。旧文件没有该字段 → 0，行为与历史一致。
+	// 当前阶段：**已是择新恢复的第一判据**（见 persist.go 的 RestoreFromSnapshot）——
+	// 两侧均 >0 且不等时取大者；相等时取本地；任一侧为 0（旧文件）才回落 mtime。
+	// 旧文件没有该字段 → 0，行为与历史一致。
 	Revision int64 `json:"revision"`
 }
 

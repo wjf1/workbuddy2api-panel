@@ -158,3 +158,138 @@ func TestAdoptSnapshotKeepsRevision(t *testing.T) {
 		t.Fatalf("恢复后首次落盘应为 10，got %d", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 择新恢复：revision 作为第一判据（三种冲突组合 + 回落）
+// ---------------------------------------------------------------------------
+
+// writeLocal 写一份带 revision 的本地 state.json，并把 mtime 钉到指定时刻。
+func writeLocal(t *testing.T, fp string, credits int64, rev int64, mtime time.Time) {
+	t.Helper()
+	raw, err := json.Marshal(stateFile{
+		Accounts: map[string]stateAccount{"u1": {Credits: credits}},
+		Revision: rev,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fp, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(fp, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// snapshotStore 造一个只带 revision + saved_at 的快照 Store。
+func snapshotStore(t *testing.T, credits int64, rev int64, savedAt time.Time) *memStore {
+	t.Helper()
+	raw, err := json.Marshal(snapshot{
+		stateFile: stateFile{
+			Accounts: map[string]stateAccount{"u1": {Credits: credits}},
+			Revision: rev,
+		},
+		SavedAt: savedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &memStore{loadData: raw, loadOK: true}
+}
+
+// conflictCase 三种冲突组合共用的断言骨架：local 与快照给出不同 credits，
+// 断言最终采用的来源。wantCredits 就是判据的结论。
+type conflictCase struct {
+	name        string
+	localCred   int64
+	localRev    int64
+	localMTime  time.Time
+	snapCred    int64
+	snapRev     int64
+	snapSavedAt time.Time
+	wantCredits int64
+	wantRev     int64
+}
+
+func runConflictCases(t *testing.T, cases []conflictCase) {
+	t.Helper()
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fp := filepath.Join(t.TempDir(), "state.json")
+			writeLocal(t, fp, c.localCred, c.localRev, c.localMTime)
+			p := New(fp)
+			defer p.Close()
+			p.SetStore(snapshotStore(t, c.snapCred, c.snapRev, c.snapSavedAt))
+			p.RestoreFromSnapshot()
+
+			st, ok := p.Status("u1")
+			if !ok {
+				t.Fatal("恢复后应有 u1")
+			}
+			if st.Credits != c.wantCredits {
+				t.Fatalf("credits=%d，应为 %d（来源判定错误）", st.Credits, c.wantCredits)
+			}
+			if p.revision != c.wantRev {
+				t.Fatalf("revision=%d，应为 %d", p.revision, c.wantRev)
+			}
+		})
+	}
+}
+
+// TestRestoreByRevision 三种冲突组合 + 旧文件回落，全部只看 revision
+// ——**故意让 mtime/saved_at 指向相反的结论**，证明时间戳已不参与决策。
+func TestRestoreByRevision(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	runConflictCases(t, []conflictCase{
+		{
+			// 本地 rev 大 → 取本地。快照 saved_at 更晚（mtime 判据会判错）。
+			name:        "本地新+快照旧-取本地",
+			localCred:   77,
+			localRev:    8,
+			localMTime:  old,
+			snapCred:    999,
+			snapRev:     5,
+			snapSavedAt: now,
+			wantCredits: 77,
+			wantRev:     8,
+		},
+		{
+			// 快照 rev 大 → 取快照。本地 mtime 更晚（mtime 判据会判错）。
+			name:        "本地旧+快照新-取快照",
+			localCred:   77,
+			localRev:    3,
+			localMTime:  now,
+			snapCred:    999,
+			snapRev:     5,
+			snapSavedAt: old,
+			wantCredits: 999,
+			wantRev:     5,
+		},
+		{
+			// rev 相等 → 取本地（同一次落盘，内容必然一致，不看时钟）。
+			name:        "revision 相等-确定性取本地",
+			localCred:   77,
+			localRev:    6,
+			localMTime:  old,
+			snapCred:    999,
+			snapRev:     6,
+			snapSavedAt: now,
+			wantCredits: 77,
+			wantRev:     6,
+		},
+		{
+			// 任一侧 rev 为 0（旧文件）→ 回落 mtime：本地 mtime 更新 → 取本地。
+			// 若把 0 当成可比序号，会错误地"5 > 0"取快照。
+			name:        "一侧 rev 为 0-回落 mtime 取本地",
+			localCred:   77,
+			localRev:    0,
+			localMTime:  now,
+			snapCred:    999,
+			snapRev:     5,
+			snapSavedAt: old,
+			wantCredits: 77,
+			wantRev:     0,
+		},
+	})
+}

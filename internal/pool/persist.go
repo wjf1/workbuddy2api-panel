@@ -36,10 +36,17 @@ type StoreSnapshotter interface {
 
 // RestoreFromSnapshot 择新恢复：比较本地 state.json 与 Redis 快照，采用较新者。
 //
-// 本地**可用**时按新旧择一（快照不早于本地 → 采用快照，否则本地优先）；本地**不可用**
-// （state.json 缺失或不可读，典型为首次在新卷/新节点启动）时**采用快照**——此时本地根本
-// 没有可"优先"的状态，快照是本轮唯一的运行态来源，这正是快照作为「启动恢复备份」的核心
-// 场景。分支情形：无快照 / 快照无 savedAt → 本地优先（无判据可比）。
+// 判据按可靠性排序，先命中先返回：
+//  1. **revision（落盘序号）**：两侧均 >0 且不等 → 取大者。序号在同一逻辑状态上单调递增，
+//     不受 mtime 被无关操作改写（备份还原、拷贝、杀软扫描）与时钟漂移影响。
+//  2. **revision 相等且 >0** → 取本地。同一序号意味着同一次落盘，两侧内容必然一致，
+//     此时确定性取本地，不看时钟。
+//  3. **回落 mtime / saved_at**：任一侧 revision 为 0（旧版文件）时无序号可比，沿用历史
+//     逻辑（快照不早于本地 → 采用快照，否则本地优先）。旧文件的行为与加序号前完全一致。
+//
+// 本地**不可用**（state.json 缺失或不可读，典型为首次在新卷/新节点启动）时**采用快照**——
+// 此时本地根本没有可"优先"的状态，快照是本轮唯一的运行态来源，这正是快照作为「启动恢复
+// 备份」的核心场景。分支情形：无快照 / 快照无 savedAt → 本地优先（无判据可比）。
 //
 // 每种情形都打一条对应的恢复来源日志，便于对账。必须在 SyncToDir 之前调用
 // （SyncToDir 只增删不入值：值只能来自本地 load 或本函数采用快照）。
@@ -49,8 +56,7 @@ func (p *Pool) RestoreFromSnapshot() {
 		return
 	}
 	localInfo, localErr := os.Stat(p.stateFp)
-	// 本地版本号：只用于恢复日志观测（判断两侧是否真的在单调增长、有没有倒退）。
-	// 读不到或旧文件无该字段 → 0。不参与"择新恢复"判定（下一步才切换）。
+	// 本地版本号：读不到或旧文件无该字段 → 0（= 不可比）。
 	localRev := int64(0)
 	if localErr == nil {
 		localRev = localRevision(p.stateFp)
@@ -80,15 +86,34 @@ func (p *Pool) RestoreFromSnapshot() {
 			snap.SavedAt.Format(time.RFC3339), snap.Revision, localErr)
 		return
 	}
+	// —— 判据 1：revision 两侧可比且不等 → 取大者（不碰时钟、不看 mtime）——
+	if localRev > 0 && snap.Revision > 0 && localRev != snap.Revision {
+		if snap.Revision > localRev {
+			p.adoptSnapshot(snap)
+			log.Printf("pool: 恢复来源=Redis 快照 (rev=%d > 本地 rev=%d，按版本号判定；saved_at=%s, mtime=%s)",
+				snap.Revision, localRev, snap.SavedAt.Format(time.RFC3339), localInfo.ModTime().Format(time.RFC3339))
+			return
+		}
+		log.Printf("pool: 恢复来源=本地 state.json（rev=%d > 快照 rev=%d，按版本号判定；mtime=%s, saved_at=%s）",
+			localRev, snap.Revision, localInfo.ModTime().Format(time.RFC3339), snap.SavedAt.Format(time.RFC3339))
+		return
+	}
+	// —— 判据 2：revision 相等且 >0 → 同一次落盘，两侧内容必然一致，确定性取本地 ——
+	if localRev > 0 && localRev == snap.Revision {
+		log.Printf("pool: 恢复来源=本地 state.json（两侧 rev 相同=%d，同一次落盘，不看时钟；mtime=%s, saved_at=%s）",
+			localRev, localInfo.ModTime().Format(time.RFC3339), snap.SavedAt.Format(time.RFC3339))
+		return
+	}
+	// —— 判据 3（回落）：任一侧 revision 为 0（旧版文件），无序号可比，沿用 mtime/saved_at ——
 	if !localInfo.ModTime().After(snap.SavedAt) {
 		// 快照不早于本地 → 采用快照。
 		p.adoptSnapshot(snap)
-		log.Printf("pool: 恢复来源=Redis 快照 (saved_at=%s, rev=%d)（本地 rev=%d, mtime=%s）",
+		log.Printf("pool: 恢复来源=Redis 快照 (saved_at=%s, rev=%d)（本地 rev=%d 不可比，按 mtime=%s 判定）",
 			snap.SavedAt.Format(time.RFC3339), snap.Revision, localRev, localInfo.ModTime().Format(time.RFC3339))
 		return
 	}
 	// 走到这里必然是「本地存在且严格新于快照」，日志结论属实。
-	log.Printf("pool: 恢复来源=本地 state.json（rev=%d, mtime=%s；快照 rev=%d, saved_at=%s）",
+	log.Printf("pool: 恢复来源=本地 state.json（rev=%d, mtime=%s；快照 rev=%d, saved_at=%s；一侧 rev 不可比，按时间判定）",
 		localRev, localInfo.ModTime().Format(time.RFC3339), snap.Revision, snap.SavedAt.Format(time.RFC3339))
 }
 
