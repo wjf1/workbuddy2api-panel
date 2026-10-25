@@ -40,7 +40,7 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `dc1534a` | `git log --oneline -1` |
+| HEAD | `15c0dd5` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
 | 非测试代码 | 107 文件 / 33,247 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
 | 测试代码 | 102 文件 / 864 个 Test 函数 | 同上 |
@@ -98,6 +98,7 @@ internal/
 | `94799e5` | 弹窗打开时给 `.shell` 加 `inert`（读屏不再能浏览遮罩背后内容） | `node --check internal/panel/app.js`；面板测试 |
 | `62f67f5` | 状态快照加单调 `revision`（本步只写+打日志，**不改恢复判定**）：5 个测试覆盖递增/快照一致/续号/旧文件/采纳快照 | `go test ./internal/pool -run 'TestRevision\|TestAdoptSnapshotKeepsRevision' -v` |
 | `dc1534a` | 择新恢复改以 `revision` 为主判据：两侧可比且不等取大者 / 相等取本地 / 一侧为 0 回落 mtime（旧文件行为不变）；4 个子用例故意让 mtime 指向相反结论 | `go test ./internal/pool -run TestRestoreByRevision -v`（4 子用例）；回退判定后前 3 个子用例即红 |
+| `15c0dd5` | `upstream/dump.go` 保留期清理补测试（原 0%）：只删过期且有 15 字符时间戳前缀的文件、窗口内与用户手放样本保留、未配置时静默返回、启动即清一次 | `go test ./internal/upstream -run 'TestCleanDumpDir\|TestStartDumpCleaner' -v`（4 用例）；CleanDumpDir 0%→100% |
 
 ---
 
@@ -128,7 +129,7 @@ internal/
 - **把 `strip_tool_metadata` 并进 `payload.go` 归一化链**：纯性能优化（省一次 parse），等 `payload.go` 没有在途改动时再做，避免两个工作混进同一 diff（见坑 #9）。
 
 ### P3 — 低成本清理
-圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）｜`cmd/*` 冒烟测试（signin/trial/credit 零测试）｜`go.mod` 加 `toolchain`｜`panel/ring.go` 覆盖率 7.5% / `upstream/dump.go` 0%
+圆角令牌化（13→3 档）｜骨架屏（当前 0 处）｜触控目标 27.7px → 44px（移动端）｜i18n（现硬编码中文）｜图标集（现 16 处内联 SVG）｜60 处内联 style 收敛｜OpenAPI 自动生成（40+ 端点靠 README 手工维护）｜`cmd/*` 冒烟测试（signin/trial/credit 零测试）｜`go.mod` 加 `toolchain`｜`panel/ring.go` 函数级覆盖率 67–100%（旧说的 7.5% 已过时）/ `upstream/dump.go` 仅剩 `dumpUpstream` 89.5%
 
 ---
 
@@ -223,3 +224,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-25 | 完成剩余可安全落地的 4 项：上游 requestId 落台账、pprof/metrics 独立诊断监听、CI `-race` 观察作业、弹窗 `inert`；其余 4 项因「需先设计/需人眼验收/会与在途改动冲突」明确保留（见第 4 节末尾） | `94799e5` |
 | 2026-10-25 | 状态三源一致性第 1 步：快照加单调 `revision`（只写不改判定），恢复日志带四项观测值；5 个测试钉住递增/续号/快照一致/旧文件/采纳快照 | `62f67f5` |
 | 2026-10-25 | 状态三源一致性第 2 步：`RestoreFromSnapshot` 改以 `revision` 为主判据（取大者 / 相等取本地 / 一侧为 0 回落 mtime），**P1 清空** | `dc1534a` |
+| 2026-10-25 | 补 `upstream/dump.go` 保留期清理测试（原 0%）；顺带纠正 P3 里过时的覆盖率数字 | `15c0dd5` |
