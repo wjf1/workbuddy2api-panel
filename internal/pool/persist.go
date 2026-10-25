@@ -49,17 +49,23 @@ func (p *Pool) RestoreFromSnapshot() {
 		return
 	}
 	localInfo, localErr := os.Stat(p.stateFp)
+	// 本地版本号：只用于恢复日志观测（判断两侧是否真的在单调增长、有没有倒退）。
+	// 读不到或旧文件无该字段 → 0。不参与"择新恢复"判定（下一步才切换）。
+	localRev := int64(0)
+	if localErr == nil {
+		localRev = localRevision(p.stateFp)
+	}
 	raw, ok := store.LoadState()
 	if !ok {
 		if localErr == nil {
-			log.Printf("pool: 恢复来源=本地 state.json（无 Redis 快照）")
+			log.Printf("pool: 恢复来源=本地 state.json（无 Redis 快照）本地 rev=%d", localRev)
 		}
 		return
 	}
 	var snap snapshot
 	if json.Unmarshal(raw, &snap) != nil || snap.SavedAt.IsZero() {
 		// 快照无 savedAt：无法比较新旧，本地优先。
-		log.Printf("pool: 恢复来源=本地 state.json（Redis 快照无 saved_at）")
+		log.Printf("pool: 恢复来源=本地 state.json（Redis 快照无 saved_at）本地 rev=%d 快照 rev=%d", localRev, snap.Revision)
 		return
 	}
 	if localErr != nil {
@@ -70,18 +76,20 @@ func (p *Pool) RestoreFromSnapshot() {
 		// 从未发生过的比较，把排障引向根本不存在的本地文件；随后 SyncToDir 只增删不入值，
 		// 全池运行态（credits/冷却/熔断计数/usedSeq/lastUsed）被清零。
 		p.adoptSnapshot(snap)
-		log.Printf("pool: 恢复来源=Redis 快照 (saved_at=%s)（本地 state.json 不可用: %v）",
-			snap.SavedAt.Format(time.RFC3339), localErr)
+		log.Printf("pool: 恢复来源=Redis 快照 (saved_at=%s, rev=%d)（本地 state.json 不可用: %v）",
+			snap.SavedAt.Format(time.RFC3339), snap.Revision, localErr)
 		return
 	}
 	if !localInfo.ModTime().After(snap.SavedAt) {
 		// 快照不早于本地 → 采用快照。
 		p.adoptSnapshot(snap)
-		log.Printf("pool: 恢复来源=Redis 快照 (saved_at=%s)", snap.SavedAt.Format(time.RFC3339))
+		log.Printf("pool: 恢复来源=Redis 快照 (saved_at=%s, rev=%d)（本地 rev=%d, mtime=%s）",
+			snap.SavedAt.Format(time.RFC3339), snap.Revision, localRev, localInfo.ModTime().Format(time.RFC3339))
 		return
 	}
 	// 走到这里必然是「本地存在且严格新于快照」，日志结论属实。
-	log.Printf("pool: 恢复来源=本地 state.json（较新于 Redis 快照 %s）", snap.SavedAt.Format(time.RFC3339))
+	log.Printf("pool: 恢复来源=本地 state.json（rev=%d, mtime=%s；快照 rev=%d, saved_at=%s）",
+		localRev, localInfo.ModTime().Format(time.RFC3339), snap.Revision, snap.SavedAt.Format(time.RFC3339))
 }
 
 // applySnapshotLocked 用 Redis 快照覆盖内存状态（已在择新判定后采用）。调用方必须已持有 p.mu。
@@ -97,6 +105,9 @@ func (p *Pool) adoptSnapshot(s snapshot) {
 func (p *Pool) applySnapshotLocked(s snapshot) {
 	p.byUID = map[string]*entry{}
 	p.applyAccountsLocked(s.Accounts)
+	// 接上快照的版本号：不从 0 重来，否则恢复后的第一次落盘 revision 会"倒退"，
+	// 日志里看起来像状态被回滚（实际只是计数器重置）。
+	p.revision = s.Revision
 }
 
 // startFlusher 周期性把 dirty 状态落盘（5s 一轮，锁外写盘）。
@@ -138,7 +149,9 @@ func (p *Pool) persistState() {
 		p.mu.Unlock()
 		return
 	}
+	p.revision++ // 每次落盘 +1；失败也不回退（序号允许有空洞，但不允许倒退）
 	sf := p.stateOverviewLocked()
+	sf.Revision = p.revision
 	store := p.store
 	p.mu.Unlock()
 
@@ -194,6 +207,7 @@ func (p *Pool) load() {
 		return
 	}
 	p.applyAccountsLocked(sf.Accounts)
+	p.revision = sf.Revision // 从磁盘续上版本号（旧文件无该字段 → 0）
 }
 
 // applyAccountsLocked 用持久化账号状态覆盖/插入 byUID（placeholder 凭证，Add 时换全）。
@@ -368,4 +382,18 @@ func (p *Pool) stateOverviewLocked() stateFile {
 		sf.Accounts[uid] = s
 	}
 	return sf
+}
+
+// localRevision 读本地 state.json 里记录的版本号。仅供恢复日志观测：
+// 读不到/解析失败/旧文件无该字段一律返回 0，绝不影响恢复判定。
+func localRevision(path string) int64 {
+	raw, err := safefile.Read(path, nil)
+	if err != nil {
+		return 0
+	}
+	var sf stateFile
+	if json.Unmarshal(raw, &sf) != nil {
+		return 0
+	}
+	return sf.Revision
 }

@@ -71,6 +71,10 @@ type Pool struct {
 	// persistFails 本地 state.json 连续落盘失败计数（仅 saveLocked 在持锁下读写，无需 atomic）。
 	// 用于落盘失败的日志节流：首败/每 N 次提醒/恢复各打一条，避免磁盘满时刷屏。
 	persistFails int
+	// revision 状态版本号：每次落盘 +1，随 state.json 与 Redis 快照一起写盘，
+	// 恢复时接上（见 stateFile.Revision）。持 p.mu 读写。
+	// 当前只用于观测（恢复日志里打印两侧版本），尚未参与"择新恢复"判定。
+	revision int64
 	// pickSeq 单调递增的选号序号：每次 pick 选中账号时自增并记到 entry.usedSeq，
 	// 为 LRU 兜底/防惊群提供与 time.Now() 精度无关的严格全序（Windows ~0.5ms 精度下
 	// lastUsed 墙钟会全等）。仅 pick 写锁路径读写，无需 atomic。
