@@ -60,6 +60,18 @@ func TestAutoActionIndex(t *testing.T) {
 	if len(autoActions) >= unknown {
 		t.Fatalf("动作表长度 %d 已达到未知哨兵值，排序将失效", len(autoActions))
 	}
+
+	// 与 autoActionFor 同口径：同一个上游 task_code 不能一个认、一个不认，
+	// 否则按钮可点但排序把它当未知任务甩到最后。
+	for i := range autoActions {
+		code := autoActions[i].TaskCode
+		if autoActionFor(" "+code+" ") == nil {
+			t.Fatalf("%q 带空白时 autoActionFor 应命中", code)
+		}
+		if got := autoActionIndex(" " + code + " "); got != i {
+			t.Errorf("%q 带空白时执行序 = %d，want %d（应与 autoActionFor 同口径）", code, got, i)
+		}
+	}
 }
 
 // TestIsMPTaskCode 只有登记过的 mp 专属码才走小程序口径（会多打一次 mp 列表接口）。

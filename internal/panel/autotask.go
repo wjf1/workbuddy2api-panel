@@ -188,7 +188,12 @@ func autoActionFor(code string) *autoAction {
 }
 
 // autoActionIndex 任务在 autoActions 中的顺序（队列执行按依赖序排；未知返回大值）。
+//
+// 与 autoActionFor 同口径（TrimSpace）：两个函数吃的是同一个上游 task_code，
+// 若这里不 trim，" chat_5 " 会在 autoActionFor 里命中（按钮可点），却在排序里被
+// 当成未知任务排到最后——依赖序被打乱，且两种查询结论互相矛盾。
 func autoActionIndex(code string) int {
+	code = strings.TrimSpace(code)
 	for i := range autoActions {
 		if autoActions[i].TaskCode == code {
 			return i
