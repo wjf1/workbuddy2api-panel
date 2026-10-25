@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
@@ -105,7 +105,7 @@ func New(path string) *Recorder {
 	}
 	if path != "" {
 		if err := r.load(); err != nil {
-			log.Printf("[usage] 读取 %s 失败（从零开始）: %v", path, err)
+			logx.Warnf("[usage] 读取 %s 失败（从零开始）: %v", path, err)
 		}
 	}
 	return r
@@ -284,7 +284,7 @@ func (r *Recorder) Rollup(now time.Time) {
 	}
 	if len(moves) > 0 {
 		r.dirty = true
-		log.Printf("[usage] 折叠 %d 个小时桶为日桶（保留 %v 细粒度）", len(moves), hourlyKeep)
+		logx.Infof("[usage] 折叠 %d 个小时桶为日桶（保留 %v 细粒度）", len(moves), hourlyKeep)
 	}
 }
 
@@ -307,7 +307,7 @@ func (r *Recorder) load() error {
 		b := f.Buckets[i]
 		r.buckets[b.Scope+"|"+b.Realm+"|"+b.UID+"|"+b.Model+"|"+b.Rate] = &b
 	}
-	log.Printf("[usage] 已恢复 %d 个用量桶（%s）", len(r.buckets), r.path)
+	logx.Infof("[usage] 已恢复 %d 个用量桶（%s）", len(r.buckets), r.path)
 	return nil
 }
 
@@ -329,15 +329,15 @@ func (r *Recorder) flush(force bool) {
 
 	raw, err := json.Marshal(snap)
 	if err != nil {
-		log.Printf("[usage] 序列化失败: %v", err)
+		logx.Errorf("[usage] 序列化失败: %v", err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
-		log.Printf("[usage] 建目录失败: %v", err)
+		logx.Errorf("[usage] 建目录失败: %v", err)
 		return
 	}
 	if err := safefile.WriteKeep(r.path, raw, 0o600); err != nil {
-		log.Printf("[usage] 原子替换失败: %v", err)
+		logx.Errorf("[usage] 原子替换失败: %v", err)
 	}
 }
 
