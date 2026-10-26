@@ -5,7 +5,7 @@
 
 - 文档位置：`docs/DEV-HANDOFF.md`（已纳入版本库）
 - 与根目录 `HANDOFF.md` 的区别：`HANDOFF.md` 是**发版/线上运维**的接力记录（83KB 历史堆积）；本文件只管**开发**：当前基线、待办、约定、坑。
-- 最后更新：2026-10-26
+- 最后更新：2026-10-26（1.19.0-panel 发版）
 
 ---
 
@@ -41,7 +41,7 @@ go build -o wb2api.exe ./cmd/server
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
 | HEAD | `20a802a` | `git log --oneline -1` |
-| 版本常量 | `1.18.3-panel`（`cmd/server/main.go:40`） | `grep 'appVersion =' cmd/server/main.go` |
+| 版本常量 | `1.19.0-panel`（`cmd/server/main.go:40`） | `grep 'appVersion =' cmd/server/main.go` |
 | 非测试代码 | 108 文件 / 33,548 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
 | 测试代码 | 113 文件 / 926 个 Test 函数 | 同上 |
 | `go test ./...` | **26 包全绿，约 10 秒**（scheduler 7.8s，panel 2.0s，upstream 1.8s，其余 <1.1s） | `go test ./... -count=1` |

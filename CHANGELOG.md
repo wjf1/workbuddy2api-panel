@@ -4,6 +4,49 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [1.19.0-panel] - 2026-10-26
+
+本版为**加固、可观测与测试基线版**：在 `1.18.3` 之后累计的 59 个提交，涵盖一处进程级 P0 修复、三个 opt-in 的新运维开关、日志全面分级结构化，以及把测试从「能跑」推到「能反证」。全部新开关默认关闭或零行为变更，升级不改变现有部署的运行语义。
+
+### 修复
+
+- **P0：SSE 心跳与错误路径并发写 header map 导致进程 fatal**。`anthropicStreamWriter` 被当作 `ResponseWriter` 下传给 `chatCompletions`，其 `Header()` 直通底层 map 且不持锁；心跳在锁内改头 → 两个写者 → `fatal error: concurrent map writes`。这是**进程级 abort，不可 recover**，一旦触发整条网关退出。修法：`ensureSSEHeaders` 在 `headerWritten` 后直接返回、删除 `startWith` 的锁外调用、心跳改抓局部 stop channel。回归测试 `TestAnthropicHeartbeat` 可反证（回退修复立即失败）。
+- **测试顺序依赖**：`dynamicModelsCache` 为包级全局，跨用例污染曾被误判成「偶发 flaky」。补 `resetDynamicModelsCache(t)` 并加 `-shuffle` 复跑。
+- **面板频道分类**：任务失败行带 `WARN: `/`ERR: ` 前缀，会掉进 sys 频道而非任务频道。分类前先剥前缀。
+- **`truncateStr` / `trunc` 切中文产生非法 UTF-8**：按字节硬切会把末尾字符切成半个（面板显示 `�`）。改为回退到最近的 rune 起点。
+- **`autoActionIndex` 与 `autoActionFor` 口径不一致**：前者未 `TrimSpace`，带空白的 task_code 在一侧命中、另一侧当未知，导致排序打乱依赖链。
+
+### 新增
+
+- **入站限流 `server.rate_limit_rps` / `rate_limit_burst`（默认 0 = 关闭）**：令牌桶按 **TCP 对端主机**划分，超限返回 429 + `Retry-After`（Anthropic 面为 `rate_limit_error`）。豁免 `/status` 与 `/healthz`——监控探活被限流会被误判成服务挂了。**刻意不用 `X-Forwarded-For`**：该头客户端可任意伪造，按它限流等于每请求换一个假 IP 拿无限额度。
+- **请求体上限 `server.max_body_mb`（默认 0 = 不限制）**：超限请求在读 body 前被拒（413 / `request_too_large`），不消耗选号与上游配额。
+- **诊断监听 `server.debug_addr`（默认空 = 关闭）**：pprof + 低基数 `/metrics`，**独立端口**而非挂主 mux。pprof 无鉴权且 `profile` 能导出 heap（含请求体与账号 token），主端口通常绑 `0.0.0.0`；回归测试 `TestMainMuxHasNoDebugEndpoints` 钉住这一点。
+- **出站元数据剥除 `features.strip_tool_metadata`（默认 false）**：剥除 tool-call 块里的 `metaData`（traceId / traceparent / baggage 等约 20 个纯观测字段），实测 39 个 tool-call 约省 55–70KB。只删 `tool.metaData` / `result.metaData`，其余字段不动；关闭时出站报文逐字节不变。
+- **上游 requestId 与本地 rid 同列落台账**：新增 `Error.RequestID`、`ParseUpstreamRequestID`（识别三种形态）与 `reqlog.Event.upstream_request_id`，排障时本地上游两侧 ID 不再脱节。
+- **状态快照单调 `revision`**：`RestoreFromSnapshot` 改以 `revision` 为主判据（两侧可比且不等取大者 / 相等取本地 / 一侧为 0 回落 mtime）。解决「三源（内存 / state.json / 对账快照）择新」在多实例下靠 mtime 判定的不可靠问题，旧文件行为不变。
+- **`internal/logx` 分级日志门面**：保形 slog Handler——时间戳仍由 log 包 flags 打、级别写成 `WARN: `/`ERR: ` 前缀（**不写 `level=`**）、结构化属性以 ` k=v` 追加行尾。全仓 255 处 `log.Printf` 迁完，分级实测 **Infof 129 / Warnf 105 / Errorf 21**。**为什么不能直接换 `slog.TextHandler`**：它输出 `time=… level=… msg=…`，而面板 `tsPrefixRe` 只认 log 包默认前缀、任务频道靠行首匹配——直接换会让日志视图静默丢时间戳与任务筛选（不报错、只是难用）。
+- **面板字号收敛为 6 档语义令牌**（`--fs-xs/sm/base/md/lg/num`），账号表表头吸附（`--topbar-h`）。
+- **弹窗打开时给主容器加 `inert`**：读屏不再能浏览遮罩背后的内容。
+- **CI 增加 `-race` 作业**（pool/server/scheduler 三包，首轮 `continue-on-error` 观察态）。
+
+### 变更
+
+- **上游错误类别 → HTTP 状态码收敛为单一映射表**（`errmap.go`）：此前散在 `handler_chat.go` 内 6 处，改一处必漏五处。附「每个 ErrKind 都必须表态」的完整性测试。
+- **`client.go`（2580 行）按职责拆 6 文件**、**`handler.go`（1962 行）按端点族拆 5 文件**：均为纯搬运，用「符号集合 + 行多重集」双机械校验（154 / 47 个声明零缺失、行丢失 0）。
+- **全仓 gofmt + `.gitattributes` 固定 LF + CI 加 gofmt 门禁**：此前本地 gofmt 会因 CRLF 误报 100+ 文件，本地与 CI 判定不一致。
+
+### 测试
+
+- `go test ./...` 26 包全绿，**约 10 秒**；`internal/panel` 覆盖率 **33.0% → 49.4%**。
+- 14 处测试不再打真实网络（改毒桩 + `calls == 0` 这类更强断言）；`TestMain` 补 `rotateBackoffBase = 0`，server 包 11.3s → 0.7s；scheduler 单条 12.01s → 0.02s（`SetBillingRetryDelayForTest` 注入点）。
+- 任务中心测试从零推到覆盖：读取/回读路径 19 子用例、四个动作 13 子用例、本轮再补 20 个 Test / 约 60 子用例（mp 闭环、专家链、`runAutoAll`、两个 handler）。**每处关键断言都做过反证**（回退修复确认用例变红）。
+- 前端纯函数层抽为 `internal/panel/logic.js`（14 个函数），`logic_test.js` 60 条零依赖断言 + 3 处反证；`TestLogicJSNeedsNoDOM` 拦住往纯函数层塞 DOM 调用。
+
+### 验证
+
+- `go build ./... && go vet ./... && gofmt -l ./cmd ./internal && go test ./... -count=1` 全部通过。
+- 面板无障碍：对比度达 WCAG AA、57 处 `<th scope>`、弹窗 ARIA + 焦点管理、浅色 FOUC 消除。
+
 ## [1.18.3-panel] - 2026-10-24
 
 本版为**账号池排版清理**：集中处理账号池页肉眼可见的对齐与间距问题（用户截图反馈批）。

@@ -75,7 +75,9 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 🧠 **推理模型兼容** | DeepSeek 思维链注入（`thinking.type=enabled` + 默认档）、`reasoning_content` 多轮回填、effort 档位自动降级 |
 | 💬 **系统提示词体系** | 网关自有提示词替换客户端 system（默认 `custom`），从源头消灭 system 来源的内容误报；`passthrough` 遇拦截自动降级重试 |
 | 🗑️ **指纹脱敏** | 出站请求体黑名单指纹字段清洗（可关闭），与提示词体系两层叠加 |
-| 📊 **可观测** | 每请求一行表格日志（TTFB / token 速率 / uid）；`/healthz` 带 `service` 身份标识可接负载均衡 / 宿主探活 |
+| 🚧 **入站护栏（1.19.0）** | `server.max_body_mb` 请求体上限（超限在读 body 前拒绝，413 / `request_too_large`，不消耗选号与上游配额）与 `server.rate_limit_rps` 入站限流（令牌桶按 **TCP 对端**划分，429 + `Retry-After`，豁免 `/status` 与 `/healthz`）。两者均默认 `0` = 关闭，零行为变更 |
+| 📊 **可观测** | 每请求一行表格日志（TTFB / token 速率 / uid）；`/healthz` 带 `service` 身份标识可接负载均衡 / 宿主探活；可选诊断监听 `server.debug_addr`（pprof + 低基数 `/metrics`，**独立端口**，默认关闭）；上游 `requestId` 与本地上游流水同列落台账 |
+| 🧹 **出站瘦身（1.19.0）** | `features.strip_tool_metadata`：剥除 tool-call 块里的 `metaData`（traceId / traceparent / baggage 等纯观测字段），长对话可省数十 KB 上下文；默认 `false` = 报文逐字节不变 |
 | 💾 **状态持久化** | 池状态本地原子落盘 + Upstash Redis 异步镜像（可选），重启择新恢复 |
 | ♻️ **回收站与定时备份** | 「移除账号」软删除进 `data/trash/`（默认保留 30 天，可恢复 / 彻底删除 / 过期自动清理）；每日整点自动备份 `auths/` + 池状态为 zip（保留 N 份轮转，**不含 config.json**），面板内可手动备份与下载 |
 | 📈 **余额趋势与会员档位（1.17.0）** | 账号池「余额趋势」box：全池积分总和按小时采样 SVG 曲线（30 天窗口，观察「号在不在被薅」与消耗速率）；账号行昵称旁显示会员档位胶囊（计费摘要一天一次，失败不写结论） |
