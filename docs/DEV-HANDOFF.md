@@ -40,15 +40,15 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `e91fcc4` | `git log --oneline -1` |
+| HEAD | `6e2a7e4` | `git log --oneline -1` |
 | 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
 | 非测试代码 | 108 文件 / 33,513 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 109 文件 / 901 个 Test 函数 | 同上 |
-| `go test ./...` | **26 包全绿，0 个 no test files，约 11 秒**（scheduler 占 7.7s，panel 2.2s，其余 <2s） | `go test ./... -count=1` |
+| 测试代码 | 111 文件 / 909 个 Test 函数 | 同上 |
+| `go test ./...` | **26 包全绿，0 个 no test files，约 13 秒**（scheduler 占 8.5s，panel 3.4s，其余 <2s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
 | `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
 | 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 989 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 888 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
-| 最慢包 | `internal/scheduler` 约 7.7s，`internal/panel` 2.2s（其余均 < 2s） | 见测试输出 |
+| 最慢包 | `internal/scheduler` 约 8.5s，`internal/panel` 3.4s（其余均 < 2s） | 见测试输出 |
 
 ### 目录职责（21 个 internal 包）
 
@@ -112,6 +112,8 @@ internal/
 | `ee87353` | `internal/panel/autotask.go` 纯函数测试（`autoActionFor`/`autoActionIndex`/`isMPTaskCode`/`acceptStatusOr`/`taskProgressText`/`truncateStr`），5 处反证 | `go test ./internal/panel -run 'TestAutoAction\|TestIsMPTaskCode\|TestAcceptStatusOr\|TestTaskProgressText\|TestTruncateStr' -v` |
 | `d99ae1b` | `autoActionIndex` 补 `TrimSpace`，与 `autoActionFor` 同口径（原来带空白的 task_code 一侧命中、另一侧当未知，排序打乱依赖序） | `go test ./internal/panel -run TestAutoActionIndex -v` |
 | `e91fcc4` | `truncateStr` 改按 rune 边界截断（中文错误文本 `s[:n]+"…"` 会切出非法 UTF-8） | `go test ./internal/panel -run TestTruncateStr -v` |
+| `c59a6db` | 任务读取 / accept 回读路径打桩测试（19 个子用例）：`taskByCode` 双口径回落与"未知码不多打上游"、`taskByCodeMP`、`taskByCodeWaiting` 轮询预算、`acceptWithVerifyMP` 两次上限；6 处反证 | `go test ./internal/panel -run 'TestTaskByCode\|TestAcceptWithVerifyMP' -v` |
+| `6e2a7e4` | 四个任务动作打桩测试（13 个子用例）：`runChat5` 差额上报与幂等、`runRichMeow` 桌面事件链、`runBuddyApp`、`runFirstBuddy` 三步链路与「门槛未过非致命」；6 处反证 | `go test ./internal/panel -run 'TestRunChat5\|TestRunRichMeow\|TestRunBuddyApp\|TestRunFirstBuddy' -v` |
 
 ---
 
@@ -175,11 +177,11 @@ internal/
 
 | 包 | 语句覆盖 | 说明 |
 |---|---|---|
-| `internal/panel` | **29.6%** | 全仓最低。`autotask.go`（1264 行 / 40 个函数）几乎全 0%，只覆盖了 6 个纯函数；`taskcenter.go`、`trash.go`、`backup.go`、`login.go`、`import.go` 基本未测。这是目前最大的测试缺口 |
+| `internal/panel` | **33.0%** | 全仓最低。`autotask.go` 的读取/回读路径与 4 个 `run*` 动作已覆盖（读取 4 个函数 100%，`runChat5` 94.4%、`runFirstBuddy` 90%、`runRichMeow`/`runBuddyApp` 100%）；剩余 `runMPMiniChatTask`/`runSequential*`/`runExpert*`/`runAutoAll` 仍未测，另有 `taskcenter.go`、`trash.go`、`backup.go`、`login.go`、`import.go` 基本未测 |
 | `internal/panel/ring.go` | 函数级 67–100% | 旧文写的 7.5% 是文件级误读，已作废 |
 | `internal/upstream/dump.go` | 仅剩 `dumpUpstream` 89.5% | 其余函数已满覆盖 |
 
-补 `autotask.go` 的 `run*` 动作需要打桩上游（仓库里 `upstream.New` + `roundTripFunc` 的既有手法可用），属于「单独立项」级别，不要顺手塞进功能提交。
+**剩余 `run*` 动作的补充成本已经很低**：`c59a6db`/`6e2a7e4` 建立了可复用桩架 —— `internal/panel/autotask_read_test.go` 里的 `newTaskFakePanel`（假 Transport + 按序号回放响应，`taskSpec`/`tasksEnvelope` 直接构造任务列表）。新写一个动作测试只需给 respond 闭包按序号返回响应，不需要任何新依赖。`reportGap`/`mpActionGap`/`claimPollGap` 都是包级变量，测试里置 0 再 `t.Cleanup` 还原，不许加 `time.Sleep`。
 
 > `cmd/*` 冒烟测试已在 `356498c` / `936750a` 完成，从本清单移除。
 
@@ -297,3 +299,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-26 | P2-4.5 第一步：前端纯函数层抽出 + 60 条行为断言（含 3 处反证）；DOM 逻辑仍无测试，需 DOM 运行时才能覆盖 | `0f9e896` |
 | 2026-10-26 | P3 第一批：`cmd/credit`/`cmd/trial`/`cmd/signin` 补纯函数测试（26 包全绿、0 个 no test files）；顺带修 `trunc` 切中文产生非法 UTF-8 | `936750a` |
 | 2026-10-26 | 任务中心纯函数测试（`autotask.go` 6 个）+ 两处同源修复：`autoActionIndex` 与 `autoActionFor` 对齐 TrimSpace、`truncateStr` 改 rune 边界；panel 覆盖 28.4% → 29.6% | `e91fcc4` |
+| 2026-10-26 | 任务中心打桩测试两批：读取/回读路径 19 个子用例（6 处反证）+ 四个任务动作 13 个子用例（6 处反证）；建立可复用桩架；panel 覆盖 29.6% → 33.0% | `6e2a7e4` |
