@@ -20,9 +20,10 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// taskCall 记下一次上游调用的关键特征（够区分 mp 口径与读/写动作即可）。
+// taskCall 记下一次上游调用的关键特征（够区分 mp 口径、请求域与读/写动作即可）。
 type taskCall struct {
 	Method string
+	Host   string // 区分走 chatBase（桌面上报）还是 billingBase（活跃上报）
 	Path   string
 	MP     bool // 是否带 X-Client-Platform: miniprogram
 	Body   string
@@ -33,7 +34,10 @@ type taskCall struct {
 func newTaskFakePanel(respond func(seq int, c taskCall) (int, string)) (*Panel, *[]taskCall) {
 	var calls []taskCall
 	c := &upstream.Client{
-		ChatBaseCN: "https://fake.example",
+		// 两个域刻意设成不同 host：桌面上报走 chatBase、活跃上报走 billingBase，
+		// 靠 Host 就能区分这两种同路径不同语义的请求（都是 POST /v2/report）。
+		ChatBaseCN:    "https://chat.fake.example",
+		BillingBaseCN: "https://billing.fake.example",
 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			var body string
 			if r.Body != nil {
@@ -42,6 +46,7 @@ func newTaskFakePanel(respond func(seq int, c taskCall) (int, string)) (*Panel, 
 			}
 			call := taskCall{
 				Method: r.Method,
+				Host:   r.URL.Host,
 				Path:   r.URL.Path,
 				MP:     r.Header.Get("X-Client-Platform") == "miniprogram",
 				Body:   body,
