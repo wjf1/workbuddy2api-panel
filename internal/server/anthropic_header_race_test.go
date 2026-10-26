@@ -45,7 +45,6 @@ func TestAnthropicHeartbeatNeverTouchesHeadersAfterFirstFrame(t *testing.T) {
 	counter := &headerTouchCounter{ResponseWriter: rec}
 	s := newAnthropicStreamWriter(counter, "glm-5.2")
 	s.startWith(nil) // 首帧：设头 + 200 + 启动心跳
-	defer s.stopHeartbeat()
 
 	base := counter.touches()
 	if base == 0 {
@@ -59,6 +58,10 @@ func TestAnthropicHeartbeatNeverTouchesHeadersAfterFirstFrame(t *testing.T) {
 			"这与下传的错误路径 writeJSON 并发写同一 header map，会触发 fatal error: concurrent map writes",
 			base, got)
 	}
+	// 读 Body 之前必须先停心跳：httptest.ResponseRecorder 的 Body 不是并发安全的，
+	// 心跳 goroutine 仍在写时读它会报 DATA RACE（这是用例自身的竞态，不是生产缺陷）。
+	// stopHeartbeat 现在会等到 goroutine 退出，故这里读到的 ping 数是最终的。
+	s.stopHeartbeat()
 	if n := strings.Count(rec.Body.String(), "event: ping"); n < 2 {
 		t.Fatalf("心跳未按预期运行（ping 帧 %d 条），本用例无法证明不变量，需检查 startHeartbeat", n)
 	}

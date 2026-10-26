@@ -15,6 +15,8 @@
 - **面板频道分类**：任务失败行带 `WARN: `/`ERR: ` 前缀，会掉进 sys 频道而非任务频道。分类前先剥前缀。
 - **`truncateStr` / `trunc` 切中文产生非法 UTF-8**：按字节硬切会把末尾字符切成半个（面板显示 `�`）。改为回退到最近的 rune 起点。
 - **`autoActionIndex` 与 `autoActionFor` 口径不一致**：前者未 `TrimSpace`，带空白的 task_code 在一侧命中、另一侧当未知，导致排序打乱依赖链。
+- **`stopHeartbeat` 只关 channel 不等协程退出**：`select` 在 ticker 与 stop 同时就绪时随机选分支，返回后心跳 goroutine 可能仍写一帧——`finish` 之后的调用方会与它并发访问同一个 writer。现加 `hbDone` 信号并等待退出。该缺陷由 CI 的 `-race` 作业在 `TestAnthropicHeartbeatNeverTouchesHeadersAfterFirstFrame` 上以 DATA RACE 形式暴露（读 `ResponseRecorder.Body` 时写者未停）。
+- **gofmt 版本间行为不一致导致 CI 红**：`payload_test.go` 有一行使 `bs := string(byte(92))` 与超长字符串字面量同行，gofmt 1.22 会把行尾注释对齐到该行的字符列末，生成上千空格；gofmt 1.27 反而不认这种对齐，本地检查通过而 CI 失败。现把注释独立成行，消除对齐锚点。
 
 ### 新增
 

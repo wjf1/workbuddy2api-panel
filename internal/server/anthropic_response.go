@@ -176,6 +176,7 @@ type anthropicStreamWriter struct {
 	// 注释帧会被 handleFrame 丢弃（不带 data: 前缀，到不了客户端），故心跳由本层发。
 	wmu       sync.Mutex
 	hbStop    chan struct{}
+	hbDone    chan struct{} // 心跳 goroutine 退出信号（stopHeartbeat 等它，避免关后仍写）
 	hbStarted bool
 }
 
@@ -622,8 +623,11 @@ func (s *anthropicStreamWriter) startHeartbeat() {
 	// s.hbStop，stopHeartbeat 把字段置 nil 后这里会永久阻塞在 nil channel 上，
 	// 心跳 goroutine 既退不出、又继续按 tick 尝试写已结束的响应（泄漏 + 噪音）。
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	s.hbStop = stop
+	s.hbDone = done
 	go func() {
+		defer close(done)
 		t := time.NewTicker(anthropicPingInterval)
 		defer t.Stop()
 		for {
@@ -654,7 +658,14 @@ func (s *anthropicStreamWriter) heartbeatSuppressed() bool { return true }
 func (s *anthropicStreamWriter) stopHeartbeat() {
 	if s.hbStop != nil {
 		close(s.hbStop)
+		// 等 goroutine 真正退出再返回：只 close 不等待时，返回后它可能还停在
+		// `case <-t.C` 分支里写一帧（ticker 与 stop 同时就绪时 select 随机选），
+		// finish 之后的调用方（含测试读缓冲）会与它并发访问同一个 writer。
+		if s.hbDone != nil {
+			<-s.hbDone
+		}
 		s.hbStop = nil
+		s.hbDone = nil
 	}
 }
 
