@@ -5,7 +5,7 @@
 
 - 文档位置：`docs/DEV-HANDOFF.md`（已纳入版本库）
 - 与根目录 `HANDOFF.md` 的区别：`HANDOFF.md` 是**发版/线上运维**的接力记录（83KB 历史堆积）；本文件只管**开发**：当前基线、待办、约定、坑。
-- 最后更新：2026-10-25
+- 最后更新：2026-10-26
 
 ---
 
@@ -40,15 +40,16 @@ go build -o wb2api.exe ./cmd/server
 
 | 指标 | 当前值 | 采集命令 |
 |---|---|---|
-| HEAD | `6e2a7e4` | `git log --oneline -1` |
-| 版本常量 | `1.18.3-panel`（`cmd/server/main.go:39`） | `grep 'appVersion =' cmd/server/main.go` |
-| 非测试代码 | 108 文件 / 33,513 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
-| 测试代码 | 111 文件 / 909 个 Test 函数 | 同上 |
-| `go test ./...` | **26 包全绿，0 个 no test files，约 13 秒**（scheduler 占 8.5s，panel 3.4s，其余 <2s） | `go test ./... -count=1` |
+| HEAD | `20a802a` | `git log --oneline -1` |
+| 版本常量 | `1.18.3-panel`（`cmd/server/main.go:40`） | `grep 'appVersion =' cmd/server/main.go` |
+| 非测试代码 | 108 文件 / 33,548 行 | `wc -l` 汇总 `*.go`（排除 `_test.go`） |
+| 测试代码 | 113 文件 / 926 个 Test 函数 | 同上 |
+| `go test ./...` | **26 包全绿，约 10 秒**（scheduler 7.8s，panel 2.0s，upstream 1.8s，其余 <1.1s） | `go test ./... -count=1` |
 | `go vet ./...` | 0 告警 | `go vet ./...` |
-| `gofmt -l ./cmd ./internal` | 空（CI 已设门禁，行尾已统一 LF） | `gofmt -l ./cmd ./internal` |
-| 最大文件 | `panel/autotask.go` 1264 / `panel/panel.go` 1083 / `server/handler_chat.go` 989 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 888 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
-| 最慢包 | `internal/scheduler` 约 8.5s，`internal/panel` 3.4s（其余均 < 2s） | 见测试输出 |
+| `gofmt -l ./cmd ./internal` | 空。**例外**：`internal/upstream/payload.go` 若有他人未提交改动会被点名（CRLF），与本轮验证无关 | `gofmt -l ./cmd ./internal` |
+| 最大文件 | `panel/autotask.go` 1299 / `panel/panel.go` 1084 / `server/handler_chat.go` 989 / `scheduler/scheduler.go` 939 / `cmd/server/config.go` 888 / `pool/state.go` 818 | `find . -name '*.go' -not -name '*_test.go' \| xargs wc -l \| sort -rn` |
+| 最慢包 | `internal/scheduler` 约 7.8s，`internal/panel` 2.0s，`internal/upstream` 1.8s | 见测试输出 |
+| `internal/panel` 覆盖率 | **49.4%**（本轮前 33.0%） | `go test ./internal/panel -cover -count=1` |
 
 ### 目录职责（21 个 internal 包）
 
@@ -114,6 +115,7 @@ internal/
 | `e91fcc4` | `truncateStr` 改按 rune 边界截断（中文错误文本 `s[:n]+"…"` 会切出非法 UTF-8） | `go test ./internal/panel -run TestTruncateStr -v` |
 | `c59a6db` | 任务读取 / accept 回读路径打桩测试（19 个子用例）：`taskByCode` 双口径回落与"未知码不多打上游"、`taskByCodeMP`、`taskByCodeWaiting` 轮询预算、`acceptWithVerifyMP` 两次上限；6 处反证 | `go test ./internal/panel -run 'TestTaskByCode\|TestAcceptWithVerifyMP' -v` |
 | `6e2a7e4` | 四个任务动作打桩测试（13 个子用例）：`runChat5` 差额上报与幂等、`runRichMeow` 桌面事件链、`runBuddyApp`、`runFirstBuddy` 三步链路与「门槛未过非致命」；6 处反证 | `go test ./internal/panel -run 'TestRunChat5\|TestRunRichMeow\|TestRunBuddyApp\|TestRunFirstBuddy' -v` |
+| `20a802a` | **任务中心剩余动作全部补齐测试**（2 个新文件、20 个 Test、约 60 子用例）：mp 闭环 `runMPMiniChatTask`/`runSequentialEventTask`/`runMiniExpert`、六个简单事件动作、`runModelChat`、`runBlackCat`、`runSkillFresh`、`runExpertLighthouse`、`runExpertBatch`、`runAutoAll`、两个 auto handler。**panel 覆盖 33.0% → 49.4%**。顺带把 5 处硬编码等待做成可注入（生产默认值不变） | `go test ./internal/panel -run 'TestRunMP\|TestRunSequential\|TestRunMiniExpert\|TestRunSimpleEventActions\|TestRunModelChat\|TestRunBlackCat\|TestRunSkillFresh\|TestRunExpertLighthouse\|TestRunExpertBatch\|TestRunAutoAll\|TestAccountTaskAuto' -v` |
 
 ---
 
@@ -177,11 +179,19 @@ internal/
 
 | 包 | 语句覆盖 | 说明 |
 |---|---|---|
-| `internal/panel` | **33.0%** | 全仓最低。`autotask.go` 的读取/回读路径与 4 个 `run*` 动作已覆盖（读取 4 个函数 100%，`runChat5` 94.4%、`runFirstBuddy` 90%、`runRichMeow`/`runBuddyApp` 100%）；剩余 `runMPMiniChatTask`/`runSequential*`/`runExpert*`/`runAutoAll` 仍未测，另有 `taskcenter.go`、`trash.go`、`backup.go`、`login.go`、`import.go` 基本未测 |
+| `internal/panel` | **49.4%** | 全仓最低，但 `autotask.go` 已基本补齐：18 个函数里 11 个 ≥85%（`runRichMeow`/`runBuddyApp`/`runTemplateUse`/`runExpertUse`/`runExpertTeamUse`/三个 Sequential 包装/`taskProgressText`/`truncateStr` 等 100%），剩下的是 `runAutoAll` 51.9%（阶段 0b 的 mp 批量接受与领奖失败分支未测）、`runMiniExpert` 77.8%、`runSequentialEventTask` 76.9%。**仍未测的是另外几个文件**：`taskcenter.go`、`trash.go`、`backup.go`、`login.go`、`import.go` |
 | `internal/panel/ring.go` | 函数级 67–100% | 旧文写的 7.5% 是文件级误读，已作废 |
 | `internal/upstream/dump.go` | 仅剩 `dumpUpstream` 89.5% | 其余函数已满覆盖 |
 
-**剩余 `run*` 动作的补充成本已经很低**：`c59a6db`/`6e2a7e4` 建立了可复用桩架 —— `internal/panel/autotask_read_test.go` 里的 `newTaskFakePanel`（假 Transport + 按序号回放响应，`taskSpec`/`tasksEnvelope` 直接构造任务列表）。新写一个动作测试只需给 respond 闭包按序号返回响应，不需要任何新依赖。`reportGap`/`mpActionGap`/`claimPollGap` 都是包级变量，测试里置 0 再 `t.Cleanup` 还原，不许加 `time.Sleep`。
+**剩余缺口里性价比最高的下一步**：`taskcenter.go`（521 行，任务中心队列）目前近乎零覆盖，而它是「一键完成」的调度入口 —— 队列去重、并发上限、失败重排这些逻辑出错的表现是"按钮点了没反应"，最难靠人眼发现。`runAutoAll` 剩下的 48% 主要是阶段 0b（mp 批量接受）与领奖失败分支，桩架已经现成，补起来只需给 respond 闭包多写两个分支。
+
+**可复用桩架（`20a802a` 已扩成三层，写新用例先看这里）**：
+
+1. `newTaskFakePanel(respond)`（`autotask_read_test.go`）—— 假 Transport，按调用序号回放响应。`taskCall` 记 `Method/Host/Path/MP/Product/Expert/Body`，够区分 chat 域 vs billing 域、mp 口径 vs 默认口径、专家对话。
+2. `newMPBackendPanel(t, backend)`（`autotask_mp_test.go`）—— **带状态**的假上游：`target/current/accept_status` 会随 accept 与事件上报变化。mp 闭环的正确性全在"读回来的进度"上（按差额补报、accept 后重取 target、异步未归账不领奖），固定响应只能验分支、验不了语义。
+3. `freezeMPGaps(t)` / `freezeActionGaps(t)` —— 把 6 个包级等待变量压到 0 并在 `t.Cleanup` 还原。**不许加 `time.Sleep`**。
+
+为此把 5 处硬编码等待改成可注入（生产默认值一字未变）：`mpChatEventGap` 旁拆出 `mpChatEventJitter`（配合 `randDurationN` 消除 `rand.Int64N(0)` 的 panic 面）、`expertSummonGap` 由 const 改 var、新增 `appearanceApplyGap`/`templateReportGap`/`nightWindowNow`（时钟注入，夜猫子窗口才能固定到窗口内/外两侧），`upstream` 侧新增 `nightChatGap` + `SetNightChatGapForTest`。
 
 > `cmd/*` 冒烟测试已在 `356498c` / `936750a` 完成，从本清单移除。
 
@@ -231,6 +241,18 @@ internal/
    解构名与导出键一致（解构失败是静默的，拿到 undefined 不会当场报错）。
 
 14. **诊断端点必须独立端口**：`server.debug_addr` 刻意不开在主 mux 上。Go 的 `net/http/pprof` 无鉴权，`profile` 能导出 CPU/heap，heap 里含请求体与账号 token；主端口通常绑 `0.0.0.0`。回归测试 `TestMainMuxHasNoDebugEndpoints` 钉住这一点——**别为了"顺手"把它加回主路由**。`/metrics` 也只放低基数指标（状态枚举 + goroutine 数），加 per-model 标签会先崩 Prometheus。
+
+15. **ChatStream 对 4xx 已返回分类后的 error，`status >= 400` 分支是兜底**：写测试断言错误文案时
+   要看清是哪一层产生的。`runModelChat` 收到 400 时，err 来自 `ChatStreamContext` 的
+   `*Error`，被包装成「对话请求: …」而不是函数里那句「对话失败 http=%d」。按后者断言会
+   永远不通过；而把 `status >= 400` 的 return 删掉也不会让用例变红（err 分支先命中）——
+   这类"看着覆盖了、其实测的是另一条分支"的假阳性，只能靠**逐个反证**发现。
+
+16. **mp 事件上报与活跃上报同路径同域，只能靠请求头区分**：两者都是 `billingBase + /v2/report`。
+   `ReportMPEvent` 带 `X-Client-Product: workbuddy-mp` + `X-Client-Platform: mp-weixin`，
+   `ReportChatActivityModel` 带 `X-Client-Platform: miniprogram`。桩里若只按路径分派，两件
+   事会混成一条分支，测试也就验不出"判据走了 mp 指纹"这个关键不变量。`taskCall.Product`
+   就是为此加的。
 
 ---
 
@@ -300,3 +322,4 @@ git show HEAD:<旧文件> | grep -oP '^(func|type|var|const)\s+(\(\w+ \*?\w+\)\s
 | 2026-10-26 | P3 第一批：`cmd/credit`/`cmd/trial`/`cmd/signin` 补纯函数测试（26 包全绿、0 个 no test files）；顺带修 `trunc` 切中文产生非法 UTF-8 | `936750a` |
 | 2026-10-26 | 任务中心纯函数测试（`autotask.go` 6 个）+ 两处同源修复：`autoActionIndex` 与 `autoActionFor` 对齐 TrimSpace、`truncateStr` 改 rune 边界；panel 覆盖 28.4% → 29.6% | `e91fcc4` |
 | 2026-10-26 | 任务中心打桩测试两批：读取/回读路径 19 个子用例（6 处反证）+ 四个任务动作 13 个子用例（6 处反证）；建立可复用桩架；panel 覆盖 29.6% → 33.0% | `6e2a7e4` |
+| 2026-10-26 | 任务中心剩余动作补齐（20 个 Test、约 60 子用例、7 处反证）：mp 闭环三函数、六个简单事件动作、真实对话类四个、专家链、`runAutoAll`、两个 auto handler；桩架扩到三层（带状态假上游）；5 处硬编码等待改为可注入；panel 覆盖 33.0% → **49.4%** | `20a802a` |
