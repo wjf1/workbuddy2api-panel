@@ -25,6 +25,14 @@ func InNightWindow(now time.Time) bool {
 	return h >= 23 || h < 8
 }
 
+// SetNightChatGapForTest 临时替换夜猫子每轮对话的间隔，返回恢复函数。
+// 供包外测试使用：生产固定 4s，need=3 时用例要空等 12s。
+func SetNightChatGapForTest(d time.Duration) (restore func()) {
+	old := nightChatGap
+	nightChatGap = d
+	return func() { nightChatGap = old }
+}
+
 // BlackcatNeed 查 black_cat 任务剩余差额（需要再完成几次对话）。
 // 任务不存在返回 0（无可做）；拉取失败返回错误。
 func (c *Client) BlackcatNeed(a *auth.Auth) (int64, error) {
@@ -42,6 +50,10 @@ func (c *Client) BlackcatNeed(a *auth.Auth) (int64, error) {
 	}
 	return 0, nil
 }
+
+// nightChatGap 夜猫子每轮「真实对话 + 上报」之间的间隔（真实使用节奏）。
+// 变量供测试压到 0：默认 4s 会让多数用例凭空多睡十几秒。
+var nightChatGap = 4 * time.Second
 
 // RunNightChats 夜猫子：发 need 次 glm-5.2 真实对话（读干流）并上报事件链。
 // 返回成功次数。对话内容极短（1+1），消耗可忽略。
@@ -66,7 +78,7 @@ func (c *Client) RunNightChats(a *auth.Auth, need int) (int64, error) {
 			return ok, fmt.Errorf("第 %d 次上报失败: %w", i+1, err)
 		}
 		ok++
-		time.Sleep(4 * time.Second)
+		time.Sleep(nightChatGap)
 	}
 	return ok, nil
 }

@@ -22,11 +22,13 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 // taskCall 记下一次上游调用的关键特征（够区分 mp 口径、请求域与读/写动作即可）。
 type taskCall struct {
-	Method string
-	Host   string // 区分走 chatBase（桌面上报）还是 billingBase（活跃上报）
-	Path   string
-	MP     bool // 是否带 X-Client-Platform: miniprogram
-	Body   string
+	Method  string
+	Host    string // 区分走 chatBase（桌面上报）还是 billingBase（活跃上报）
+	Path    string
+	MP      bool   // 是否带 X-Client-Platform: miniprogram
+	Product string // X-Client-Product：mp 事件上报为 workbuddy-mp，活跃上报为空
+	Expert  string // X-Expert-Id（专家对话链要求带真实 id）
+	Body    string
 }
 
 // newTaskFakePanel 返回 cfg.Upstream 走假 Transport 的 Panel，以及调用记录指针。
@@ -45,11 +47,13 @@ func newTaskFakePanel(respond func(seq int, c taskCall) (int, string)) (*Panel, 
 				body = strings.TrimSpace(string(raw))
 			}
 			call := taskCall{
-				Method: r.Method,
-				Host:   r.URL.Host,
-				Path:   r.URL.Path,
-				MP:     r.Header.Get("X-Client-Platform") == "miniprogram",
-				Body:   body,
+				Method:  r.Method,
+				Host:    r.URL.Host,
+				Path:    r.URL.Path,
+				MP:      r.Header.Get("X-Client-Platform") == "miniprogram",
+				Product: r.Header.Get("X-Client-Product"),
+				Expert:  r.Header.Get("X-Expert-Id"),
+				Body:    body,
 			}
 			calls = append(calls, call)
 			status, out := respond(len(calls), call)

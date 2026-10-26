@@ -332,6 +332,19 @@ var mpActionGap = 2 * time.Second
 // sleep gap + 0~10s 抖动；首条也等（上一轮残留进度被回滚后立即重报同样无效）。
 var mpChatEventGap = 45 * time.Second
 
+// mpChatEventJitter 在 mpChatEventGap 之上的随机抖动上限（真人节奏的一部分，
+// 生产语义不可去掉；单列为变量只为测试能把等待压到 0）。
+var mpChatEventJitter = 10 * time.Second
+
+// randDurationN 返回 [0, n) 的随机时长；n<=0 时返回 0（避免 rand.Int64N(0) panic，
+// 也让测试把抖动压成 0 后不必再走随机数）。
+func randDurationN(n time.Duration) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(n)))
+}
+
 // runMPMiniChatTask growth 域小程序限定任务通用闭环：
 // mp 查询 → accept（带登记回读验证）→ mini chat 事件上报（withActivityId 决定
 // 是否带开学季 activityId：school_season 必带，Sequential_Tasks_1 不带——服务端按
@@ -374,7 +387,7 @@ func (p *Panel) runMPMiniChatTask(a *auth.Auth, code string, withActivityId bool
 	// 连发会被上游反作弊判无效（见 mpChatEventGap 注释），宁可慢不可白报。
 	need := target - t.Current
 	for i := int64(0); i < need; i++ {
-		time.Sleep(mpChatEventGap + time.Duration(rand.Int64N(int64(10*time.Second))))
+		time.Sleep(mpChatEventGap + randDurationN(mpChatEventJitter))
 		// 会话 ID 用官方形态（v4 UUID）：旧值 `wb2api-mp-<毫秒>-<序号>` 把项目缩写
 		// 直接写进上报体（issue #51）。事件构造仍用本地既有 builder（形状未变）。
 		conv := session.NewConversationID()
@@ -894,11 +907,15 @@ func runLibraryRead(p *Panel, a *auth.Auth) (string, error) {
 	return "已上报资料库介绍阅读事件", nil
 }
 
+// nightWindowNow 夜猫子窗口判定用的时钟。变量而非直接 time.Now：窗口是
+// 23:00–08:00 CST，固定时刻才能让「窗口内/窗口外」两条分支都稳定可测。
+var nightWindowNow = time.Now
+
 // runBlackCat 完成 black_cat（夜猫子，夜间 23:00–08:00 计数）。
 // 判据 = 夜间窗口内 glm-5.2 真实对话 + chat 事件上报（WorkBuddy-Daily 实测口径）。
 // 窗口外不做（提示等排程）；网关 blackcat_hours（默认 23 点）排程会自动补足。
 func runBlackCat(p *Panel, a *auth.Auth) (string, error) {
-	if !upstream.InNightWindow(time.Now()) {
+	if !upstream.InNightWindow(nightWindowNow()) {
 		return "当前不在 23:00–08:00 计数窗口，行为不计分；网关会在每日 23 点自动补足", nil
 	}
 	need, err := p.cfg.Upstream.BlackcatNeed(a)
@@ -1002,12 +1019,14 @@ func runExpertLighthouse(p *Panel, a *auth.Auth) (string, error) {
 // 事件 {action:"apply",source:"settings_close",id:<resourceKey>,...}（客户端在
 // 主题生效状态下离开设置页时上报）——早期"纯 API set 不计分"的结论不准确，
 // 真相是当时只调了 appearance/set 没发事件。组合：set API 留痕 + 事件上报。
+var appearanceApplyGap = 2 * time.Second
+
 func runAppearance(p *Panel, a *auth.Auth) (string, error) {
 	const themeKey = "theme-tkmw7j" // 和平精英激战金秋（Hp_Appearance 判据主题）
 	if err := p.cfg.Upstream.SetAppearanceTheme(a, themeKey); err != nil {
 		return "", fmt.Errorf("设置主题: %w", err)
 	}
-	time.Sleep(2 * time.Second)
+	time.Sleep(appearanceApplyGap)
 	if err := p.cfg.Upstream.ReportDesktopEvent(a, upstream.DesktopEvent{
 		"eventCode": "appearance_skin_apply", "action": "apply", "source": "settings_close",
 		"id": themeKey, "vipLevel": 0, "series": "", "type": "unknown",
@@ -1029,10 +1048,13 @@ func runTemplateUse(p *Panel, a *auth.Auth) (string, error) {
 		if err := p.cfg.Upstream.ReportDesktopEvent(a, events...); err != nil {
 			return fmt.Sprintf("第 %d 组模板事件上报失败: %v", i+1, err), nil
 		}
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(templateReportGap)
 	}
 	return "已上报 template_used ×5", nil
 }
+
+// templateReportGap 模板事件组之间的间隔（避免连发被上游聚成一次）。
+var templateReportGap = 300 * time.Millisecond
 
 // runPlaybookPrompt 完成 playbook_prompt（灵感案例 Dialog 中发送 Prompt）。
 // 判据是 playbook_prompt_send（Dialog 发送）而非卡片曝光/点击——asar 逆向确认。
@@ -1059,7 +1081,8 @@ func runCreateCanvas(p *Panel, a *auth.Auth) (string, error) {
 }
 
 // expertSummonGap 专家召唤链的间隔（真实使用节奏，v11 实测 8s 成功率 100%）。
-const expertSummonGap = 6 * time.Second
+// 变量而非 const：测试要把多轮召唤链压到 0 秒，const 无法注入。
+var expertSummonGap = 6 * time.Second
 
 // runExpertUse 完成 expert_5（使用 5 个平台专家）。
 // 2026-09-12 三账号实测公式：真实专家列表（id 必须真实存在）→ 召唤链
