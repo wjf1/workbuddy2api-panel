@@ -468,3 +468,204 @@ func TestClampGPTMinMaxTokens(t *testing.T) {
 		})
 	}
 }
+
+// TestDerefToolSchemas 覆盖 tools schema 的 `$ref`/`$defs` 解引用（修 11133）。
+//
+// 回归背景（2026-10-14 ZCode 实案）：MCP 类客户端把重复 schema 抽进 `$defs`、用
+// `{"$ref":"#/$defs/X"}` 引用以压缩体积。WorkBuddy 上游对 tools 做扁平化校验、
+// 不解析 `$ref`，命中即 HTTP 400 code=11133 model_param_invalid。实测对照：
+// 保留 `$ref` 返 400、内联展开后 200，且与具体模型无关。
+//
+// 这些用例同时钉住几条**安全边界**——解引用做错会改坏合法请求或让进程挂掉：
+//   - 循环引用必须放弃展开（否则无限递归 / 请求体撑爆）；
+//   - 远程 `$ref` 不解析（网关不能为一次改写去拉第三方）；
+//   - 无 `$defs` 时出站报文必须逐字节不变。
+func TestDerefToolSchemas(t *testing.T) {
+	run := func(t *testing.T, body string) map[string]any {
+		t.Helper()
+		out := PrepareBodyOptWithEfforts([]byte(body), false, nil)
+		var obj map[string]any
+		if err := json.Unmarshal(out, &obj); err != nil {
+			t.Fatalf("out not json: %v (%s)", err, string(out))
+		}
+		return obj
+	}
+	params := func(t *testing.T, obj map[string]any, toolIdx int) map[string]any {
+		t.Helper()
+		tools, ok := obj["tools"].([]any)
+		if !ok || toolIdx >= len(tools) {
+			t.Fatalf("tools[%d] missing", toolIdx)
+		}
+		tool := tools[toolIdx].(map[string]any)
+		// OpenAI 形态优先
+		if fn, ok := tool["function"].(map[string]any); ok {
+			p, _ := fn["parameters"].(map[string]any)
+			return p
+		}
+		p, _ := tool["parameters"].(map[string]any)
+		return p
+	}
+
+	t.Run("顶层 $ref 内联且 $defs 删除", func(t *testing.T) {
+		body := `{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}],
+"tools":[{"type":"function","function":{"name":"t","parameters":{"$ref":"#/$defs/Args",
+"$defs":{"Args":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}}}}]}`
+		obj := run(t, body)
+		p := params(t, obj, 0)
+		if _, has := p["$ref"]; has {
+			t.Fatalf("$ref 仍在: %v", p["$ref"])
+		}
+		if _, has := p["$defs"]; has {
+			t.Fatalf("$defs 未删除: %v", p["$defs"])
+		}
+		props, ok := p["properties"].(map[string]any)
+		if !ok || props["q"] == nil {
+			t.Fatalf("内联后 properties 缺失: %v", p)
+		}
+		if p["type"] != "object" {
+			t.Fatalf("内联后 type = %v, want object", p["type"])
+		}
+	})
+
+	t.Run("嵌套属性里的 $ref 也展开", func(t *testing.T) {
+		body := `{"messages":[{"role":"user","content":"hi"}],
+"tools":[{"type":"function","function":{"name":"t","parameters":{"type":"object",
+"properties":{"a":{"$ref":"#/$defs/A"}},
+"$defs":{"A":{"type":"string","description":"desc-a"}}}}}]}`
+		obj := run(t, body)
+		p := params(t, obj, 0)
+		props := p["properties"].(map[string]any)
+		a, ok := props["a"].(map[string]any)
+		if !ok {
+			t.Fatalf("properties.a 不是对象: %v", props["a"])
+		}
+		if _, has := a["$ref"]; has {
+			t.Fatalf("嵌套 $ref 未展开: %v", a)
+		}
+		if a["type"] != "string" || a["description"] != "desc-a" {
+			t.Fatalf("嵌套展开内容不符: %v", a)
+		}
+	})
+
+	t.Run("definitions 旧写法也支持", func(t *testing.T) {
+		body := `{"messages":[{"role":"user","content":"hi"}],
+"tools":[{"type":"function","function":{"name":"t","parameters":{"$ref":"#/definitions/B",
+"definitions":{"B":{"type":"integer"}}}}}]}`
+		obj := run(t, body)
+		p := params(t, obj, 0)
+		if p["type"] != "integer" {
+			t.Fatalf("definitions 未展开: %v", p)
+		}
+		if _, has := p["definitions"]; has {
+			t.Fatalf("definitions 未删除")
+		}
+	})
+
+	t.Run("循环引用保留 $ref 且不挂起", func(t *testing.T) {
+		// A -> B -> A：必须放弃展开而不是无限递归
+		body := `{"messages":[{"role":"user","content":"hi"}],
+"tools":[{"type":"function","function":{"name":"t","parameters":{"$ref":"#/$defs/A",
+"$defs":{"A":{"type":"object","properties":{"b":{"$ref":"#/$defs/B"}}},
+"B":{"type":"object","properties":{"a":{"$ref":"#/$defs/A"}}}}}}}]}`
+		obj := run(t, body)
+		// 关键断言：函数返回了（没死循环），且顶层 $ref 已被解开成 object
+		p := params(t, obj, 0)
+		if p["type"] != "object" {
+			t.Fatalf("循环场景顶层应已展开: %v", p)
+		}
+		// 环上的引用必须**保留 $ref 原样**（交给上游判），不能展开成半截或空对象。
+		props, ok := p["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("循环场景 properties 丢失: %v", p)
+		}
+		b, ok := props["b"].(map[string]any)
+		if !ok {
+			t.Fatalf("properties.b 不是对象: %v", props["b"])
+		}
+		// B 展开一层后，b.properties.a 指向 A，此处必须保留 $ref（环的闭合点）。
+		bProps, ok := b["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("properties.b.properties 丢失: %v", b)
+		}
+		a, ok := bProps["a"].(map[string]any)
+		if !ok {
+			t.Fatalf("properties.b.properties.a 不是对象: %v", bProps["a"])
+		}
+		if a["$ref"] != "#/$defs/A" {
+			t.Fatalf("环的闭合点应保留 $ref 原样，实得: %v", a)
+		}
+		// 且不得出现多层重复嵌套（首版实现会把环展开到深度上限）。
+		if _, deeper := a["properties"]; deeper {
+			t.Fatalf("环上出现了多余的重复展开: %v", a)
+		}
+	})
+
+	t.Run("远程 $ref 不解析", func(t *testing.T) {
+		body := `{"messages":[{"role":"user","content":"hi"}],
+"tools":[{"type":"function","function":{"name":"t","parameters":{"$ref":"https://example.com/s.json"}}}]}`
+		obj := run(t, body)
+		p := params(t, obj, 0)
+		if p["$ref"] != "https://example.com/s.json" {
+			t.Fatalf("远程 $ref 不应被改动: %v", p)
+		}
+	})
+
+	t.Run("找不到定义时保留 $ref 原样", func(t *testing.T) {
+		body := `{"messages":[{"role":"user","content":"hi"}],
+"tools":[{"type":"function","function":{"name":"t","parameters":{"$ref":"#/$defs/Missing",
+"$defs":{"Other":{"type":"string"}}}}}]}`
+		obj := run(t, body)
+		p := params(t, obj, 0)
+		if p["$ref"] != "#/$defs/Missing" {
+			t.Fatalf("未命中定义时应保留原 $ref: %v", p)
+		}
+	})
+
+	t.Run("同一定义多处引用互不影响", func(t *testing.T) {
+		// 深拷贝校验：共享指针时第二次 delete $defs 会污染第一次的展开结果
+		body := `{"messages":[{"role":"user","content":"hi"}],
+"tools":[{"type":"function","function":{"name":"t","parameters":{"type":"object",
+"properties":{"a":{"$ref":"#/$defs/S"},"b":{"$ref":"#/$defs/S"}},
+"$defs":{"S":{"type":"string","enum":["x","y"]}}}}}]}`
+		obj := run(t, body)
+		p := params(t, obj, 0)
+		props := p["properties"].(map[string]any)
+		for _, k := range []string{"a", "b"} {
+			m, ok := props[k].(map[string]any)
+			if !ok || m["type"] != "string" {
+				t.Fatalf("properties.%s 展开失败: %v", k, props[k])
+			}
+			if enum, ok := m["enum"].([]any); !ok || len(enum) != 2 {
+				t.Fatalf("properties.%s enum 丢失: %v", k, m["enum"])
+			}
+		}
+	})
+
+	t.Run("无裸 parameters 形态也支持", func(t *testing.T) {
+		body := `{"messages":[{"role":"user","content":"hi"}],
+"tools":[{"type":"custom","parameters":{"$ref":"#/$defs/C","$defs":{"C":{"type":"boolean"}}}}]}`
+		obj := run(t, body)
+		p := params(t, obj, 0)
+		if p["type"] != "boolean" {
+			t.Fatalf("裸 parameters 未展开: %v", p)
+		}
+	})
+
+	t.Run("无 tools 时不 panic", func(t *testing.T) {
+		obj := run(t, `{"model":"glm-5.2","messages":[{"role":"user","content":"hi"}]}`)
+		if _, has := obj["tools"]; has {
+			t.Fatalf("不应凭空插入 tools")
+		}
+	})
+
+	t.Run("messages 里的 $ref 字面量不碰", func(t *testing.T) {
+		body := `{"messages":[{"role":"user","content":"see #/$defs/X"}],
+"tools":[{"type":"function","function":{"name":"t","parameters":{"type":"object"}}}]}`
+		obj := run(t, body)
+		msgs := obj["messages"].([]any)
+		m := msgs[0].(map[string]any)
+		if m["content"] != "see #/$defs/X" {
+			t.Fatalf("正文被改动: %v", m["content"])
+		}
+	})
+}

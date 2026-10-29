@@ -2,6 +2,7 @@
 //  1. 强制 stream:true（上游拒绝非流式）
 //  2. tool_choice 归一化（上游该字段是 string，对象形式会 400 code=11101）
 //  3. image_url 归一化（上游只认 OpenAI 对象形态，字符串会 400 code=11101）
+//  4. tools schema 的 `$ref`/`$defs` 解引用（上游不解析 $ref，会 400 code=11133）
 package upstream
 
 import (
@@ -49,6 +50,9 @@ func PrepareBodyOptWithEffortsAndDefault(src []byte, sanitize bool, efforts map[
 		obj["stream_options"] = map[string]any{"include_usage": true}
 	}
 	normalizeToolChoice(obj)
+	// 顺序不能换：先解引用再归一 pattern。被 $defs 引用的片段里也可能带 `\_`，
+	// 反过来的话从 $defs 内联进来的 pattern 就漏了归一化。
+	derefToolSchemas(obj)
 	normalizeToolPatterns(obj)
 	normalizeRoles(obj)
 	normalizeImageURL(obj)
@@ -369,6 +373,192 @@ func normalizeToolChoice(obj map[string]any) {
 		}
 	default:
 		delete(obj, "tool_choice")
+	}
+}
+
+// maxDerefDepth 是解引用递归的硬上限。
+//
+// 只靠 seen（当前引用链）防不住"跨链再展开"：$defs 里 A 引用 B、B 引用 C、C 引用 A 时，
+// seen 在每条新链上都会重置，展开规模随层数指数增长（实测可把 8KB 请求体撑到 GB 级并
+// 触发 stack overflow）。16 层远超真实 MCP schema 的嵌套深度（实测最深的 ZCode 工具
+// 定义 4 层），到顶就保留 $ref 原样——让上游照旧报 11133，好过网关自己崩掉。
+const maxDerefDepth = 16
+
+// derefToolSchemas 把 tools[].function.parameters（及裸 tools[].parameters）里的
+// `$ref` 内联展开，并删除被引用的 `$defs` 定义块。
+//
+// 背景（2026-10-14 实测，ZCode 等 MCP 类客户端）：这类客户端为压缩体积，会把重复的
+// schema 片段抽到 `$defs` 里、用 `{"$ref":"#/$defs/X"}` 引用。WorkBuddy 上游对
+// tools 里的 JSON Schema 做**扁平化**校验（不解析 `$ref`），遇到 `$ref` 直接整体拒收：
+// HTTP 400 code=11133 model_param_invalid。实测对照——保留 `$ref` 返 400、内联展开后
+// 200，且**与具体模型无关**（cn 域多个模型一致复现），故属上游校验器能力边界而非模型差异。
+// schema 级拒绝换账号无用，只能在发送前修。
+//
+// 语义边界（刻意收窄，避免把合法请求改坏）：
+//   - 只解 `#/$defs/...` 与 `#/definitions/...` 两种**本地**引用；远程 `$ref`
+//     （http(s):// 或外部文件）不解析——那需要网络，网关不能为一次改写去拉第三方资源。
+//   - 循环引用直接放弃该处替换、保留 `$ref` 原样：内联会无限展开。宁可让上游照旧报 11133，
+//     也不能把请求体撑爆或死循环（这是唯一会让进程挂掉的失效模式，必须显式挡住）。
+//   - 解引用只在 tools 子树内进行；messages 正文里出现的 `$ref` 字面量不碰。
+//   - 无 `$defs`/`$ref` 时零改动（出站报文逐字节不变）。
+func derefToolSchemas(obj map[string]any) {
+	rawTools, ok := obj["tools"].([]any)
+	if !ok {
+		return
+	}
+	for _, raw := range rawTools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		// OpenAI 形态 tools[].function.parameters；裸 tools[].parameters 兼容。
+		if fn, ok := tool["function"].(map[string]any); ok {
+			derefSchemaNode(fn["parameters"], fn, nil, 0)
+		}
+		derefSchemaNode(tool["parameters"], tool, nil, 0)
+	}
+}
+
+// derefSchemaNode 递归展开 schema 树。defsHolder 是持有 `$defs`/`definitions` 的
+// 容器（parameters 与其所属对象都可能持有），seen 记录当前递归路径上的引用名以判循环。
+func derefSchemaNode(node any, defsHolder map[string]any, seen map[string]bool, depth int) {
+	switch n := node.(type) {
+	case map[string]any:
+		// 本层自己可能带 $defs/definitions，作为子树内的定义来源
+		holder := defsHolder
+		if hasDefs(n) {
+			holder = n
+		}
+		if ref, ok := n["$ref"].(string); ok && holder != nil && depth < maxDerefDepth {
+			if expanded, ok := resolveLocalRef(ref, holder, seen, depth); ok {
+				// 用解析结果替换该层的 $ref 兄弟键（JSON Schema 里 $ref 旁的其他键
+				// 在 2019-09 之前被忽略，展开后保留描述性键更贴近客户端原意）。
+				//
+				// 注意：expanded 内部**已经**由 resolveLocalRef 递归展开过（它带着
+				// 完整的引用链 seen 进入），因此这里只是把结果并进来，**不再**对它
+				// 二次递归——否则 A→B 展开后外层又把 B 的内容送进递归，seen 已回到
+				// 外层（不含 B），会重新展开 B→A→B… 直到深度上限，环上留下 16 层
+				// 冗余嵌套（首版实现即踩此坑，由 TestDerefToolSchemas 的循环引用
+				// 用例捕获）。
+				delete(n, "$ref")
+				for k, v := range expanded {
+					if _, exists := n[k]; !exists {
+						n[k] = v
+					}
+				}
+				// 已展开的兄弟键不需要再遍历；其余原生键仍需下探（它们可能含 $ref）。
+				for k, v := range n {
+					if _, isExpanded := expanded[k]; isExpanded {
+						continue
+					}
+					derefSchemaNode(v, holder, seen, depth+1)
+				}
+				delete(n, "$defs")
+				delete(n, "definitions")
+				return
+			}
+		}
+		for _, v := range n {
+			derefSchemaNode(v, holder, seen, depth+1)
+		}
+		// 展开完成后删除定义块：上游不认 $defs，留着也是白占体积。
+		delete(n, "$defs")
+		delete(n, "definitions")
+	case []any:
+		for _, v := range n {
+			derefSchemaNode(v, defsHolder, seen, depth+1)
+		}
+	}
+}
+
+// hasDefs 判断该对象是否自带定义块。
+func hasDefs(n map[string]any) bool {
+	if _, ok := n["$defs"].(map[string]any); ok {
+		return true
+	}
+	_, ok := n["definitions"].(map[string]any)
+	return ok
+}
+
+// resolveLocalRef 解析 `#/$defs/Name` 或 `#/definitions/Name`，返回定义内容的深拷贝。
+// 返回 false 表示不处理（远程引用 / 找不到定义 / 循环引用）。
+func resolveLocalRef(ref string, holder map[string]any, seen map[string]bool, depth int) (map[string]any, bool) {
+	var name string
+	switch {
+	case strings.HasPrefix(ref, "#/$defs/"):
+		name = strings.TrimPrefix(ref, "#/$defs/")
+	case strings.HasPrefix(ref, "#/definitions/"):
+		name = strings.TrimPrefix(ref, "#/definitions/")
+	default:
+		return nil, false
+	}
+	if name == "" {
+		return nil, false
+	}
+	if seen[name] {
+		// 循环引用：保留 $ref 原样，交给上游判定，绝不无限展开。
+		return nil, false
+	}
+	if depth >= maxDerefDepth {
+		// 深度兜底（正常 schema 远达不到）：$defs 之间层层引用时，
+		// seen 只覆盖"当前这一条链"，跨链的指数级展开仍需硬上限，
+		// 否则请求体会被撑到 GB 级。宁可留 $ref 让上游报 11133。
+		return nil, false
+	}
+	defs, _ := holder["$defs"].(map[string]any)
+	if defs == nil {
+		defs, _ = holder["definitions"].(map[string]any)
+	}
+	raw, ok := defs[name]
+	if !ok {
+		return nil, false
+	}
+	src, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	// 深拷贝：同一个定义可能被多处引用，共享指针会让后续 delete 互相影响。
+	cp, ok := deepCopyMap(src)
+	if !ok {
+		return nil, false
+	}
+	next := map[string]bool{name: true}
+	for k := range seen {
+		next[k] = true
+	}
+	derefSchemaNode(cp, holder, next, depth+1)
+	return cp, true
+}
+
+// deepCopyMap 递归深拷贝 JSON 树（map/slice/标量）。
+func deepCopyMap(src map[string]any) (map[string]any, bool) {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		cp, ok := deepCopyValue(v)
+		if !ok {
+			return nil, false
+		}
+		dst[k] = cp
+	}
+	return dst, true
+}
+
+func deepCopyValue(v any) (any, bool) {
+	switch n := v.(type) {
+	case map[string]any:
+		return deepCopyMap(n)
+	case []any:
+		out := make([]any, len(n))
+		for i, e := range n {
+			cp, ok := deepCopyValue(e)
+			if !ok {
+				return nil, false
+			}
+			out[i] = cp
+		}
+		return out, true
+	default:
+		return v, true
 	}
 }
 
