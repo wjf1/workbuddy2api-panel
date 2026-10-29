@@ -46,8 +46,6 @@ jobs:
           if [ -n "$bad" ]; then
             echo "::error::以下文件未按 gofmt 格式化，请本地执行 gofmt -w："
             echo "$bad"
-            echo "--- gofmt 期望的差异（诊断用） ---"
-            gofmt -d $bad || true
             exit 1
           fi
       # ubuntu runner 自带 node → panel 包的 JS 运行时冒烟测试（TestAppJSTopLevelSmoke）会真实执行
