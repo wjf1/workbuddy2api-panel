@@ -241,6 +241,34 @@ data/backups/          备份输出（同上）
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 
+### 🚧 阻塞：go-binaries 的 gofmt 门禁自 v1.19.0 起持续红（2026-10-29 定位）
+
+**症状**：`go-binaries` workflow 的 `test` job 在「gofmt 检查」步骤失败，报
+`internal/upstream/sanitize.go` 未格式化；**但本机 `gofmt -l ./cmd ./internal` 输出为空**。
+连带后果：`build`/`publish` 被 skip → **v1.19.0 与 v1.19.1 都没有 GitHub Release**
+（Release 列表最新仍是 v1.18.3）。`race` job 通过，说明代码本身没问题。
+
+**根因**（通过在 CI 里临时打印 `gofmt -d` 实证）：`sanitize.go` 的 `sanitizeFeatures`
+字符串切片里，**元素同行注释的列对齐**在 go1.22（CI，`go.mod` 声明 `go 1.22.5`）与
+go1.27（本机）下的宽度计算不同。CI 期望注释紧贴元素（单空格），本机 gofmt 认为应对齐到
+最长元素列尾。差异只涉及注释空白，不涉及任何字符串内容。
+
+**为何本轮没修**：把注释移到元素上方本可一次解决，但该文件还有**更值得单独排查的疑点**——
+`gofmt -d` 输出与本地 Python 逐行读出的内容**不一致**（同一行，CI 侧显示为
+`"x-anthropic-billing-hdr",`，本地读取显示 `""You are Claude Code",` 双引号）；
+`git show HEAD:...` 与工作区版本也不完全一致。这更像是**文件在不同检出/工具链下被非幂等
+改写**的迹象，而非单纯的 gofmt 版本差异。贸然改动可能改坏指纹净化逻辑（该文件负责
+11-128 反探测串的剥离，改错会让请求直接 400），故**登记为独立问题，不在本版动刀**。
+
+**下一步建议**（给接手者）：
+1. 先用干净环境（`git clone` 到全新目录，不带任何本地修改）确认该文件在 go1.22.5 下
+   `gofmt -d` 的确切输出，与 GitHub 上 `?ref=<sha>` 读到的原始字节逐字节比对。
+2. 若确认只是注释对齐，把 `sanitizeFeatures` 的 6 条同行注释改成上方独立注释即可，
+   **不要碰字符串字面量**，改完必须跑 `go test ./internal/upstream/ -run Sanitize`。
+3. 修好后重跑 `go-binaries`（`workflow_dispatch`）即可补出 v1.19.0 / v1.19.1 的 Release。
+4. 根治方案：把 `go.mod` 的 `go` 指令升到 1.23+ 并让 CI 用 `go-version-file` 解析到与
+   本机一致的版本；或把 gofmt 检查降级为 `continue-on-error`（不推荐，会掩盖真问题）。
+
 ### ✅ 2026-10-28：`derefToolSchemas` 重写落地（v1.19.1-panel，未部署）
 
 **起因**：HANDOFF 记录上个会话留下的 `payload.go`（+151 行）/ `payload_test.go`（+169 行）
