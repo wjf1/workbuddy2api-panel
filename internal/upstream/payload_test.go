@@ -323,7 +323,10 @@ func TestNormalizeToolPatterns(t *testing.T) {
 	}
 
 	t.Run("exa agent_run pattern normalized", func(t *testing.T) {
-		bs := string(byte(92)) // 反斜杠，测试体经工具链多层转义易被吞，运行时拼装保真
+		// 反斜杠，测试体经工具链多层转义易被吞，运行时拼装保真。
+		// 注释用独立行：下一行 body 超长，行尾注释会被 gofmt 对齐到
+		// body 注释列（远超行宽），且对齐宽度跨 gofmt 版本不稳定。
+		bs := string(byte(92))
 		body := `{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"agent_run","parameters":{"type":"object","properties":{"runId":{"type":"string","pattern":"^agent` + bs + bs + `_run` + bs + bs + `_"}` + `,"query":{"type":"string"}},"required":["query"]}}}]}` //nolint:lll // 实案 body 原样
 		out := string(PrepareBodyOptWithEfforts([]byte(body), false, nil))
 		if got := lookupPattern(t, out, "tools", 0, "function", "parameters", "properties", "runId", "pattern"); got != `^agent_run_` {
