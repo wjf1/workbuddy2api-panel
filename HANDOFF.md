@@ -72,7 +72,7 @@ data/backups/          备份输出（同上）
 - **根因实证（接 1.19.0 轮的遗留疑点）**：① 三方逐字节比对——GitHub `?ref=ad9cc28` 原始字节（`gh api` raw）、临时目录干净 clone（`core.autocrlf=false`）、主克隆工作区文件，三者 sha256 全部为 `9332bdb8…`，**排除「文件被非幂等改写」**（此前 `gofmt -d` 输出与逐行读"不一致"是诊断时的显示假象）；② 本机 `GOTOOLCHAIN=go1.22.5` 下载官方 toolchain（`GOPROXY=goproxy.cn`，proxy.golang.org 直连超时）复现：go1.22.5 `gofmt -d` 输出与 CI 报错完全一致（期望同行注释单空格紧贴元素），go1.27 期望对齐最长元素列尾且 `gofmt -l` 为空——**纯 gofmt 版本差异实锤**。
 - **修复**：`internal/upstream/sanitize.go` 的 `sanitizeFeatures` 7 条同行注释改为元素上方独立行注释（独立行注释在两个 gofmt 版本下排版一致），并在切片上方加 3 行注释说明缘由。**仅动注释与空白：新旧版本 46 处双引号字符串字面量逐序 diff 为空**（反探测串剥离逻辑零改动）。
 - **验证**：go1.27 与 go1.22.5 双版本 `gofmt -l ./cmd ./internal` 均空、go1.22.5 `gofmt -d` 空；`go vet ./...` 干净、`go test ./internal/upstream/ -run Sanitize` 7 用例全 PASS、`go build ./...` 成功。
-- **补发 Release**：修复推送 main 后，用 `gh workflow run go-binaries --ref v1.19.0 / v1.19.1` 在两个存量 tag 上触发 `workflow_dispatch`（workflow 的 publish 条件是 `startsWith(github.ref, 'refs/tags/v')`，dispatch 到 tag ref 同样满足），test+build+publish 全绿后 Release 自动生成，标题取 tag 注解首行、正文取 CHANGELOG 对应段落（详见 §5 已解决小节）。
+- **补发 Release（实际走的是 tag 前移，不是 workflow_dispatch）**：dispatch 实证不可行——`gh workflow run go-binaries --ref v1.19.0/v1.19.1` 检出的是 **tag 里的旧代码**，gofmt 门禁在 CI go1.22.5 下照样红（v1.19.0 树还多报一个 `payload_test.go`：相邻超长 body 行的行尾注释对齐问题，main 在 v1.19.1 重写该文件时已顺带消除）。故改为：① v1.19.0 在其原树（`1ab29a5`）上以子提交（`ea31f4c`）修两文件后重建 annotated tag 强推；② v1.19.1 直接前移到 main 修复提交 `a5ae6f0`（其 go 代码与 v1.19.1 树仅差 sanitize.go 注释）。两次 force push tag 触发 push-tag 发布线，test+build+publish 全绿（v1.19.0 run `41167871864`、v1.19.1 run `41167890829`）。**坑**：runner 侧 checkout 未解析出注解 tag 对象，publish 按既有回落逻辑把标题发布成裸 tag 名（v1.15.6/7 同款已知坑），已用 `gh release edit` 修正为「vX.Y.Z: 中文摘要」；v1.19.1 正文 compare 链接也手工修为 `v1.19.0...v1.19.1`（v1.19.0 前移后其 tag commit 不在 v1.19.1 祖先链上，`git describe` 取到了 v1.18.3）。
 
 ## 4.0 上一轮（1.19.0-panel，2026-10-26）
 
@@ -265,10 +265,12 @@ data/backups/          备份输出（同上）
 3. **修复**：7 条同行注释改为元素上方独立行注释（两版本排版一致）。字符串字面量零改动
    （46 处逐序 diff 为空），`go test ./internal/upstream/ -run Sanitize` 全 PASS。
 
-**Release 补发**：修复推送后 `gh workflow run go-binaries --ref v1.19.0` 与 `--ref v1.19.1`
-各触发一次（publish 条件 `startsWith(github.ref, 'refs/tags/v')` 对 dispatch 到 tag 同样成立），
-test+build+publish 全绿，两个 Release 均已生成，标题取 tag 注解（`v1.19.0: …` 格式）、正文取
-CHANGELOG 对应段落；Latest 指向 v1.19.1。
+**Release 补发**：dispatch 到旧 tag 实证必红（tag 树旧代码过不了 CI gofmt），改走 **tag 前移**：
+v1.19.0 在原树上加子提交 `ea31f4c`（payload_test.go + sanitize.go 双文件注释独立行化）重建
+annotated tag 强推；v1.19.1 前移到 main 修复提交 `a5ae6f0` 强推。push-tag 发布线两 run 全绿
+（`41167871864` / `41167890829`），两个 Release 均已生成（各 6 资产），正文取 CHANGELOG 对应
+段落；runner 侧标题回落为裸 tag 名（既有已知坑），已 `gh release edit` 修为「vX.Y.Z: 中文摘要」。
+**Latest 指向 v1.19.1**。细节见 §4 本轮「补发 Release」条。
 
 **预防（尚未做，留给后续）**：把 `go.mod` 的 `go` 指令升到 1.23+ 并让 CI 与本机 gofmt 版本
 一致（`go-version-file` 已在用，本机需跟进升级）；或 CI 加 `GOTOOLCHAIN` 锁死与本机同版本。
