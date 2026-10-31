@@ -4,6 +4,25 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [Unreleased]
+
+### 修复
+
+- **go-binaries CI 的 gofmt 门禁自 v1.19.0 起持续红（`internal/upstream/sanitize.go` 被判未格式化）**。
+  根因：`sanitizeFeatures` 字符串切片的元素**同行注释列对齐**在 gofmt 各版本间宽度计算
+  不同——go1.22（CI，`go.mod` 声明 go 1.22.5）期望注释单空格紧贴元素，go1.27（本机）
+  期望对齐到最长元素列尾，同一文件无法同时满足两端，门禁红导致 build/publish 连带
+  skip，v1.19.0 / v1.19.1 均未产出 GitHub Release。
+
+  排查证据：GitHub `?ref=<HEAD>` 原始字节、干净 clone、主克隆三方 sha256 逐字节一致
+  （排除文件被非幂等改写）；本机以 `GOTOOLCHAIN=go1.22.5` 下载官方 toolchain 复现，
+  go1.22.5 `gofmt -d` 的输出与 CI 报错完全一致，go1.27 `gofmt -l` 为空——确认为纯
+  gofmt 版本差异。
+
+  修法：把 `sanitizeFeatures` 的 7 条同行注释改为元素上方的独立行注释（独立行注释在
+  两个 gofmt 版本下排版一致），仅动注释与空白，46 处字符串字面量逐序比对无任何变化
+  （该文件负责反探测串剥离，字面量改动会使请求 400）。
+
 ## [1.19.1-panel] - 2026-10-28
 
 本版为**请求改写补丁**：修复 MCP 类客户端（ZCode 等）的工具定义触发上游 11133 的问题。

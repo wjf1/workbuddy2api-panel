@@ -16,7 +16,7 @@
     | **A（2026-10-24 本次会话所在机）** | `DESKTOP-DVFFB09` | WLAN **`C8-CB-9E-DA-34-37`**（在用网卡 Intel Wi-Fi 6 AX201；VMware VMnet1/VMnet8 为虚拟网卡；2026-10-24 `Get-NetAdapter` 实测回填） | `F:\AI\workbuddy2api-panel` | `F:\AI\wb2api-panel-v1.13.0-windows-amd64\`（内含 `start-gateway.cmd`） | `WorkBuddy2API` |
 
   - **三处同名不同实，用来判断自己在哪台机器上**：① 计划任务名 `wb2api`（B）/ `WorkBuddy2API`（A）；② 生产目录 `F:\AI\wb2api`（B，**无** `start-gateway.cmd` 与 `task-definition.xml`，任务直接调 exe）/ `F:\AI\wb2api-panel-v1.13.0-windows-amd64`（A，经 `start-gateway.cmd` 启动）；③ 源码工作区 `F:\AI\wb2api-src`（B）/ `F:\AI\workbuddy2api-panel`（A）。
-- **最近 tag**：`v1.19.0`（**加固、可观测与测试基线**：P0 SSE 并发写 fatal / 入站限流与请求体上限 / 诊断监听 / 出站元数据剥除 / 状态快照 revision / logx 分级日志 / 错误码映射单表 / 大文件拆分 / 测试去网络与覆盖率翻倍）；上一版 `v1.18.3`（**账号池排版清理**：操作列左对齐 + 移除钉右、头部工具栏同高同间距、窄屏 flex-wrap 防裁切、弹窗按钮统一、趋势 footer tabular-nums）；上一版 `v1.18.2`（**面板体验小件与默认值防线**：Esc 关弹窗、TestDefaultSnapshotGolden 对账快照、窄屏列降级、--ink-3 对比度；审查清单其余项明确搁置）；上一版 `v1.18.1`（**安全加固与可观测**：/status 未配 key 脱敏、dump 7 天保留、入站头白名单、guards/persist_health/keepalive 可观测、WARN 节流、restartRequired diff 化、reqlog 早停、前端离线指示/防双击）；上一版 `v1.18.0`（**正确性与热路径加固**：SSE 写出竞态/data: 无空格/锁外落盘/齐射三连修/多轮观测累加/前端 esc 补齐 + 三项性能；审查留档见 §4 待办）；上一版 `v1.17.1`（**出厂默认对齐**：keepalive_mode smart / balance_refresh_minutes 10 / credit_floor 150；模型目录动态同步仍顺延 v1.17.x——需上游 /v3/config 实测）；上一版 `v1.17.0`（**路由与护栏能力版**：model_fallback + 每日限额三件套 + 余额趋势 + 会员档位；**模型目录动态同步 /v3/config 顺延 v1.17.1**——需上游接口实测）；上一版 `v1.16.1`（**流式稳定性加固**：SSE 心跳双路径、chunk id 整流统一、签到回执判定回归钉子；对标核对确认模型冷却持久化我方已有零缺口）；上一版 `v1.16.0`（**会话失效恢复与防复发**：M1 死号分组与一键重登、M2 批量判死告警+webhook、M3 session_dead_fails 可视化、M4 auths 租约锁、M5 保号任务时点抖动、M6 RT 轮换审计+外部双花检测、M7 smart 保活+失败退避、M8 死号探活；设计文档 `docs/DESIGN-v1.16.0.md`）；上一版 `v1.15.7`（**会话失效识别 + RT 单飞 + 余额 401 求证**：网关层裸 401 归 `ErrSessionDead` 并走 3 次计数、刷新令牌单飞去重、余额 401 先做刷新求证再判定账号死；上游 PR #7 同源移植 + 本地硬化）；上一版 `v1.15.6`（上游 P0 四项同步：14003 短窗口 / safefile 原子写 / CST 时区 / 出站头族对齐，另含 traceparent 32 hex 修复）；历史 `v1.15.5`（上游免费档排队 6020/6021 归类为上游整体过载，账号零惩罚 + 轮转 fail-fast）；历史 `v1.15.4`（上游 11133 模型参数拒绝归类为请求级错误并 fail-fast 返回 400）、`v1.15.3`（用量图悬停提示改中文三段式）、`v1.15.2`（Anthropic 兼容层支持对话中途 system）、`v1.15.1`（修复用量图悬停提示绑错元素）、`v1.15.0`（Anthropic Messages 兼容层与服务端 web_search）、`v1.14.2`（导入格式兼容升级）、`v1.14.1`（导出导入往返完整性修复）、`v1.14.0`（账号回收站、标签管理、余额预警与定时备份）。
+- **最近 tag**：`v1.19.1`（**解引用 tools schema 的 $ref/$defs，修上游 11133**；v1.19.1 与 v1.19.0 的 GitHub Release 因 gofmt 门禁红一度缺失，已于 2026-10-31 随门禁修复补发）；`v1.19.0`（**加固、可观测与测试基线**：P0 SSE 并发写 fatal / 入站限流与请求体上限 / 诊断监听 / 出站元数据剥除 / 状态快照 revision / logx 分级日志 / 错误码映射单表 / 大文件拆分 / 测试去网络与覆盖率翻倍）；上一版 `v1.18.3`（**账号池排版清理**：操作列左对齐 + 移除钉右、头部工具栏同高同间距、窄屏 flex-wrap 防裁切、弹窗按钮统一、趋势 footer tabular-nums）；上一版 `v1.18.2`（**面板体验小件与默认值防线**：Esc 关弹窗、TestDefaultSnapshotGolden 对账快照、窄屏列降级、--ink-3 对比度；审查清单其余项明确搁置）；上一版 `v1.18.1`（**安全加固与可观测**：/status 未配 key 脱敏、dump 7 天保留、入站头白名单、guards/persist_health/keepalive 可观测、WARN 节流、restartRequired diff 化、reqlog 早停、前端离线指示/防双击）；上一版 `v1.18.0`（**正确性与热路径加固**：SSE 写出竞态/data: 无空格/锁外落盘/齐射三连修/多轮观测累加/前端 esc 补齐 + 三项性能；审查留档见 §4 待办）；上一版 `v1.17.1`（**出厂默认对齐**：keepalive_mode smart / balance_refresh_minutes 10 / credit_floor 150；模型目录动态同步仍顺延 v1.17.x——需上游 /v3/config 实测）；上一版 `v1.17.0`（**路由与护栏能力版**：model_fallback + 每日限额三件套 + 余额趋势 + 会员档位；**模型目录动态同步 /v3/config 顺延 v1.17.1**——需上游接口实测）；上一版 `v1.16.1`（**流式稳定性加固**：SSE 心跳双路径、chunk id 整流统一、签到回执判定回归钉子；对标核对确认模型冷却持久化我方已有零缺口）；上一版 `v1.16.0`（**会话失效恢复与防复发**：M1 死号分组与一键重登、M2 批量判死告警+webhook、M3 session_dead_fails 可视化、M4 auths 租约锁、M5 保号任务时点抖动、M6 RT 轮换审计+外部双花检测、M7 smart 保活+失败退避、M8 死号探活；设计文档 `docs/DESIGN-v1.16.0.md`）；上一版 `v1.15.7`（**会话失效识别 + RT 单飞 + 余额 401 求证**：网关层裸 401 归 `ErrSessionDead` 并走 3 次计数、刷新令牌单飞去重、余额 401 先做刷新求证再判定账号死；上游 PR #7 同源移植 + 本地硬化）；上一版 `v1.15.6`（上游 P0 四项同步：14003 短窗口 / safefile 原子写 / CST 时区 / 出站头族对齐，另含 traceparent 32 hex 修复）；历史 `v1.15.5`（上游免费档排队 6020/6021 归类为上游整体过载，账号零惩罚 + 轮转 fail-fast）；历史 `v1.15.4`（上游 11133 模型参数拒绝归类为请求级错误并 fail-fast 返回 400）、`v1.15.3`（用量图悬停提示改中文三段式）、`v1.15.2`（Anthropic 兼容层支持对话中途 system）、`v1.15.1`（修复用量图悬停提示绑错元素）、`v1.15.0`（Anthropic Messages 兼容层与服务端 web_search）、`v1.14.2`（导入格式兼容升级）、`v1.14.1`（导出导入往返完整性修复）、`v1.14.0`（账号回收站、标签管理、余额预警与定时备份）。
 - **本地生产网关（2026-10-13 本机重新核实并升级）** **【批注 2026-10-15：本段是机器 A `DESKTOP-DVFFB09` 的记录——目录 `F:\AI\wb2api-panel-v1.13.0-windows-amd64\`、任务名 `WorkBuddy2API`、`start-gateway.cmd`/`task-definition.xml` 在机器 B `CHINAMI-DPNMO04` 上**全部不存在**（B 机对应物 = 目录 `F:\AI\wb2api`、任务名 `wb2api`、任务定义备份 `wb2api-task.xml`、无 `start-gateway.cmd`）；B 机部署记录见 §5 首条】**：目录 **`F:\AI\wb2api-panel-v1.13.0-windows-amd64\`**（目录名是历史遗留，内容随版本推进；内有 `wb2api.exe` + `config.json` + `auths/` 17 个账号 + `start-gateway.cmd` + 历史 `wb2api.exe.*.bak`），监听 `:7863`；Windows 计划任务名 **`WorkBuddy2API`**（注册为 `S-1-5-18` SYSTEM，故**非提权读不到**——`schtasks /query /tn WorkBuddy2API` 报「拒绝访问」即任务存在，报「找不到」才是真没有；定义备份在该目录 `task-definition.xml`，动作 = `start-gateway.cmd`）。**当前已部署 `1.15.7-panel`**（2026-10-24 00:01 由 `1.15.4-panel` 升级，源码 `2947308` 自建二进制，回滚备份 `wb2api.exe.pre-1.15.7.bak`，过程与验收见 §5 首条；历史：2026-10-14 22:56 升 `1.15.4-panel`（备份 `wb2api.exe.pre-1.15.4.bak`）、2026-10-14 00:11 升 `1.15.2-panel`（备份 `wb2api.exe.pre-1.15.2.bak`）、2026-10-13 20:47 从 `1.14.2-panel` 升 `1.15.1-panel`）。更新惯例 = 停任务 → 备份成 `wb2api.exe.pre-<新版本>.bak` → 替换 exe（Release 的 `wb2api-panel-v<版本>-windows-amd64.zip` 内，或本机 `go build`）→ 起任务；**停机约 2–3 秒**，任务失败重启策略（`PT1M`×3）与开机自启（`PT20S`）保留。该实例的 `config.json` **没有 `search` 段**——加载时取 `Default()` 兜底，故 1.15.0 起服务端 web_search 默认即启用（想关再显式写 `"search":{"enabled":false}`）。
   - **本机部署避坑（2026-10-13 实测）**：① 计划任务注册为 SYSTEM，`schtasks /End|/Run`、`Get-ScheduledTask -TaskName`、`tasklist/taskkill` 均需**管理员**；本机 UAC 策略为 `ConsentPromptBehaviorAdmin=0`（管理员静默提权，不弹窗），`Start-Process -Verb RunAs` 可直接提权。② **无 BOM 的中文 `.ps1` 会被 Windows PowerShell 5.1 按 ANSI 读成乱码导致解析失败**（`Try 语句缺少 Catch/Finally`）——部署脚本改用**纯 ASCII 的 `.cmd` 批处理**最稳。③ Git Bash 里 `taskkill //F //IM x.exe` 会把 `//F` 原样传给程序报「无效参数」——用 `powershell Stop-Process -Name x` 或 `cmd /c` 代替。④ 清理测试进程**只能按精确镜像名**（如 `wb2api-smoke.exe`），**禁止 `wb2api*.exe` 通配**（会连带杀掉生产 `wb2api.exe`）。
 
@@ -65,7 +65,16 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（1.19.0-panel，2026-10-26）
+## 4. 最近一轮变更与交付成果（CI gofmt 门禁修复 + 补发 v1.19.x Release，2026-10-31，无新版本）
+
+> 详细记录见 `CHANGELOG.md` 的 `[Unreleased]` 段。本轮不动 `appVersion`（源码版本仍 `1.19.0-panel`），只修 CI 门禁并在存量 tag 上补发缺失的 Release。
+
+- **根因实证（接 1.19.0 轮的遗留疑点）**：① 三方逐字节比对——GitHub `?ref=ad9cc28` 原始字节（`gh api` raw）、临时目录干净 clone（`core.autocrlf=false`）、主克隆工作区文件，三者 sha256 全部为 `9332bdb8…`，**排除「文件被非幂等改写」**（此前 `gofmt -d` 输出与逐行读"不一致"是诊断时的显示假象）；② 本机 `GOTOOLCHAIN=go1.22.5` 下载官方 toolchain（`GOPROXY=goproxy.cn`，proxy.golang.org 直连超时）复现：go1.22.5 `gofmt -d` 输出与 CI 报错完全一致（期望同行注释单空格紧贴元素），go1.27 期望对齐最长元素列尾且 `gofmt -l` 为空——**纯 gofmt 版本差异实锤**。
+- **修复**：`internal/upstream/sanitize.go` 的 `sanitizeFeatures` 7 条同行注释改为元素上方独立行注释（独立行注释在两个 gofmt 版本下排版一致），并在切片上方加 3 行注释说明缘由。**仅动注释与空白：新旧版本 46 处双引号字符串字面量逐序 diff 为空**（反探测串剥离逻辑零改动）。
+- **验证**：go1.27 与 go1.22.5 双版本 `gofmt -l ./cmd ./internal` 均空、go1.22.5 `gofmt -d` 空；`go vet ./...` 干净、`go test ./internal/upstream/ -run Sanitize` 7 用例全 PASS、`go build ./...` 成功。
+- **补发 Release**：修复推送 main 后，用 `gh workflow run go-binaries --ref v1.19.0 / v1.19.1` 在两个存量 tag 上触发 `workflow_dispatch`（workflow 的 publish 条件是 `startsWith(github.ref, 'refs/tags/v')`，dispatch 到 tag ref 同样满足），test+build+publish 全绿后 Release 自动生成，标题取 tag 注解首行、正文取 CHANGELOG 对应段落（详见 §5 已解决小节）。
+
+## 4.0 上一轮（1.19.0-panel，2026-10-26）
 
 > 完整细节见 `CHANGELOG.md` 的 `[1.19.0-panel]`。本轮覆盖 `v1.18.3` 之后累计的 **59 个提交**。
 
@@ -241,33 +250,29 @@ data/backups/          备份输出（同上）
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 
-### 🚧 阻塞：go-binaries 的 gofmt 门禁自 v1.19.0 起持续红（2026-10-29 定位）
+### ✅ 已解决（2026-10-31）：go-binaries 的 gofmt 门禁自 v1.19.0 起持续红
 
-**症状**：`go-binaries` workflow 的 `test` job 在「gofmt 检查」步骤失败，报
-`internal/upstream/sanitize.go` 未格式化；**但本机 `gofmt -l ./cmd ./internal` 输出为空**。
-连带后果：`build`/`publish` 被 skip → **v1.19.0 与 v1.19.1 都没有 GitHub Release**
-（Release 列表最新仍是 v1.18.3）。`race` job 通过，说明代码本身没问题。
+**原症状**（2026-10-29 定位）：`go-binaries` workflow 的 `test` job 在「gofmt 检查」步骤失败，报
+`internal/upstream/sanitize.go` 未格式化；但本机 `gofmt -l ./cmd ./internal` 输出为空。
+连带 `build`/`publish` 被 skip → v1.19.0 与 v1.19.1 都没有 GitHub Release。
 
-**根因**（通过在 CI 里临时打印 `gofmt -d` 实证）：`sanitize.go` 的 `sanitizeFeatures`
-字符串切片里，**元素同行注释的列对齐**在 go1.22（CI，`go.mod` 声明 `go 1.22.5`）与
-go1.27（本机）下的宽度计算不同。CI 期望注释紧贴元素（单空格），本机 gofmt 认为应对齐到
-最长元素列尾。差异只涉及注释空白，不涉及任何字符串内容。
+**根因与证据**（本日三步实证，详见 §4 本轮）：
+1. **排除非幂等改写**（上轮遗留疑点）：GitHub `?ref=ad9cc28` 原始字节、干净 clone、主克隆
+   三方 sha256 逐字节一致（`9332bdb8…`）——上轮「`gofmt -d` 输出与逐行读不一致」是显示假象。
+2. **本机复现 CI 判定**：`GOTOOLCHAIN=go1.22.5` 官方 toolchain 的 `gofmt -d` 输出与 CI 报错
+   完全一致；go1.27 的 `gofmt -l` 为空。纯 gofmt 版本差异：元素**同行注释**的列对齐，
+   go1.22 期望单空格紧贴、go1.27 期望对齐最长元素列尾。
+3. **修复**：7 条同行注释改为元素上方独立行注释（两版本排版一致）。字符串字面量零改动
+   （46 处逐序 diff 为空），`go test ./internal/upstream/ -run Sanitize` 全 PASS。
 
-**为何本轮没修**：把注释移到元素上方本可一次解决，但该文件还有**更值得单独排查的疑点**——
-`gofmt -d` 输出与本地 Python 逐行读出的内容**不一致**（同一行，CI 侧显示为
-`"x-anthropic-billing-hdr",`，本地读取显示 `""You are Claude Code",` 双引号）；
-`git show HEAD:...` 与工作区版本也不完全一致。这更像是**文件在不同检出/工具链下被非幂等
-改写**的迹象，而非单纯的 gofmt 版本差异。贸然改动可能改坏指纹净化逻辑（该文件负责
-11-128 反探测串的剥离，改错会让请求直接 400），故**登记为独立问题，不在本版动刀**。
+**Release 补发**：修复推送后 `gh workflow run go-binaries --ref v1.19.0` 与 `--ref v1.19.1`
+各触发一次（publish 条件 `startsWith(github.ref, 'refs/tags/v')` 对 dispatch 到 tag 同样成立），
+test+build+publish 全绿，两个 Release 均已生成，标题取 tag 注解（`v1.19.0: …` 格式）、正文取
+CHANGELOG 对应段落；Latest 指向 v1.19.1。
 
-**下一步建议**（给接手者）：
-1. 先用干净环境（`git clone` 到全新目录，不带任何本地修改）确认该文件在 go1.22.5 下
-   `gofmt -d` 的确切输出，与 GitHub 上 `?ref=<sha>` 读到的原始字节逐字节比对。
-2. 若确认只是注释对齐，把 `sanitizeFeatures` 的 6 条同行注释改成上方独立注释即可，
-   **不要碰字符串字面量**，改完必须跑 `go test ./internal/upstream/ -run Sanitize`。
-3. 修好后重跑 `go-binaries`（`workflow_dispatch`）即可补出 v1.19.0 / v1.19.1 的 Release。
-4. 根治方案：把 `go.mod` 的 `go` 指令升到 1.23+ 并让 CI 用 `go-version-file` 解析到与
-   本机一致的版本；或把 gofmt 检查降级为 `continue-on-error`（不推荐，会掩盖真问题）。
+**预防（尚未做，留给后续）**：把 `go.mod` 的 `go` 指令升到 1.23+ 并让 CI 与本机 gofmt 版本
+一致（`go-version-file` 已在用，本机需跟进升级）；或 CI 加 `GOTOOLCHAIN` 锁死与本机同版本。
+另注意：本机 Go 模块代理默认 `proxy.golang.org` 直连超时，下载 toolchain 需 `GOPROXY=https://goproxy.cn`。
 
 ### ✅ 2026-10-28：`derefToolSchemas` 重写落地（v1.19.1-panel，未部署）
 
