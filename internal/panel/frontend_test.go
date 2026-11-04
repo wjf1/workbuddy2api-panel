@@ -2,6 +2,7 @@ package panel
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -743,6 +744,98 @@ process.stdout.write(JSON.stringify({
 	const want = `{"rows":[{"days":1,"credits":50},{"days":7,"credits":70}],"accountCount":3,"unavailable":1,"colorA":"#4f8cff","colorB":"#25b08b"}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("expiry summary=%s want %s", out, want)
+	}
+}
+
+// TestAppJSPollPaused 钉住轮询闸门 pollPaused 的判据（交接文档 §10.5 V30）。
+//
+// 为什么值得单独测：5s 轮询会整表重建 #accBody，重绘期间用户正在操作的状态
+// （焦点 / 勾选 / 滚动 / 打开的菜单）都会被冲掉。闸门的职责是"该停的时候停"，
+// 但它同时必须"不该停的时候放行"——条件写宽了会导致面板永远不刷新（数据停在
+// 进页面那一刻，且没有任何报错），这类静默失效比丢焦点更难发现。
+//
+// 逐条钉住的语义：
+//   - 行菜单打开 → 停（否则重绘会把菜单定位的锚点节点换掉）
+//   - 批量执行中 → 停（否则进度与勾选被清空）
+//   - 任意 veil 弹窗打开 → 停（用户在读详情）
+//   - 焦点在账号视图内 → 停
+//   - **仅聚焦空搜索框 → 不停**（那是无操作状态，拦住会让筛选期间数据不更新）
+//   - 搜索框有值 → 停
+//   - 焦点在视图外 → 不停（不能永久停更）
+func TestAppJSPollPaused(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; pollPaused test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function pollPaused');
+// end 取 '\nasync function loadOverview' 之后的 'async ' 起点不可用（尾部会残留
+// 半个声明），这里定位到 loadOverview 声明的**行首**，切片才干净。
+const end = src.indexOf('\nasync function loadOverview');
+if (start < 0 || end < 0) throw new Error('pollPaused not found');
+const body = src.slice(start, end);
+
+// 桩：activeElement 与 querySelector 都由用例注入，函数体只用到这两处 DOM。
+function run(state) {
+  const ctx = {
+    document: {
+      activeElement: state.active || null,
+      querySelector: () => state.veil || null,
+    },
+    window: { batchRunning: !!state.batch },
+    openMenuUid: state.menu || '',
+  };
+  vm.createContext(ctx);
+  vm.runInContext(body + '\nthis.p = pollPaused;', ctx);
+  return ctx.p();
+}
+
+// closest 的最小实现：让 activeElement 能回答"我在不在账号视图里"。
+function el(viewMatch, id, value) {
+  return {
+    id: id || '',
+    value: value === undefined ? '' : value,
+    closest: () => (viewMatch ? { id: 'view-accounts' } : null),
+  };
+}
+
+const cases = [
+  ['idle: 无焦点无弹窗无批量 → 不停', run({}), false],
+  ['行菜单打开 → 停', run({ menu: 'uid-1' }), true],
+  ['批量执行中 → 停', run({ batch: true }), true],
+  ['弹窗打开 → 停', run({ veil: { id: 'accDetailVeil' } }), true],
+  ['焦点在行上 → 停', run({ active: el(true) }), true],
+  ['仅聚焦空搜索框 → 不停', run({ active: el(true, 'accFilterQ', '') }), false],
+  ['搜索框有值 → 停', run({ active: el(true, 'accFilterQ', '风') }), true],
+  ['焦点在视图外 → 不停', run({ active: el(false) }), false],
+];
+process.stdout.write(JSON.stringify(cases.map(c => [c[0], c[1], c[2]])));`
+	f, err := os.CreateTemp(t.TempDir(), "pollpaused-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("pollPaused node test failed: %v\n%s", err, out)
+	}
+	var cases [][]interface{}
+	if err := json.Unmarshal(out, &cases); err != nil {
+		t.Fatalf("pollPaused output not JSON: %v\n%s", err, out)
+	}
+	if len(cases) != 8 {
+		t.Fatalf("expected 8 cases, got %d", len(cases))
+	}
+	for _, c := range cases {
+		name, got, want := c[0].(string), c[1].(bool), c[2].(bool)
+		if got != want {
+			t.Errorf("%s: pollPaused=%v want %v", name, got, want)
+		}
 	}
 }
 

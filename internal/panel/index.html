@@ -509,6 +509,13 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
   font-size: var(--fs-sm);
 }
 .bulkbar .grow { flex: 1; }
+/* 批量进度：文字 + 细进度条。进度条本体只做视觉，语义由外层 role=progressbar 承担。 */
+.bulkprog { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--ink-2); }
+.bulkprog::before {
+  content: ""; width: 96px; height: 4px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent) var(--bulk-pct, 0%), var(--line-soft) var(--bulk-pct, 0%));
+}
+.bulkprog-text { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* 详情抽屉的键值表：dt 定宽标签 + dd 内容，长 uid/错误串可换行。 */
 .kv { display: grid; grid-template-columns: 96px 1fr; gap: 8px 12px; font-size: var(--fs-base); }
@@ -1050,11 +1057,16 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
         </header>
         <div class="bulkbar" id="accBulk" hidden role="region" aria-live="polite">
           <span>已选 <b id="accBulkN">0</b> 个</span>
+          <!-- 批量执行进度：role=progressbar 让读屏能报进度；值在 runBatch 内更新。 -->
+          <span class="bulkprog" id="accBulkProg" role="progressbar" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="" hidden>
+            <span class="bulkprog-text" id="accBulkProgText"></span>
+          </span>
           <span class="grow"></span>
           <button class="xs" data-bulk="balance">刷新余额</button>
           <button class="xs" data-bulk="checkin">签到</button>
           <button class="xs" data-bulk="pause">暂停选号</button>
           <button class="xs" data-bulk="resume">恢复选号</button>
+          <button class="xs ghost danger" id="btnBulkStop" hidden>停止</button>
           <button class="xs ghost" id="btnBulkCancel">取消选择</button>
         </div>
         <div class="acc-scope">
@@ -1874,6 +1886,25 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
 <!-- 行操作菜单：body 级单例 + position:fixed。
      不能放在 tr / .tbl-wrap 里——滚动容器会裁切它，且每行一个实例会让 id 重复。 -->
 <div id="accRowMenu" class="rowmenu" role="menu" hidden></div>
+
+<!-- 站内确认弹窗：替代原生 confirm()。
+     原生 confirm 是同步阻塞的、样式不可控、移动端体验差，且读屏在部分浏览器里
+     读不出按钮语义。复用 showVeil 拿到 role=dialog + aria-modal + inert + 焦点陷阱。 -->
+<div class="veil" id="confirmVeil">
+  <div class="dlg" style="width:440px">
+    <header>
+      <h3 id="confirmTitle">确认操作</h3>
+    </header>
+    <div class="body">
+      <div id="confirmMsg" style="font-size:var(--fs-base);line-height:1.6"></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button class="xs" id="btnConfirmCancel">取消</button>
+      <button class="xs primary" id="btnConfirmOK">确认</button>
+    </footer>
+  </div>
+</div>
 
 <div id="toasts" role="status" aria-live="polite"></div>
 

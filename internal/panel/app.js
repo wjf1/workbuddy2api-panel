@@ -880,8 +880,10 @@ $('accBody').addEventListener('click', async ev => {
   // 详情与菜单是纯前端动作，不走 busyBtn 流程（不会禁用按钮再重载）。
   if (a === 'menu') { openAccMenu(u, b); return; }
   if (a === 'detail') { openAccDetail(u); return; }
-  if (a === 'remove' && !confirm('移除后账号退出账号池，凭证文件移入回收站（默认保留 30 天，可随时恢复或彻底删除）。确认移除？')) return;
-  if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
+  if (a === 'remove' && !await askConfirm('移除后账号退出账号池，凭证文件移入回收站（默认保留 30 天，可随时恢复或彻底删除）。',
+    { title: '移入回收站', okText: '移入回收站' })) return;
+  if (a === 'disable' && !await askConfirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。',
+    { title: '禁用账号', okText: '禁用账号' })) return;
   b.disabled = true;
   try { await runAccAction(a, u); }
   finally { b.disabled = false; loadOverview(true); }
@@ -1003,7 +1005,7 @@ function closeAccMenu(refocus) {
 }
 
 /* 菜单项点击：复用行内同一套动作处理（不发重复请求逻辑）。 */
-$('accRowMenu').addEventListener('click', ev => {
+$('accRowMenu').addEventListener('click', async ev => {
   const g = ev.target.closest('button[data-glb]');
   if (g) {
     // 全局操作项：直接触发工具栏上那个原按钮，动作逻辑只有一份。
@@ -1018,8 +1020,10 @@ $('accRowMenu').addEventListener('click', ev => {
   const u = b.dataset.u, a = b.dataset.a;
   closeAccMenu(true);
   if (a === 'detail') { openAccDetail(u); return; }
-  if (a === 'remove' && !confirm('移除后账号退出账号池，凭证文件移入回收站（默认保留 30 天，可随时恢复或彻底删除）。确认移除？')) return;
-  if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
+  if (a === 'remove' && !await askConfirm('移除后账号退出账号池，凭证文件移入回收站（默认保留 30 天，可随时恢复或彻底删除）。',
+    { title: '移入回收站', okText: '移入回收站' })) return;
+  if (a === 'disable' && !await askConfirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。',
+    { title: '禁用账号', okText: '禁用账号' })) return;
   runAccAction(a, u);
 });
 /* 菜单键盘：↑↓ 循环、Home/End、Esc 关闭回焦、Tab 离开即关；Enter 不冒泡到行。 */
@@ -1090,6 +1094,33 @@ function openAccDetail(uid) {
 if ($('btnCloseAccDetail')) $('btnCloseAccDetail').onclick = () => hideVeil('accDetailVeil');
 registerVeilCloser('accDetailVeil', () => hideVeil('accDetailVeil'));
 
+/* ── 站内确认弹窗（替代原生 confirm）─────────────────────────────────
+   askConfirm 返回 Promise<boolean>。原生 confirm 同步阻塞、样式不可控、移动端
+   体验差，且部分读屏读不出按钮语义；这里复用 showVeil 拿到 role=dialog +
+   aria-modal + inert + 焦点陷阱。Esc 关闭按「取消」处理，不能默认成确认。 */
+let confirmResolve = null;
+function askConfirm(msg, opts) {
+  const o = opts || {};
+  const ok = $('btnConfirmOK');
+  if (ok) ok.textContent = o.okText || '确认';
+  const t = $('confirmTitle');
+  if (t) t.textContent = o.title || '确认操作';
+  const m = $('confirmMsg');
+  if (m) m.textContent = msg;
+  showVeil('confirmVeil');
+  return new Promise(res => { confirmResolve = res; });
+}
+function settleConfirm(v) {
+  const fn = confirmResolve;
+  confirmResolve = null;
+  hideVeil('confirmVeil');
+  if (fn) fn(v);
+}
+if ($('btnConfirmOK')) $('btnConfirmOK').onclick = () => settleConfirm(true);
+if ($('btnConfirmCancel')) $('btnConfirmCancel').onclick = () => settleConfirm(false);
+registerVeilCloser('confirmVeil', () => settleConfirm(false));
+
+
 /* syncAccSelection 复选状态 → 批量条 + 全选框的中间态。 */
 function syncAccSelection() {
   const all = [...document.querySelectorAll('#accBody .rowck')];
@@ -1131,6 +1162,28 @@ async function runBatch(act, uids) {
   const queue = uids.slice();
   if (bulk) bulk.dataset.order = queue.join(',');
   let issued = 0, done = 0, inflight = 0, ok = 0, fail = 0, skip = 0;
+  const total = uids.length;
+  // 取消：只停「尚未出队」的账号。已发出的请求不 abort——半完成的账号会停在
+  // 中间状态（例如签到成功但余额没刷），而并发断言仍会全绿，是最难查的一类 bug。
+  let stopRequested = false;
+  const ctl = new AbortController();
+  // 外部（#btnBulkStop）通过这个钩子置标记：闭包变量不能从外面改。
+  window.__bulkStop = () => { stopRequested = true; };
+  const prog = $('accBulkProg'), progText = $('accBulkProgText'), stopBtn = $('btnBulkStop');
+  const updateProg = () => {
+    if (!prog) return;
+    const pct = total ? Math.round(done / total * 100) : 0;
+    prog.setAttribute('aria-valuenow', String(done));
+    prog.setAttribute('aria-valuemax', String(total));
+    const txt = '进度 ' + done + '/' + total + '（成功 ' + ok + ' / 失败 ' + fail +
+      (skip ? ' / 跳过 ' + skip : '') + '）';
+    prog.setAttribute('aria-valuetext', txt);
+    prog.style.setProperty('--bulk-pct', pct + '%');
+    if (progText) progText.textContent = txt;
+  };
+  if (prog) { prog.hidden = false; prog.setAttribute('aria-valuemax', String(total)); }
+  if (stopBtn) stopBtn.hidden = false;
+  updateProg();
   const setInflight = n => {
     inflight = n;
     if (!bulk) return;
@@ -1141,6 +1194,8 @@ async function runBatch(act, uids) {
   window.batchRunning = true;
   const worker = async () => {
     for (;;) {
+      // 取消落在出队前：这些账号完全未被触碰，状态与快照全等。
+      if (stopRequested) return;
       const uid = queue.shift();
       if (!uid) return;
       // issued 在**出队时** +1（不是发请求时）：worker pool 下两者差一次微任务，
@@ -1151,17 +1206,20 @@ async function runBatch(act, uids) {
       if (acc && accState(acc).k === 'relogin') {
         skip++; done++;
         if (bulk) bulk.dataset.done = String(done);
+        updateProg();
         continue;
       }
       setInflight(++inflight);
       try {
-        await api('accounts/' + encodeURIComponent(uid) + '/' + act, { method: 'POST' });
+        await api('accounts/' + encodeURIComponent(uid) + '/' + act, { method: 'POST', signal: ctl.signal });
         ok++;
       } catch (e) { fail++; }
       finally {
         done++;
         if (bulk) bulk.dataset.done = String(done);
         setInflight(--inflight);
+        // finally 必须在：漏执行会让 inflight 永久停在 1，污染后续批量。
+        updateProg();
       }
     }
   };
@@ -1169,10 +1227,25 @@ async function runBatch(act, uids) {
     await Promise.all([worker(), worker()]);
   } finally {
     window.batchRunning = false;
+    if (prog) prog.hidden = true;
+    if (stopBtn) stopBtn.hidden = true;
   }
-  toast('批量完成：成功 ' + ok + ' / 失败 ' + fail + (skip ? ' / 跳过 ' + skip + '（需重登）' : ''),
+  const cancelled = stopRequested && queue.length > 0;
+  toast('批量' + (cancelled ? '已停止' : '完成') + '：成功 ' + ok + ' / 失败 ' + fail +
+    (skip ? ' / 跳过 ' + skip + '（需重登）' : '') +
+    (cancelled ? ' / 未执行 ' + queue.length : ''),
     fail ? 'err' : 'ok');
   loadOverview(true);
+}
+
+/* 批量停止按钮：只置标记，worker 在下次出队时退出。 */
+if ($('btnBulkStop')) {
+  $('btnBulkStop').onclick = () => {
+    $('btnBulkStop').disabled = true;
+    $('btnBulkStop').textContent = '停止中…';
+    // 通过 globalThis 传标记：runBatch 的闭包变量不能被外部直接改。
+    if (window.__bulkStop) window.__bulkStop();
+  };
 }
 
 if ($('accBulk')) {
