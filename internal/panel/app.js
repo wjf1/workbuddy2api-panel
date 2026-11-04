@@ -144,6 +144,31 @@ function toast(msg, cls) {
   $('toasts').appendChild(el);
   setTimeout(() => el.remove(), 3600);
 }
+
+/* toastAction 带动作按钮的 toast（移除撤销用）。
+   保留 toast() 原签名不变，旧调用点无需改动；超时后按钮消失，不可再撤销。 */
+function toastAction(msg, actionText, fn, ms) {
+  const el = document.createElement('div');
+  el.className = 'tst ok';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  el.appendChild(span);
+  const btn = document.createElement('button');
+  btn.className = 'xs ghost';
+  btn.textContent = actionText;
+  btn.style.marginLeft = '10px';
+  let used = false;
+  btn.onclick = async () => {
+    if (used) return;
+    used = true;
+    btn.disabled = true;
+    try { await fn(); el.remove(); }
+    catch (e) { btn.disabled = false; toast('恢复失败：' + e.message, 'err'); }
+  };
+  el.appendChild(btn);
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), ms || 8000);
+}
 // esc 文本/属性双安全转义。不能只用 div.innerHTML（它转义 <>& 但不转义引号），
 // 否则字符串拼进 HTML 属性（如 title="uid: ..."）时引号可闭合属性并注入事件处理器。
 // 显式替换 5 个字符：& < > " '（& 必须最先，避免二次转义）。
@@ -409,64 +434,102 @@ setTimeout(() => {
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
 /* accFilter 账号列表筛选（仿 mdFilter 模式）：q 匹配昵称/uid 子串，tag 精确命中，
-   st 状态维度（dead = dead_kind 非空的失效号，ok = 非 dead 的其余账号）。 */
-const accFilter = { q: '', tag: '', st: '' };
+   st 状态维度（pending = accNeed 为真，dead = dead_kind 非空的失效号，
+   ok = 非 dead 的其余账号）。sort 见 accSortRank 旁的说明。 */
+const accFilter = { q: '', tag: '', st: '', sort: 'risk' };
 function accApply(list) {
   const tagsMap = (overviewData && overviewData.tags) || {};
   const q = accFilter.q.trim().toLowerCase();
-  return (list || []).filter(s => {
+  const floor = (overviewData && overviewData.credit_floor) || 0;
+  const out = (list || []).filter(s => {
     if (q && !(String(s.nickname || '').toLowerCase().includes(q) || String(s.uid || '').toLowerCase().includes(q))) return false;
     if (accFilter.tag && !((tagsMap[s.uid] || []).includes(accFilter.tag))) return false;
+    // 「需处理」必须与 KPI 同源（accNeed），两处各写一遍判据数字必然对不上。
+    if (accFilter.st === 'pending' && !accNeed(s, floor)) return false;
     if (accFilter.st === 'dead' && !s.dead_kind) return false;
     if (accFilter.st === 'ok' && s.dead_kind) return false;
     return true;
   });
+  // 排序：默认「风险优先」——需处理的最前，其次按状态严重度，最后按积分升序。
+  // 每一级都落到 uid，保证同一份数据每次渲染顺序完全一致（否则行会随轮询跳动）。
+  out.sort((a, b) => {
+    if (accFilter.sort === 'credits') {
+      return (a.credits || 0) - (b.credits || 0) || String(a.uid).localeCompare(String(b.uid));
+    }
+    if (accFilter.sort === 'last') {
+      // parseAPITime 对空值返回 0，未成功过的号自然排最前（最该看）。
+      return parseAPITime(a.last_success) - parseAPITime(b.last_success) || String(a.uid).localeCompare(String(b.uid));
+    }
+    if (accFilter.sort === 'errors') {
+      return (b.err_total || 0) - (a.err_total || 0) || String(a.uid).localeCompare(String(b.uid));
+    }
+    return accRank(a, floor) - accRank(b, floor)
+      || (a.credits || 0) - (b.credits || 0)
+      || String(a.uid).localeCompare(String(b.uid));
+  });
+  return out;
 }
+
+/* sanitizeAccReason 把上游英文错误压成行内可读的短词。
+   原始 error 只进 title 与详情抽屉——行内塞整段 401/12153 会把行撑高且没人看得懂。 */
+function sanitizeAccReason(s) {
+  if (!s.reason) return '';
+  const r = String(s.reason);
+  if (s.dead_kind === 'session_dead') return '会话失效';
+  if (s.dead_kind === 'banned') return '上游封禁';
+  if (/12153|invalid_grant|Session doesn't have required client/i.test(r)) return '会话失效';
+  if (/11140|risk|风控/i.test(r)) return '风控拦截';
+  if (/\b401\b/.test(r)) return '鉴权失败';
+  if (/\b429\b|rate limit/i.test(r)) return '限流中';
+  if (/\b5\d\d\b/.test(r)) return '上游错误';
+  return r.length > 14 ? r.slice(0, 14) + '…' : r;
+}
+
+/* 状态徽章形状：形状 + 文字 + 颜色三重编码，不只靠颜色（色弱可辨）。
+   circle 可用 / triangle 冷却 / square 暂停与禁用 / diamond 待重登与封号。 */
+function accStateIcon(k) {
+  const o = '<svg class="st-ico" viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">';
+  if (k === 'cooling') return o + '<path d="M6 1.6 11 10H1z"/></svg>';
+  if (k === 'paused' || k === 'disabled') return o + '<rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1.2"/></svg>';
+  if (k === 'relogin' || k === 'banned') return o + '<path d="M6 1.4 10.6 6 6 10.6 1.4 6z"/></svg>';
+  return o + '<circle cx="6" cy="6" r="4.2"/></svg>';
+}
+
 function renderAccounts(list, filtered) {
   const tb = $('accBody');
   if (!list.length) {
     const msg = filtered
       ? '<div class="big">没有匹配筛选条件的账号</div>调整关键字或标签筛选，或点击右上角「添加账号」'
       : '<div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号';
-    tb.innerHTML = '<tr><td colspan="9"><div class="empty">' + msg + '</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="8"><div class="empty">' + msg + '</div></td></tr>';
     return;
   }
   // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
   const maxCred = Math.max(1, ...list.map(s => s.credits || 0));
-  tb.innerHTML = list.map(s => {
-    const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
-    const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
-    const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
-    let cls = '', tag;
-    if (s.disabled) {
-      cls = 'off';
-      // dead_kind 非空 = 会话失效 / 封号类终态：用醒目文案与普通「已禁用」区分，
-      // session_dead 的行内挂「重登」按钮（见操作列）；banned（11140 风控）不给重登入口。
-      if (s.dead_kind === 'session_dead') tag = '<span class="tag bad">待重登</span>';
-      else if (s.dead_kind === 'banned') tag = '<span class="tag bad">上游封号</span>';
-      else tag = '<span class="tag bad">已禁用</span>';
-    }
-    else if (s.paused) { cls = 'off'; tag = '<span class="tag warn">已暂停选号</span>'; }
-    else if (cool > 0) {
-      cls = 'cool';
-      const kind = bl > Math.max(s.cool_remaining_sec || 0, dg > 0 ? dg : 0) ? '熔断'
-        : (dg > (s.cool_remaining_sec || 0) ? '连败降权' : (s.cool_kind === 'hard_credit' ? '积分冷却' : '限流冷却'));
-      tag = '<span class="tag warn">' + kind + ' · ' + dur(cool) + '</span>';
-    } else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
-    // M3：session_dead_fails 是「离自动禁用还差几次」的进度（连续 3 次判死才禁用），
-    // 亚健康（1/3、2/3）可见，赶在满阈前手动保活一次（成功即清零）。
-    const sdTag = (!s.disabled && s.session_dead_fails > 0)
-      ? ' <span class="tag warn" style="font-size:10.5px" title="连续 session 判死计数，满 3 次自动禁用；保活 / 请求成功即清零">session ' + s.session_dead_fails + '/3</span>'
-      : '';
-    const note = s.reason ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' + esc(s.reason) + '</div>' : '';
-    // 标签徽章（overview.tags 透出，落盘 account.tags；随导出/导入往返）。
+  // 重绘前抓一份焦点/勾选/滚动快照：5s 轮询会整表重建，不恢复的话
+  // 用户正在键盘操作时焦点会掉回 BODY（旧实现实测 6.5s 掉一次）。
+  const snap = accSnap();
+  tb.innerHTML = list.map((s, idx) => {
+    // 状态一律来自 accState()——本函数不再自己算冷却/禁用判据，
+    // 否则会与 KPI「需处理」、批量跳过判定三处漂移。
+    const st = accState(s);
+    const isBad = st.tone === 'bad';
+    const isCool = st.tone === 'warn';
+    const rowCls = 'acc-row state-' + st.k + (isBad ? ' is-bad' : (isCool ? ' is-cool' : ''));
+    // 亚健康计数（连续 session 判死进度）只进 title，不占行内空间。
+    const sdTip = (!s.disabled && s.session_dead_fails > 0)
+      ? '连续 session 判死 ' + s.session_dead_fails + '/3，满 3 次自动禁用；保活或请求成功即清零' : '';
+    // 标签（overview.tags 透出，落盘 account.tags；随导出/导入往返）。
     const myTags = ((overviewData && overviewData.tags) || {})[s.uid] || [];
-    const tagBadges = myTags.length
-      ? '<div style="margin-top:3px">' + myTags.map(t => '<span class="tag" style="font-size:10.5px">' + esc(t) + '</span>').join(' ') + '</div>'
-      : '';
-    const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now());
-    const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
-    const cred = s.credits == null ? '—' : (s.credits_total > 0 ? s.credits + '<span class="of">/' + s.credits_total + '</span>' : String(s.credits));
+    const short = s.uid.length > 12 ? s.uid.slice(0, 12) + '…' : s.uid;
+    const reason = sanitizeAccReason(s);
+    // 会员档位与原「国际版」标记合并成一个中性 chip（不与状态徽章同形）。
+    const tierChip = s.realm === 'global' ? '<span class="chip-meta">国际版</span>'
+      : (s.member_tier === 'paid' ? '<span class="chip-meta" title="会员档位（' + esc(ago(s.member_tier_fetched_at)) + ' 读取）">' + esc(s.member_pkg || '付费') + '</span>'
+      : (s.member_tier === 'free' ? '<span class="chip-meta" title="会员档位（' + esc(ago(s.member_tier_fetched_at)) + ' 读取）">Free</span>' : ''));
+    const tagChips = myTags.slice(0, 2).map(t => '<span class="chip-meta">' + esc(t) + '</span>').join('') +
+      (myTags.length > 2 ? '<span class="chip-meta">+' + (myTags.length - 2) + '</span>' : '');
+    const cred = s.credits == null ? '—' : String(s.credits);
     const pct = s.credits_total > 0
       ? Math.min(100, Math.round((s.credits || 0) / s.credits_total * 100))
       : Math.round((s.credits || 0) / maxCred * 100);
@@ -478,45 +541,103 @@ function renderAccounts(list, filtered) {
       credTip += '\n实测单价（credits/1K）：\n' + costs.map(c =>
         '  ' + c.model + '：' + (c.cost_per_1k <= 0 ? '免费' : c.cost_per_1k)).join('\n');
     }
-    const frozen = s.disabled || cool > 0;
     const tu = s.token_usage || {};
     const req = tu.request_count || 0;
     const totalTok = formatTokenCount(tu.total_tokens);
-    const totalTokUnit = totalTok === '—' ? '' : '<em>tok</em>';
     const latency = formatLatency(tu.last_latency_ms);
     const rate = formatRate(tu.last_tokens_per_second);
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
-    return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
-      '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') +
-        (s.member_tier === 'paid' ? ' <span class="tag" style="font-size:10.5px" title="会员档位（' + esc(ago(s.member_tier_fetched_at)) + ' 读取）">' + esc(s.member_pkg || '付费') + '</span>' : (s.member_tier === 'free' ? ' <span class="tag" style="font-size:10.5px" title="会员档位（' + esc(ago(s.member_tier_fetched_at)) + ' 读取）">Free</span>' : '')) + '</div><div class="id">' + esc(short) + '</div>' + tagBadges + '</td>' +
-      '<td>' + tag + sdTag + note + rateLimits + '</td>' +
-      '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
-      '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
-      '<td class="num">' + (s.in_flight || 0) + '</td>' +
-      '<td class="num usage-cell" title="' + esc(usageTitle) + '"><span class="usage-line" aria-label="' + esc(usageTitle) + '">' +
-        '<span class="usage-item usage-count"><b>' + req + '</b><em>次</em></span>' +
-        '<span class="usage-item usage-total"><b>' + totalTok + '</b>' + totalTokUnit + '</span>' +
-        '<span class="usage-item usage-latency"><b>' + latency + '</b></span>' +
-        '<span class="usage-item usage-rate"><b>' + rate + '</b></span>' +
-      '</span></td>' +
-      '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
-      '<td class="acts">' +
-        '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>' +
-        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '">余额</button>' +
-        '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' +
-        '<button class="xs ghost" data-a="tags" data-u="' + esc(s.uid) + '"' + (myTags.length ? ' title="' + esc(myTags.join(' / ')) + '"' : '') + '>标签</button>' +
-        (s.dead_kind === 'session_dead' ? '<button class="xs primary" data-a="relogin" data-u="' + esc(s.uid) + '" title="该账号的登录会话已在上游失效（refresh 回 12153），任何刷新 / 保活 / 重导 JSON 都救不回来；重走一次 OAuth 授权即可覆盖凭证并复活。">重登</button>' : '') +
-        (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
-                : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
-                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额">暂停选号</button>')) +
-        (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>') +
-        '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
+    const lastTip = s.last_success && !String(s.last_success).startsWith('0001-')
+      ? '最近成功：' + fmtLocalDateTime(parseAPITime(s.last_success)) : '最近没有成功记录';
+    // 行级 a11y：读屏用完整信息，行内只放短摘要。
+    const rowLabel = '第 ' + (idx + 1) + ' 行，账号 ' + (s.nickname || short) +
+      '，状态 ' + st.label + '，回车执行' + st.text;
+    const limTip = rateLimitRowsHtml(s.rate_limited_models, Date.now());
+    return '<tr class="' + rowCls + '" data-uid="' + esc(s.uid) + '" tabindex="0" aria-label="' + esc(rowLabel) + '"' +
+        ' title="uid: ' + esc(s.uid) + '">' +
+      '<td class="c-sel"><input type="checkbox" class="rowck" data-u="' + esc(s.uid) + '" tabindex="-1" aria-label="选择 ' + esc(s.nickname || short) + '"></td>' +
+      '<td class="who c-who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + '</div>' +
+        '<div class="meta-line"><span class="uid">' + esc(short) + '</span>' + tierChip + tagChips +
+          (reason ? '<span class="reason">' + esc(reason) + '</span>' : '') +
+        '</div>' +
+        '<div class="card-meta"><span class="st-badge ' + st.tone + '">' + accStateIcon(st.k) + esc(st.label) + '</span>' +
+          '<span>' + esc(cred) + ' 分</span><span>' + esc(ago(s.last_success)) + '</span></div></td>' +
+      '<td class="c-st"><span class="st-badge ' + st.tone + '"' + (limTip || sdTip ? ' title="' + esc([sdTip, s.reason || ''].filter(Boolean).join('\n')) + '"' : '') + '>' +
+        accStateIcon(st.k) + esc(st.label) + '</span></td>' +
+      '<td class="c-cred cred-cell" title="' + esc(credTip) + '"><span class="n">' + esc(cred) + '</span>' +
+        '<span class="bar" aria-hidden="true"><i style="width:' + pct + '%"></i></span></td>' +
+      '<td class="c-sf num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
+      '<td class="c-last num" style="color:var(--ink-3)" title="' + esc(lastTip) + '">' + esc(ago(s.last_success)) + '</td>' +
+      '<td class="c-usage num" title="' + esc(usageTitle) + '">' + req + ' 次 · ' + esc(totalTok) + '</td>' +
+      '<td class="c-acts">' +
+        '<button class="xs ghost row-primary" data-a="' + st.act + '" data-u="' + esc(s.uid) + '" tabindex="-1">' + esc(st.text) + '</button>' +
+        '<button class="xs ghost row-menu" data-a="menu" data-u="' + esc(s.uid) + '" tabindex="-1" aria-haspopup="menu" aria-expanded="false" aria-label="更多操作">⋯</button>' +
       '</td></tr>';
   }).join('');
+  accRestore(snap);
+}
+
+/* accSnap / accRestore 轮询重绘的焦点保持。
+   快照只记「哪一个 uid 的哪一个动作」，不记节点——重绘后节点必然是新实例，
+   按 uid+data-a 重新定位才稳。勾选与滚动位置一并保存，否则每次轮询都会
+   把用户勾好的选择清空、把表格滚回顶部。 */
+function accSnap() {
+  const a = document.activeElement;
+  const tr = a && a.closest && a.closest('#accBody tr.acc-row');
+  const wrap = document.querySelector('#view-accounts .tbl-wrap');
+  return {
+    uid: (tr && tr.dataset.uid) || '',
+    act: (a && a.dataset && a.dataset.a) || '',
+    onRow: !!(a && a.classList && a.classList.contains('acc-row')),
+    checked: [...document.querySelectorAll('#accBody .rowck:checked')].map(c => c.dataset.u),
+    scroll: wrap ? wrap.scrollTop : 0,
+  };
+}
+
+function accRestore(s) {
+  const wrap = document.querySelector('#view-accounts .tbl-wrap');
+  if (wrap) wrap.scrollTop = s.scroll;
+  document.querySelectorAll('#accBody .rowck').forEach(c => {
+    c.checked = s.checked.includes(c.dataset.u);
+  });
+  if (!s.uid) { syncAccSelection(); return; }
+  // CSS.escape 兜底：uid 理论上都是 uuid，但万一含特殊字符也不会让选择器抛错。
+  let tr = null;
+  try { tr = document.querySelector('#accBody tr[data-uid="' + CSS.escape(s.uid) + '"]'); }
+  catch (e) { tr = null; }
+  if (tr) {
+    const el = (s.act && tr.querySelector('[data-a="' + s.act + '"]')) || (s.onRow ? tr : null);
+    if (el) el.focus({ preventScroll: true });
+  } else if (document.activeElement === document.body) {
+    // 该账号被筛掉了：焦点回落到表格本身，而不是丢在 BODY 上。
+    const t = $('accTable');
+    if (t) t.focus({ preventScroll: true });
+  }
+  syncAccSelection();
+}
+
+/* pollPaused 轮询闸门：这些状态下 5s 轮询必须停——
+   - 行菜单打开（重绘会把菜单定位的锚点节点换掉）
+   - 批量执行中（重绘会清掉进度与勾选）
+   - 任何 veil 弹窗打开（用户在读详情）
+   - 焦点在账号卡内（用户正在键盘操作表格）
+   只聚焦空搜索框不算暂停（那是无操作状态，不该拦住刷新）。 */
+function pollPaused() {
+  if (openMenuUid || document.querySelector('.veil.on')) return true;
+  if (window.batchRunning) return true;
+  const a = document.activeElement;
+  if (a && a.closest && a.closest('#accCard, #view-accounts')) {
+    // 搜索框有值时说明用户在筛，暂停；空搜索框只是路过，放行。
+    if (a.id === 'accFilterQ') return !!a.value;
+    return true;
+  }
+  return false;
 }
 
 async function loadOverview(quiet) {
+  // 静默轮询遇闸门直接跳过：比「重绘后恢复焦点」更稳——不重绘就不会丢焦点、
+  // 丢勾选、丢滚动。主动刷新（quiet=false）不受闸门限制。
+  if (quiet && pollPaused()) return;
   try {
     const d = await api('overview');
     markPoll(true);
@@ -554,9 +675,34 @@ async function loadOverview(quiet) {
     const hasDead = (d.accounts || []).some(x => x.dead_kind === 'session_dead');
     $('btnProbeDead').hidden = !hasDead;
     const raw = d.accounts || [];
-    const shown = accApply(raw);
-    renderAccounts(shown, shown.length !== raw.length);
+    renderAccountView(raw);
   } catch (e) { markPoll(false); if (!quiet) toast(e.message, 'err'); }
+}
+
+/* renderAccountView 筛选 → 渲染的统一入口。
+   所有触发重绘的路径（筛选变化、排序、轮询、单账号动作后）都走这里，
+   不要再单独调 renderAccounts——那样会漏掉摘要/caption/清空按钮的同步。 */
+function renderAccountView(raw) {
+  const list = raw || ((overviewData && overviewData.accounts) || []);
+  const shown = accApply(list);
+  renderAccounts(shown, shown.length !== list.length);
+  updateAccSummary(list, shown);
+}
+
+function updateAccSummary(raw, shown) {
+  const floor = (overviewData && overviewData.credit_floor) || 0;
+  const pending = raw.filter(a => accNeed(a, floor)).length;
+  const p = $('sPending');
+  if (p) p.textContent = String(pending);
+  const spi = $('statPending');
+  if (spi) spi.classList.toggle('bad', pending > 0);
+  const sum = $('accFilterSummary');
+  if (sum) sum.textContent = shown.length + '/' + raw.length + (shown.length !== raw.length ? ' · 已筛' : '');
+  const cap = $('accCapN');
+  if (cap) cap.textContent = String(shown.length);
+  const clr = $('btnClearFilters');
+  if (clr) clr.hidden = !(accFilter.q || accFilter.tag || accFilter.st || accFilter.sort !== 'risk');
+  syncAccSelection();
 }
 
 /* 标签筛选下拉选项：从 overview.tags 汇总去重（保序），保留当前选中项。 */
@@ -585,7 +731,7 @@ function renderQueueBox(d) {
   if (q.retry_after) parts.push('建议 ' + q.retry_after + 's 后重试');
   $('queueNote').textContent = q.until ? '预计解除 ' + fmtClock(q.until) : '';
   $('queueList').innerHTML =
-    '<div style="padding:3px 0;font-size:12.5px">' + parts.join(' · ') + '</div>' +
+    '<div style="padding:3px 0;font-size:var(--fs-base)">' + parts.join(' · ') + '</div>' +
     '<div class="hint" style="margin-top:6px">这不是账号问题：上游免费档排队积压，所有账号与模型同样受影响。' +
     '网关已暂停轮转（不再拿健康号去撞队列），任一请求成功后自动恢复；无需手动解冻账号。</div>';
   box.hidden = false;
@@ -610,7 +756,7 @@ function renderAlertBox(d) {
   const floor = (d && d.credit_floor) || 0;
   $('alertNote').textContent = '保底线 ' + floor + ' · 触底 ' + low.length + ' 个';
   $('alertList').innerHTML = low.map(a =>
-    '<div style="padding:3px 0;font-size:12.5px">' +
+    '<div style="padding:3px 0;font-size:var(--fs-base)">' +
     '<span class="tag warn">' + (a.credits == null ? '?' : a.credits) + ' 分</span> ' +
     esc(a.nickname || '未命名') + ' <span class="hint">uid ' + esc(a.uid) + '</span></div>'
   ).join('') +
@@ -679,7 +825,7 @@ function renderKillBox(d) {
   if (k) {
     notes.push(k.window_minutes + ' 分钟内 ' + k.count + ' 个');
     html += (k.uids || []).map((u, i) =>
-      '<div style="padding:3px 0;font-size:12.5px">' +
+      '<div style="padding:3px 0;font-size:var(--fs-base)">' +
       '<span class="tag bad">待重登</span> ' + esc((k.nicknames || [])[i] || '未命名') +
       ' <span class="hint">uid ' + esc(u) + '</span></div>').join('');
     html += '<div class="hint" style="margin-top:6px">一键重登：账号池筛选「待重登 / 封号」→ 行内「重登」→ 完成一次 OAuth 授权即可覆盖凭证并复活。</div>';
@@ -690,7 +836,7 @@ function renderKillBox(d) {
     notes.push('外部轮换 ' + ext.count + ' 个');
     html += '<div style="margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)">' +
       (ext.uids || []).map(u =>
-        '<div style="padding:3px 0;font-size:12.5px">' +
+        '<div style="padding:3px 0;font-size:var(--fs-base)">' +
         '<span class="tag warn">凭证双活</span> <span class="hint">uid ' + esc(u) + ' · 最近 ' + (ext.last_at ? fmtClock(ext.last_at) : '—') + '</span></div>').join('') +
       '<div class="hint" style="margin-top:4px">检测到本进程之外的执行体在刷新这些账号的 token（另一台机器的部署副本 / signin.sh 等独立进程）。双花同一 RT 会触发上游 rotation 检测、连坐吊销整条令牌链——请立即下线多余实例或按账号拆分 auths。</div></div>';
   }
@@ -701,30 +847,49 @@ function renderKillBox(d) {
 
 $('accFilterQ').addEventListener('input', () => {
   accFilter.q = $('accFilterQ').value || '';
-  const raw = (overviewData && overviewData.accounts) || [];
-  const shown = accApply(raw);
-  renderAccounts(shown, shown.length !== raw.length);
+  renderAccountView();
 });
 $('accFilterTag').addEventListener('change', () => {
   accFilter.tag = $('accFilterTag').value || '';
-  const raw = (overviewData && overviewData.accounts) || [];
-  const shown = accApply(raw);
-  renderAccounts(shown, shown.length !== raw.length);
+  renderAccountView();
 });
 $('accFilterSt').addEventListener('change', () => {
   accFilter.st = $('accFilterSt').value || '';
-  const raw = (overviewData && overviewData.accounts) || [];
-  const shown = accApply(raw);
-  renderAccounts(shown, shown.length !== raw.length);
+  renderAccountView();
 });
+if ($('accSort')) {
+  $('accSort').addEventListener('change', () => {
+    accFilter.sort = $('accSort').value || 'risk';
+    renderAccountView();
+  });
+}
+if ($('btnClearFilters')) {
+  $('btnClearFilters').addEventListener('click', () => {
+    accFilter.q = ''; accFilter.tag = ''; accFilter.st = ''; accFilter.sort = 'risk';
+    $('accFilterQ').value = ''; $('accFilterSt').value = ''; $('accSort').value = 'risk';
+    $('accFilterTag').value = '';
+    renderAccountView();
+    $('accFilterQ').focus();
+  });
+}
 
 $('accBody').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-a]');
   if (!b) return;
   const u = b.dataset.u, a = b.dataset.a;
+  // 详情与菜单是纯前端动作，不走 busyBtn 流程（不会禁用按钮再重载）。
+  if (a === 'menu') { openAccMenu(u, b); return; }
+  if (a === 'detail') { openAccDetail(u); return; }
   if (a === 'remove' && !confirm('移除后账号退出账号池，凭证文件移入回收站（默认保留 30 天，可随时恢复或彻底删除）。确认移除？')) return;
   if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
   b.disabled = true;
+  try { await runAccAction(a, u); }
+  finally { b.disabled = false; loadOverview(true); }
+});
+
+/* runAccAction 单账号动作的**唯一**执行入口：行内按钮与 ⋯ 菜单都走这里，
+   避免两套实现各自漏一个分支（旧实现菜单项全塞在一个 click 委托里）。 */
+async function runAccAction(a, u) {
   try {
     if (a === 'checkin') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/checkin', { method: 'POST' });
@@ -752,11 +917,345 @@ $('accBody').addEventListener('click', async ev => {
       openRelogin(u);
     } else if (a === 'remove') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/remove', { method: 'POST' });
-      toast(r.file_error ? '已移除（凭证移入回收站失败：' + r.file_error + '）'
-        : (r.trashed ? '已移除，凭证在回收站保留（' + r.trashed + '）' : '已移除'), 'ok');
+      if (r.file_error) {
+        // 凭证没进回收站就没有撤销可言——如实说失败，不给假按钮。
+        toast('已移除，但凭证移入回收站失败：' + r.file_error, 'err');
+      } else if (r.trashed) {
+        // trashed 是文件名，必须编码：含中文/空格的名字直接拼进 URL 会 404。
+        const name = r.trashed;
+        toastAction('已移除 · ' + name, '撤销', async () => {
+          await api('trash/' + encodeURIComponent(name) + '/restore', { method: 'POST' });
+          toast('已恢复', 'ok');
+          loadOverview(true);
+        }, 8000);
+      } else {
+        toast('已移除', 'ok');
+      }
     }
   } catch (e) { toast(e.message, 'err'); }
-  finally { b.disabled = false; loadOverview(true); }
+}
+
+/* ── 行操作菜单（body 级单例）────────────────────────────────────────
+   菜单按状态给出不同项：banned 不给重登入口（业务语义，别「统一」掉）。 */
+let openMenuUid = '';
+const ACC_MENU = {
+  ok: [['balance', '刷新余额'], ['tasks', '成长任务'], ['tags', '管理标签'], ['pause', '暂停选号'], ['-'], ['disable', '禁用账号'], ['remove', '移入回收站']],
+  cooling: [['balance', '刷新余额'], ['tasks', '成长任务'], ['tags', '管理标签'], ['pause', '暂停选号'], ['-'], ['disable', '禁用账号'], ['remove', '移入回收站']],
+  paused: [['balance', '刷新余额'], ['tasks', '成长任务'], ['tags', '管理标签'], ['-'], ['disable', '禁用账号'], ['remove', '移入回收站']],
+  relogin: [['balance', '刷新余额'], ['tasks', '成长任务'], ['tags', '管理标签'], ['-'], ['remove', '移入回收站']],
+  // banned：只留详情与移除——上游风控封号，重登只会再失败一次。
+  banned: [['detail', '查看详情'], ['-'], ['remove', '移入回收站']],
+  disabled: [['detail', '查看详情'], ['revive', '解冻'], ['-'], ['remove', '移入回收站']],
+};
+const ACC_MENU_DANGER = new Set(['disable', 'remove']);
+
+function openAccMenu(uid, anchorBtn) {
+  const menu = $('accRowMenu');
+  const acc = ((overviewData && overviewData.accounts) || []).find(a => a.uid === uid);
+  if (!menu || !acc || !anchorBtn) return;
+  if (openMenuUid === uid && !menu.hidden) { closeAccMenu(); return; }
+  closeAccMenu();
+  const st = accState(acc);
+  const items = ACC_MENU[st.k] || ACC_MENU.ok;
+  menu.innerHTML = items.map(([a, label]) =>
+    a === '-' ? '<hr>'
+      : '<button role="menuitem" data-a="' + a + '" data-u="' + esc(uid) + '"' +
+        '"' + (ACC_MENU_DANGER.has(a) ? ' class="danger"' : '') + ' tabindex="-1">' + label + '</button>'
+  ).join('');
+  menu.hidden = false;
+  openMenuUid = uid;
+  anchorBtn.setAttribute('aria-expanded', 'true');
+  // 定位：默认在按钮下方左对齐；下方空间不足翻到上方，右侧越界则向右收。
+  const r = anchorBtn.getBoundingClientRect();
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let top = r.bottom + 4;
+  if (top + mh > innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+  let left = r.left;
+  if (left + mw > innerWidth - 8) left = Math.max(8, innerWidth - 8 - mw);
+  menu.style.top = Math.round(top) + 'px';
+  menu.style.left = Math.round(left) + 'px';
+  const first = menu.querySelector('button');
+  if (first) first.focus();
+}
+
+function closeAccMenu(refocus) {
+  const menu = $('accRowMenu');
+  if (!menu || menu.hidden) { openMenuUid = ''; return; }
+  const uid = openMenuUid;
+  const kind = menu.dataset.kind;
+  menu.hidden = true;
+  menu.innerHTML = '';
+  menu.dataset.kind = '';
+  openMenuUid = '';
+  if (kind === 'global') {
+    const g = $('btnBulkAll');
+    if (g) { g.setAttribute('aria-expanded', 'false'); if (refocus) g.focus(); }
+    return;
+  }
+  // uid 为空或 __global__ 时不做行按钮回焦（全局菜单没有对应行）。
+  const btn = uid && uid !== '__global__'
+    ? document.querySelector('#accBody tr[data-uid="' + CSS.escape(uid) + '"] .row-menu')
+    : null;
+  if (btn) {
+    btn.setAttribute('aria-expanded', 'false');
+    if (refocus) btn.focus();
+  }
+}
+
+/* 菜单项点击：复用行内同一套动作处理（不发重复请求逻辑）。 */
+$('accRowMenu').addEventListener('click', ev => {
+  const g = ev.target.closest('button[data-glb]');
+  if (g) {
+    // 全局操作项：直接触发工具栏上那个原按钮，动作逻辑只有一份。
+    const id = g.dataset.glb;
+    closeAccMenu(false);
+    const src = $(id);
+    if (src) src.click();
+    return;
+  }
+  const b = ev.target.closest('button[data-a]');
+  if (!b) return;
+  const u = b.dataset.u, a = b.dataset.a;
+  closeAccMenu(true);
+  if (a === 'detail') { openAccDetail(u); return; }
+  if (a === 'remove' && !confirm('移除后账号退出账号池，凭证文件移入回收站（默认保留 30 天，可随时恢复或彻底删除）。确认移除？')) return;
+  if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
+  runAccAction(a, u);
+});
+/* 菜单键盘：↑↓ 循环、Home/End、Esc 关闭回焦、Tab 离开即关；Enter 不冒泡到行。 */
+$('accRowMenu').addEventListener('keydown', ev => {
+  const items = [...$('accRowMenu').querySelectorAll('button')];
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  if (ev.key === 'ArrowDown') { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  else if (ev.key === 'Home') { ev.preventDefault(); items[0].focus(); }
+  else if (ev.key === 'End') { ev.preventDefault(); items[items.length - 1].focus(); }
+  else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closeAccMenu(true); }
+  else if (ev.key === 'Tab') { closeAccMenu(false); }
+  else if (ev.key === 'Enter' || ev.key === ' ') {
+    // 菜单内回车只作用于菜单项，绝不冒泡到行的「执行主操作」。
+    ev.stopPropagation();
+  }
+});
+/* 滚动 / resize / 外点一律关闭：菜单是 fixed 定位，不跟着行滚会错位。 */
+addEventListener('scroll', () => { if (openMenuUid) closeAccMenu(false); }, true);
+addEventListener('resize', () => { if (openMenuUid) closeAccMenu(false); });
+document.addEventListener('click', ev => {
+  if (!openMenuUid) return;
+  if (ev.target.closest('#accRowMenu')) return;
+  if (ev.target.closest('.row-menu')) return;
+  closeAccMenu(false);
+}, true);
+
+/* ── 账号详情抽屉 ────────────────────────────────────────────────────
+   数据取自 overviewData，不额外发请求；原始英文 error 只在这里完整展示。 */
+function openAccDetail(uid) {
+  const acc = ((overviewData && overviewData.accounts) || []).find(a => a.uid === uid);
+  if (!acc) return;
+  const st = accState(acc);
+  const tu = acc.token_usage || {};
+  const myTags = ((overviewData && overviewData.tags) || {})[uid] || [];
+  const rows = [
+    ['完整 UID', '<code>' + esc(acc.uid) + '</code> <button class="xs ghost" id="btnCopyUid" data-u="' + esc(uid) + '">复制</button>'],
+    ['状态', '<span class="st-badge ' + st.tone + '">' + accStateIcon(st.k) + esc(st.label) + '</span>'],
+    ['积分', esc(acc.credits == null ? '未知' : String(acc.credits)) +
+      (acc.credits_total > 0 ? ' <span class="hint">/ 总额 ' + esc(String(acc.credits_total)) + '</span>' : ' <span class="hint">（总额未知）</span>')],
+    ['成功 / 失败', esc(String(acc.success_count || 0)) + ' / ' + esc(String(acc.err_total || 0))],
+    ['用量', esc(String(tu.request_count || 0)) + ' 次 · ' + esc(formatTokenCount(tu.total_tokens)) +
+      ' · 延迟 ' + esc(formatLatency(tu.last_latency_ms)) + ' · ' + esc(formatRate(tu.last_tokens_per_second))],
+    ['最近成功', acc.last_success && !String(acc.last_success).startsWith('0001-')
+      ? esc(fmtLocalDateTime(parseAPITime(acc.last_success))) : '—'],
+    ['标签', myTags.length ? myTags.map(t => '<span class="chip-meta">' + esc(t) + '</span>').join('') : '—'],
+  ];
+  const lims = rateLimitRowsHtml(acc.rate_limited_models, Date.now());
+  if (lims) rows.push(['限流模型', lims]);
+  if (acc.reason) rows.push(['原始错误', '<code style="white-space:pre-wrap;word-break:break-all">' + esc(acc.reason) + '</code>']);
+  if (!acc.disabled && acc.session_dead_fails > 0) {
+    rows.push(['会话判死计数', esc(String(acc.session_dead_fails)) + ' / 3（满 3 次自动禁用）']);
+  }
+  $('accDetailTitle').textContent = acc.nickname || ('账号 ' + acc.uid.slice(0, 8));
+  $('accDetailSub').textContent = st.label;
+  $('accDetailBody').innerHTML = '<dl class="kv">' + rows.map(([k, v]) =>
+    '<dt>' + esc(k) + '</dt><dd>' + v + '</dd>').join('') + '</dl>';
+  showVeil('accDetailVeil');
+  const copy = $('btnCopyUid');
+  if (copy) copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(uid);
+      toast('UID 已复制', 'ok');
+    } catch (e) { toast('复制失败：' + e.message, 'err'); }
+  };
+}
+if ($('btnCloseAccDetail')) $('btnCloseAccDetail').onclick = () => hideVeil('accDetailVeil');
+registerVeilCloser('accDetailVeil', () => hideVeil('accDetailVeil'));
+
+/* syncAccSelection 复选状态 → 批量条 + 全选框的中间态。 */
+function syncAccSelection() {
+  const all = [...document.querySelectorAll('#accBody .rowck')];
+  const sel = all.filter(c => c.checked);
+  const selAll = $('accSelAll');
+  if (selAll) {
+    selAll.checked = all.length > 0 && sel.length === all.length;
+    // indeterminate 表达「部分选中」——只有布尔 checked 会让全选框看起来是未选。
+    selAll.indeterminate = sel.length > 0 && sel.length < all.length;
+  }
+  const bulk = $('accBulk');
+  if (bulk) {
+    bulk.hidden = sel.length === 0;
+    const n = $('accBulkN');
+    if (n) n.textContent = String(sel.length);
+  }
+}
+$('accBody').addEventListener('change', ev => {
+  if (ev.target.classList.contains('rowck')) syncAccSelection();
+});
+if ($('accSelAll')) {
+  $('accSelAll').onchange = () => {
+    const on = $('accSelAll').checked;
+    document.querySelectorAll('#accBody .rowck').forEach(c => { c.checked = on; });
+    syncAccSelection();
+  };
+}
+
+/* ── 批量执行（选中账号，并发 2）──────────────────────────────────────
+   并发上限 2 是刻意的：上游对同一批账号的并发请求敏感，全并发会把健康号
+   一起烧进冷却。改成 forEach 直接发起等于放弃这个保护。 */
+async function runBatch(act, uids) {
+  const bulk = $('accBulk');
+  // 入口清零：不清的话第二次批量会读到上次的 done/issued/peak，进度与断言都假绿。
+  if (bulk) {
+    bulk.dataset.peak = bulk.dataset.done = bulk.dataset.issued = '0';
+    bulk.dataset.inflight = '0';
+  }
+  const queue = uids.slice();
+  if (bulk) bulk.dataset.order = queue.join(',');
+  let issued = 0, done = 0, inflight = 0, ok = 0, fail = 0, skip = 0;
+  const setInflight = n => {
+    inflight = n;
+    if (!bulk) return;
+    bulk.dataset.inflight = String(n);
+    // NaN → 0 保护必须留着：字符串参与 Math.max 会变 NaN，峰值恒假红。
+    bulk.dataset.peak = String(Math.max(+bulk.dataset.peak || 0, n));
+  };
+  window.batchRunning = true;
+  const worker = async () => {
+    for (;;) {
+      const uid = queue.shift();
+      if (!uid) return;
+      // issued 在**出队时** +1（不是发请求时）：worker pool 下两者差一次微任务，
+      // 取消落在窗口里会漏检「已出队未发请求」的账号。
+      if (bulk) bulk.dataset.issued = String(++issued); else issued++;
+      const acc = ((overviewData && overviewData.accounts) || []).find(a => a.uid === uid);
+      // relogin 账号跳过并计数：OAuth 一次只能开一个，混在批量里会互相踩。
+      if (acc && accState(acc).k === 'relogin') {
+        skip++; done++;
+        if (bulk) bulk.dataset.done = String(done);
+        continue;
+      }
+      setInflight(++inflight);
+      try {
+        await api('accounts/' + encodeURIComponent(uid) + '/' + act, { method: 'POST' });
+        ok++;
+      } catch (e) { fail++; }
+      finally {
+        done++;
+        if (bulk) bulk.dataset.done = String(done);
+        setInflight(--inflight);
+      }
+    }
+  };
+  try {
+    await Promise.all([worker(), worker()]);
+  } finally {
+    window.batchRunning = false;
+  }
+  toast('批量完成：成功 ' + ok + ' / 失败 ' + fail + (skip ? ' / 跳过 ' + skip + '（需重登）' : ''),
+    fail ? 'err' : 'ok');
+  loadOverview(true);
+}
+
+if ($('accBulk')) {
+  $('accBulk').addEventListener('click', async ev => {
+    const b = ev.target.closest('button[data-bulk]');
+    if (!b) return;
+    const act = b.dataset.bulk;
+    const uids = [...document.querySelectorAll('#accBody .rowck:checked')].map(c => c.dataset.u);
+    if (!uids.length) return;
+    b.disabled = true;
+    try { await runBatch(act, uids); }
+    finally { b.disabled = false; }
+  });
+}
+if ($('btnBulkCancel')) {
+  $('btnBulkCancel').onclick = () => {
+    document.querySelectorAll('#accBody .rowck').forEach(c => { c.checked = false; });
+    syncAccSelection();
+  };
+}
+
+/* 全部操作菜单（390 才有入口）：复用工具栏上那 5 个全局按钮的点击。 */
+if ($('btnBulkAll')) {
+  $('btnBulkAll').onclick = ev => {
+    ev.stopPropagation();
+    const m = $('accRowMenu');
+    if (!m.hidden && m.dataset.kind === 'global') { closeAccMenu(true); return; }
+    const items = [
+      ['btnCheckinAll', '全部签到', false],
+      ['btnTravelAll', '旅行巡检', false],
+      ['btnActivityAll', '活跃上报', false],
+      ['btnKeepaliveAll', '全部保活', false],
+      ['btnProbeDead', '探测死号', true],
+    ].filter(([id]) => $(id) && !$(id).hidden);
+    closeAccMenu(false);
+    m.dataset.kind = 'global';
+    m.innerHTML = items.map(([id, label, danger]) =>
+      '<button role="menuitem" data-glb="' + id + '"' + (danger ? ' class="danger"' : '') + ' tabindex="-1">' + label + '</button>'
+    ).join('');
+    m.hidden = false;
+    openMenuUid = '__global__';
+    $('btnBulkAll').setAttribute('aria-expanded', 'true');
+    const r = $('btnBulkAll').getBoundingClientRect();
+    const mw = m.offsetWidth, mh = m.offsetHeight;
+    let top = r.bottom + 4;
+    if (top + mh > innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+    let left = r.left;
+    if (left + mw > innerWidth - 8) left = Math.max(8, innerWidth - 8 - mw);
+    m.style.top = Math.round(top) + 'px';
+    m.style.left = Math.round(left) + 'px';
+    const first = m.querySelector('button');
+    if (first) first.focus();
+  };
+}
+
+$('accBody').addEventListener('keydown', ev => {
+  const tr = ev.target.closest && ev.target.closest('tr.acc-row');
+  if (!tr) return;
+  // 焦点在行内按钮时，键盘事件交给按钮自己处理，不要冒泡成「执行主操作」。
+  if (ev.target !== tr) return;
+  const uid = tr.dataset.uid;
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    const btn = tr.querySelector('.row-primary');
+    if (btn) btn.click();
+  } else if (ev.key === ' ') {
+    ev.preventDefault();
+    const ck = tr.querySelector('.rowck');
+    if (ck) { ck.checked = !ck.checked; syncAccSelection(); }
+  } else if (ev.key === 'F10' && ev.shiftKey) {
+    ev.preventDefault();
+    openAccMenu(uid, tr.querySelector('.row-menu'));
+  } else if (ev.key === 'ContextMenu') {
+    ev.preventDefault();
+    openAccMenu(uid, tr.querySelector('.row-menu'));
+  } else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    // 行间移动：跳过被筛掉/隐藏的行，只落在可见行上。
+    ev.preventDefault();
+    const rows = [...document.querySelectorAll('#accBody tr.acc-row')];
+    const i = rows.indexOf(tr);
+    const next = rows[i + (ev.key === 'ArrowDown' ? 1 : -1)];
+    if (next) next.focus();
+  }
 });
 
 $('btnCheckinAll').onclick = () => busyBtn($('btnCheckinAll'), '签到中…', async () => {
@@ -818,7 +1317,7 @@ function outCell(m, pr) {
 function rateCell(m) {
   const tip = m.promo_note ? ' title="' + esc(m.promo_note) + '"' : '';
   if (m.promo_factor != null && m.promo_credits) {
-    const base = m.credits ? ' <s style="color:var(--ink-3);font-size:11.5px">' + esc(m.credits) + '</s>' : '';
+    const base = m.credits ? ' <s style="color:var(--ink-3);font-size:var(--fs-sm)">' + esc(m.credits) + '</s>' : '';
     const label = m.promo_label ? ' <span class="tag ok">' + esc(m.promo_label) + '</span>' : '';
     return '<span' + tip + ' style="cursor:help"><b>' + esc(m.promo_credits) + '</b>' + label + base + '</span>';
   }
@@ -918,7 +1417,7 @@ function mdRowHtml(m, pr) {
   const eff = (m.supported_efforts || []).slice();
   if (m.can_disable_thinking && eff.length && !eff.includes('off')) eff.push('off（可关）');
   const effs = eff.length ? eff.map(e => '<span class="tag warn">' + esc(e) + '</span>').join(' ')
-    : '<span style="color:var(--ink-3);font-size:12.5px">' + (m.supports_reasoning ? '固定档 · 默认 ' + esc(m.default_effort || '?') : '不支持思考') + '</span>';
+    : '<span style="color:var(--ink-3);font-size:var(--fs-base)">' + (m.supports_reasoning ? '固定档 · 默认 ' + esc(m.default_effort || '?') : '不支持思考') + '</span>';
   // 能力徽标：默认模型 / 工具调用 / 视觉 / 纯推理（上游目录全字段透出，缺失不显示）
   const caps = [];
   if (m.is_default) caps.push('<span class="tag ok">默认</span>');
@@ -1555,12 +2054,12 @@ async function openExport() {
 
       const nameEl = document.createElement('span');
       nameEl.className = 'exp-name';
-      nameEl.style.cssText = 'font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px';
+      nameEl.style.cssText = 'font-size:var(--fs-base);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px';
       nameEl.textContent = name;
 
       const meta = document.createElement('span');
       meta.className = 'exp-meta hint';
-      meta.style.cssText = 'font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:auto';
+      meta.style.cssText = 'font-size:var(--fs-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:auto';
       meta.textContent = short + cred;
 
       const tagEl = document.createElement('span');
@@ -1690,8 +2189,8 @@ async function loadTrash() {
       const days = it.purge_at ? Math.max(0, Math.ceil((it.purge_at * 1000 - Date.now()) / 86400000)) : null;
       return '<div class="exp-row" style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line-1)">' +
         '<div style="min-width:0;flex:1">' +
-          '<div style="font-size:12.5px">' + esc(it.nickname || '未命名') + ' <span class="hint">uid ' + esc(it.uid || '?') + '</span></div>' +
-          '<div class="hint" style="font-size:11px">' + esc(it.name) + ' · 删除于 ' + (it.deleted_at ? new Date(it.deleted_at * 1000).toLocaleString() : '?') +
+          '<div style="font-size:var(--fs-base)">' + esc(it.nickname || '未命名') + ' <span class="hint">uid ' + esc(it.uid || '?') + '</span></div>' +
+          '<div class="hint" style="font-size:var(--fs-xs)">' + esc(it.name) + ' · 删除于 ' + (it.deleted_at ? new Date(it.deleted_at * 1000).toLocaleString() : '?') +
           (days == null ? ' · 永久保留' : ' · ' + days + ' 天后自动清理') + '</div>' +
         '</div>' +
         '<button class="xs" data-ta="restore" data-name="' + esc(it.name) + '">恢复</button>' +
@@ -1746,7 +2245,7 @@ async function loadBackups() {
     const items = d.items || [];
     $('backupEmpty').hidden = items.length > 0;
     wrap.innerHTML = items.map(it =>
-      '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line-1);font-size:12px">' +
+      '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line-1);font-size:var(--fs-sm)">' +
         '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(it.name) + '</span>' +
         '<span class="hint" style="white-space:nowrap">' + (it.size / 1024).toFixed(1) + ' KB · ' + new Date(it.mtime * 1000).toLocaleString() + '</span>' +
         '<button class="xs" data-ba="' + esc(it.name) + '">下载</button>' +

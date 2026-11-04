@@ -295,7 +295,9 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
 /* 账号卡头部即工具栏：高度锁 48（--acc-chrome 里按 48 算），一屏只放一行控件。
    内容超出时横向不滚、而是让筛选区自己收缩——见下面 #accFilterQ 的 min-width:0。 */
 #view-accounts .box > header.acc-toolbar { height: var(--acc-toolbar-h); padding: 0 12px 0 17px; gap: 8px; }
-.acc-card .tbl-wrap,
+/* .acc-scope 是容器查询的**包含块**：它必须有确定的宽度，且不能自己就是滚动
+   容器（容器查询不能作用于容器自身）。所以 .tbl-wrap 作为它的子元素承担滚动。 */
+.acc-scope { container: acc / inline-size; }
 #view-accounts .tbl-wrap {
   overflow: auto;
   max-height: max(264px, calc(100dvh - var(--topbar-h) - var(--acc-chrome) - var(--scroller-pad)));
@@ -305,13 +307,44 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
 #accTable thead th { height: var(--thead-h); padding: 0 10px; }
 @media (max-width: 640px) {
   :root { --topbar-h: 96px; }
-  .acc-overview { flex-wrap: wrap; gap: 8px; }
+  /* 顶栏锁 96：标题单行、按钮 flex:none 不换行不压缩。
+     原状态是 nowrap 且按钮被压成 59/80/102px 宽的三行文字，高度冲到 140。 */
+  .topbar {
+    height: var(--topbar-h); flex-wrap: wrap; align-content: center;
+    row-gap: 8px; padding: 8px 14px; gap: 8px;
+  }
+  .topbar h2 { font-size: var(--fs-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .topbar .sep, .topbar .meta { display: none; }
+  .topbar > button { flex: none; white-space: nowrap; padding: 6px 10px; font-size: var(--fs-sm); }
+  .topbar .grow { flex-basis: 100%; height: 0; }
+  .acc-overview { flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
   .acc-overview .stats { flex: 1 1 100%; }
   .stats.stats-4 { grid-template-columns: repeat(2, 1fr); }
   .stats.stats-4 .stat { height: 52px; padding: 0 14px; border-bottom: 0; }
   .stats.stats-4 .stat:nth-child(2n) { border-right: 0; }
   .risk { flex: none; width: 100%; height: 32px; padding: 0 12px; }
-  #view-accounts .box > header.acc-toolbar { height: auto; min-height: 88px; flex-wrap: wrap; }
+  /* 工具栏两行固定 44+44：搜索独占一行，筛选/排序/全部操作在第二行。
+     不用容器 padding 凑高——验收量的是元素本体高度。
+     三个 select 必须与搜索框同处一个 flex 流且显式 flex:1，否则各自换行成 4 行
+     （实测未收时 145px）。 */
+  #view-accounts .box > header.acc-toolbar {
+    height: 88px; flex-wrap: wrap; align-content: center;
+    row-gap: 0; gap: 4px; padding: 0 12px;
+  }
+  #view-accounts .box > header.acc-toolbar h3,
+  #view-accounts .box > header.acc-toolbar > .grow { display: none; }
+  #accFilterQ { flex: 1 1 100%; height: 44px; min-width: 0; }
+  #accFilterSt, #accFilterTag, #accSort { flex: 0 1 auto; height: 44px; min-width: 0; }
+  #view-accounts .box > header.acc-toolbar button { height: 44px; }
+  /* 5 个全局操作按钮在 390 会把工具栏撑成 4 行（实测 193px）——按文档 §6.2
+     收进「全部操作」菜单，只留一个 44 的入口。 */
+  #view-accounts .box > header.acc-toolbar #btnCheckinAll,
+  #view-accounts .box > header.acc-toolbar #btnTravelAll,
+  #view-accounts .box > header.acc-toolbar #btnActivityAll,
+  #view-accounts .box > header.acc-toolbar #btnKeepaliveAll,
+  #view-accounts .box > header.acc-toolbar #btnProbeDead { display: none; }
+  #view-accounts .box > header.acc-toolbar #btnBulkAll { display: inline-flex; flex: 0 0 auto; }
+  #accFilterSummary { flex: 0 0 auto; }
 }
 
 /* ── 面板块 ───────────────────────────────────────────────────────── */
@@ -331,13 +364,11 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
 .tbl-wrap { overflow-x: auto; }
 .acc { width: 100%; border-collapse: collapse; font-size: var(--fs-base); min-width: 640px; }
 
-/* 窄屏列优先级降级（≤860px）：非关键列隐藏替代横向滚动——账号表保 账号/状态/
-   积分/最近成功/操作；请求记录表保 时间/结果/模型/账号/耗时。恢复宽度自动回归。 */
+/* 窄屏列优先级降级（≤860px）：非关键列隐藏替代横向滚动——请求记录表保 时间/
+   结果/模型/账号/耗时。**账号表不在此列**：它改由容器查询按自身宽度降级
+   （见下方 @container acc），比按视口判更准——侧栏折叠后容器宽度与视口宽度
+   不是一回事，按视口判会出现「视口 1024 但表格容器 766」时该降的不降。 */
 @media (max-width: 860px) {
-  #accTable, .acc.req { min-width: 0; }
-  #accTable th:nth-child(5), #accTable td:nth-child(5),
-  #accTable th:nth-child(6), #accTable td:nth-child(6),
-  #accTable th:nth-child(7), #accTable td:nth-child(7) { display: none; }
   .acc.req th:nth-child(5), .acc.req td:nth-child(5),
   .acc.req th:nth-child(6), .acc.req td:nth-child(6),
   .acc.req th:nth-child(8), .acc.req td:nth-child(8),
@@ -381,6 +412,138 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
 #taskTable .who .nm, #taskTable .who .id { white-space: normal; word-break: break-all; }
 .who .nm { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .who .id { font-family: var(--mono); font-size: var(--fs-sm); color: var(--ink-3); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 账号表专用结构（S3）──────────────────────────────────────────────
+   与共享 .acc 分离：模型表 / 任务表 / 请求表都挂 .acc，它们的自适应列宽与
+   .who{max-width:200px} 是既有回归契约，不能跟着改。 */
+/* 固定布局 + colgroup：列宽由 col 决定，账号列吃余量。固定布局下长 uid 不再
+   把列撑开，横向溢出从「内容驱动」变成「预算驱动」。只加在 #accTable 上。 */
+#accTable { table-layout: fixed; width: 100%; min-width: 0; border-collapse: collapse; }
+/* 全列固定合计 634；账号列为唯一 auto（不设 min/max——204 是容器下限不是
+   max-width，写成 max-width 会在卡片模式下与网格布局打架）。 */
+#accTable .c-sel { width: 36px; }
+#accTable .c-st { width: 88px; }
+#accTable .c-cred { width: 112px; }
+#accTable .c-sf { width: 76px; }
+#accTable .c-last { width: 84px; }
+#accTable .c-usage { width: 150px; }
+#accTable .c-acts { width: 88px; }
+/* 覆盖基础 .who 的 200px 上限：1024 容器下账号列要能吃到 282。 */
+#accTable .who { min-width: 0; max-width: none; overflow: hidden; }
+#accTable .who .nm, #accTable .who .id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 行高锁 56：nm 20 + id 16 + 上下各 10。任何错误/标签/限流信息都不得撑高行
+   （旧实现把 reason 与 rateLimits 塞进状态列多行，异常行高到 188）。 */
+#accTable tr.acc-row { height: 56px; }
+#accTable td { padding: 0 10px; border-bottom: 1px solid var(--line-soft); overflow: hidden; }
+#accTable .c-acts { white-space: nowrap; position: relative; }
+/* 异常行首格渐变（不再新增 mark 列）：3px 红条画在 td 背景里。 */
+#accTable tr.acc-row.is-bad > td:first-child {
+  background-image: linear-gradient(90deg, var(--bad) 0 3px, transparent 3px);
+}
+#accTable tr.acc-row.is-cool > td:first-child {
+  background-image: linear-gradient(90deg, var(--warn) 0 3px, transparent 3px);
+}
+/* 状态徽章：唯一允许用 999 胶囊 + 语义底色的组件。 */
+#accTable .st-badge {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  padding: 1px 7px; border-radius: 999px; font-size: var(--fs-xs); line-height: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#accTable .st-badge.ok { color: var(--ok); background: var(--ok-soft); }
+#accTable .st-badge.warn { color: var(--warn); background: var(--warn-soft); }
+#accTable .st-badge.bad { color: var(--bad); background: var(--bad-soft); }
+#accTable .st-badge.mute { color: var(--ink-2); background: var(--surface-2); }
+/* 行内第二行的元数据（uid / 标签 / 本地化原因）：单行省略，不换行。 */
+#accTable .meta-line { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink-3); font-size: var(--fs-sm); line-height: 16px; }
+#accTable .meta-line .uid { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+#accTable .meta-line .reason { color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#accTable .chip-meta {
+  flex: none; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line);
+  font-size: var(--fs-xs); line-height: 15px; color: var(--ink-3);
+}
+/* 积分列：数字 + 细进度条（条由自身剩余/总额算，旧数据退回池内最高）。 */
+#accTable .cred-cell .n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+#accTable .cred-cell .bar { display: block; height: 3px; margin-top: 3px; border-radius: 2px; background: var(--line-soft); overflow: hidden; }
+#accTable .cred-cell .bar i { display: block; height: 100%; background: var(--accent); }
+/* 行内主操作 88px 内，描边不实心；⋯ 桌面 28 视觉（移动 44 本体）。 */
+#accTable .row-primary { padding: 3px 9px; font-size: var(--fs-sm); }
+#accTable .row-menu { padding: 3px 7px; font-size: var(--fs-sm); line-height: 1.2; }
+/* 卡片模式专属元素，表格模式下不占位。 */
+#accTable .card-meta { display: none; }
+/* 「全部操作」入口默认隐藏：桌面把 5 个全局按钮直接摊在工具栏上，390 才收进菜单。 */
+#btnBulkAll { display: none; }
+
+/* ── 行操作菜单（body 级单例）─────────────────────────────────────────
+   position:fixed 而不是 absolute：放在滚动容器里会被裁切（菜单在末行时下半截
+   看不见）。定位由 openAccMenu 用触发按钮的 getBoundingClientRect() 算，
+   空间不足时向上翻转。 */
+.rowmenu {
+  position: fixed; z-index: 80; min-width: 200px; padding: 5px;
+  background: var(--raise); border: 1px solid var(--line); border-radius: 9px;
+  box-shadow: 0 12px 28px rgba(16,24,40,.18);
+}
+.rowmenu button {
+  display: block; width: 100%; text-align: left; height: 32px; padding: 0 10px;
+  border: 0; background: transparent; border-radius: 6px; font-size: var(--fs-base);
+  color: var(--ink); cursor: pointer;
+}
+.rowmenu button:hover, .rowmenu button:focus-visible { background: var(--surface-2); }
+.rowmenu button.danger { color: var(--bad); }
+.rowmenu hr { border: 0; border-top: 1px solid var(--line-soft); margin: 5px 4px; }
+/* 触屏（无 hover 的粗指针）上菜单项要够 44px。 */
+@media (pointer: coarse) { .rowmenu button { height: 44px; } }
+
+/* 键盘焦点环：统一 2px 强调色 offset，只对键盘生效（:focus-visible），
+   鼠标点击不出现环——避免每点一次都闪一下。 */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#accTable tr.acc-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 读屏专用文本：视觉隐藏但保留在可访问树里（label/caption 用）。 */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* 批量操作条：勾选后出现在工具栏与表格之间，随选择数实时更新。 */
+.bulkbar {  display: flex; align-items: center; gap: 8px; padding: 8px 17px;
+  background: var(--accent-soft); border-bottom: 1px solid var(--line-soft);
+  font-size: var(--fs-sm);
+}
+.bulkbar .grow { flex: 1; }
+
+/* 详情抽屉的键值表：dt 定宽标签 + dd 内容，长 uid/错误串可换行。 */
+.kv { display: grid; grid-template-columns: 96px 1fr; gap: 8px 12px; font-size: var(--fs-base); }
+.kv dt { color: var(--ink-3); }
+.kv dd { min-width: 0; word-break: break-word; }
+
+/* 减列档（容器 688–895）：收掉用量列。col/th/td 必须**同时**隐藏——
+   只隐藏 td 会留下一条空白列，把后面的列整体右移。 */
+@container acc (max-width: 895px) {
+  #accTable col.c-usage, #accTable th.c-usage, #accTable td.c-usage { display: none; }
+}
+/* 卡片档（容器 <688）：thead 隐藏、行改网格、状态/积分/最近成功移进账号列。
+   .tbl-wrap 的 max-height/overflow 必须成对撤销，否则卡片会被裁在 264 里。 */
+@container acc (max-width: 687px) {
+  #accTable thead { display: none; }
+  #accTable, #accTable tbody { display: block; width: 100%; }
+  #accTable colgroup { display: none; }
+  #accTable tr.acc-row {
+    display: grid; grid-template-columns: 36px 1fr auto; align-items: center;
+    height: auto; min-height: 56px; gap: 0 8px; padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  #accTable tr.acc-row > td { display: block; padding: 0 10px; border: 0; }
+  #accTable .c-sel { grid-column: 1; grid-row: 1 / span 2; align-self: center; }
+  #accTable .c-who { grid-column: 2; grid-row: 1; }
+  #accTable .c-acts { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+  #accTable .c-st, #accTable .c-cred, #accTable .c-last,
+  #accTable .c-sf, #accTable .c-usage { display: none; }
+  #accTable .card-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: var(--fs-sm); color: var(--ink-3); }
+  #accTable .c-sel { padding-left: 12px; }
+  /* 触屏目标 44×44 是本体的 getBoundingClientRect，不能靠外层 padding 扩命中。 */
+  #accTable .row-primary, #accTable .row-menu { min-height: 44px; min-width: 44px; padding: 0 10px; font-size: var(--fs-base); }
+  #accTable .rowck { width: 20px; height: 20px; }
+  #view-accounts .tbl-wrap { max-height: none; overflow: visible; }
+}
 .realm-tag { display: inline-block; margin-left: 6px; padding: 1px 5px; border-radius: 4px; font: 500 var(--fs-xs)/1 var(--sans); color: var(--accent-on-soft); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); vertical-align: 1px; }
 .realm-row { display: flex; align-items: center; gap: 14px; padding: 4px 0 10px; }
 .realm-opt { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-base); color: var(--ink-2); cursor: pointer; }
@@ -541,10 +704,19 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
 }
 .tst.ok { border-left-color: var(--ok); } .tst.err { border-left-color: var(--bad); }
 
-@media (max-width: 760px) {
+/* 侧栏折叠点 944（原 760）：760 时侧栏还占着 208px，导致 768 视口的表格容器
+   只有 480——落在卡片档（<688）而不是文档要求的「减列档 720」。折叠点提到 944
+   后，944 两侧都是减列档（688–895），不会出现「表格 → 卡片 → 表格」的跳变。 */
+@media (max-width: 944px) {
   .shell { grid-template-columns: 1fr; }
-  .nav { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; }
-  .nav ul { display: flex; padding: 8px; } .nav .sig { border: none; }
+  /* 导航横排：固定 46px（内容高 30 + 上下 8），不让它按最长项撑高——
+     390 首屏预算里导航是常数项，撑高会直接把首卡顶出 340。 */
+  .nav {
+    position: static; height: 46px; flex-direction: row; align-items: center;
+    overflow-x: auto; overflow-y: hidden; padding: 0 8px;
+  }
+  .nav .brand, .nav .sig { display: none; }
+  .nav ul { display: flex; padding: 0; gap: 4px; }
   .stat { border-right: none; border-bottom: 1px solid var(--line-soft); }
 }
   /* ── 用量视图 ─────────────────────────────────────────────────────
@@ -848,29 +1020,61 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
         <header class="acc-toolbar">
           <h3>账号池</h3>
           <span class="grow"></span>
-          <input id="accFilterQ" class="xs" type="search" placeholder="筛选：昵称 / uid" title="按昵称或 uid 过滤账号列表">
-          <select id="accFilterSt" class="xs" title="按账号状态过滤">
+          <label class="sr-only" for="accFilterQ">筛选账号（昵称或 uid）</label>
+          <input id="accFilterQ" class="xs" type="search" placeholder="筛选：昵称 / uid">
+          <label class="sr-only" for="accFilterSt">状态筛选</label>
+          <select id="accFilterSt" class="xs">
             <option value="">全部状态</option>
+            <option value="pending">需处理</option>
             <option value="dead">待重登 / 封号（失效号）</option>
             <option value="ok">可用正常</option>
           </select>
-          <select id="accFilterTag" class="xs" title="按标签过滤账号列表"><option value="">全部标签</option></select>
+          <label class="sr-only" for="accFilterTag">标签筛选</label>
+          <select id="accFilterTag" class="xs"><option value="">全部标签</option></select>
+          <label class="sr-only" for="accSort">排序</label>
+          <select id="accSort" class="xs" title="排序方式">
+            <option value="risk">风险优先</option>
+            <option value="credits">积分最低</option>
+            <option value="last">最久未成功</option>
+            <option value="errors">错误最多</option>
+          </select>
+          <span id="accFilterSummary" role="status" aria-live="polite" class="note">0/0</span>
+          <button id="btnClearFilters" class="xs ghost" hidden>清空</button>
           <span class="note" id="accNote"></span>
           <button class="xs" id="btnCheckinAll" title="立即对全部账号执行一次签到：签到 + 刷新余额（余额恢复的冷却账号自动解冻），随后自动兑换连登已解锁档位、用完抽奖次数。等同提前跑一次每日定时签到（默认 9 / 21 点）。">全部签到</button>
           <button class="xs" id="btnTravelAll" title="立即推进猫猫旅行：没领猫的自动同意协议并领养、在家的派出旅行、已到达的领取奖励。等同提前跑一次每日定时旅行（默认 9 / 21 点）。">旅行巡检</button>
           <button class="xs" id="btnActivityAll" title="立即为全部账号上报一次对话活跃：点亮连登天数并解锁领养（first_buddy）前置条件，每号每天 1 次。等同提前跑一次每日定时活跃上报（默认 10 点）。">活跃上报</button>
           <button class="xs" id="btnKeepaliveAll" title="立即刷新全部账号的登录凭证 token，保持账号持续有效；session 连续 3 次失效才会自动禁用（防误杀）。等同提前跑一次每日定时保活（默认 22 点）。">全部保活</button>
           <button class="xs" id="btnProbeDead" hidden title="对「待重登」（会话失效）类禁用账号做一轮 token 刷新探测：若上游侧的吊销已解除（误吊销/临时故障恢复），账号会自动复活。失败静默。默认关闭定时探测，此为手动触发。">探测死号</button>
+          <button class="xs" id="btnBulkAll" aria-haspopup="menu" aria-expanded="false" title="对全部账号执行的运维动作">全部操作</button>
         </header>
+        <div class="bulkbar" id="accBulk" hidden role="region" aria-live="polite">
+          <span>已选 <b id="accBulkN">0</b> 个</span>
+          <span class="grow"></span>
+          <button class="xs" data-bulk="balance">刷新余额</button>
+          <button class="xs" data-bulk="checkin">签到</button>
+          <button class="xs" data-bulk="pause">暂停选号</button>
+          <button class="xs" data-bulk="resume">恢复选号</button>
+          <button class="xs ghost" id="btnBulkCancel">取消选择</button>
+        </div>
+        <div class="acc-scope">
         <div class="tbl-wrap">
-        <table class="acc" id="accTable">
+        <table class="acc" id="accTable" tabindex="-1">
+          <caption id="accCaption" class="sr-only">账号池：<span id="accCapN">0</span> 个账号</caption>
+          <colgroup>
+            <col class="c-sel"><col class="c-who"><col class="c-st"><col class="c-cred">
+            <col class="c-sf"><col class="c-last"><col class="c-usage"><col class="c-acts">
+          </colgroup>
           <thead><tr>
-            <th class="mark" aria-hidden="true"></th>
+            <th scope="col" class="c-sel"><input type="checkbox" id="accSelAll" aria-label="全选当前筛选下的账号"></th>
             <th scope="col">账号</th><th scope="col">状态</th><th scope="col">积分</th>
-            <th scope="col">成功 / 失败</th><th scope="col">在途</th><th scope="col">用量</th><th scope="col">最近成功</th><th scope="col" class="c-acts"></th>
+            <th scope="col">成功 / 失败</th><th scope="col">最近成功</th>
+            <th scope="col" class="c-usage">用量</th>
+            <th scope="col" class="c-acts"><span class="sr-only">操作</span></th>
           </tr></thead>
           <tbody id="accBody"></tbody>
         </table>
+        </div>
         </div>
       </div>
 
@@ -1650,6 +1854,26 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
     </footer>
   </div>
 </div>
+
+<!-- 账号详情（行点击 / Enter 打开）──────────────────────────────────
+     原始英文 error 只在这里展示：行内空间只够一行短原因。 -->
+<div class="veil" id="accDetailVeil">
+  <div class="dlg" style="width:560px">
+    <header>
+      <h3 id="accDetailTitle">账号详情</h3>
+      <div class="hint" id="accDetailSub"></div>
+    </header>
+    <div class="body" id="accDetailBody"></div>
+    <footer>
+      <span class="grow"></span>
+      <button class="xs" id="btnCloseAccDetail">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 行操作菜单：body 级单例 + position:fixed。
+     不能放在 tr / .tbl-wrap 里——滚动容器会裁切它，且每行一个实例会让 id 重复。 -->
+<div id="accRowMenu" class="rowmenu" role="menu" hidden></div>
 
 <div id="toasts" role="status" aria-live="polite"></div>
 
