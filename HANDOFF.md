@@ -5,7 +5,7 @@
 ## 1. 项目概况与当前状态
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
-- **当前版本**：`1.19.1-panel`（2026-11-04 **账号池页面重构**：首屏 KPI 6→4 格、到期卡改 44px chip + 抽屉（首行 y 1672→245）、表格 9→8 列与 `table-layout:fixed`、行内按钮 7–8→2、行高锁 56、轮询焦点保持、容器查询替代视口断点、筛选六态 + 四档排序 + 批量并发 2 + 8 秒撤销、caption/label/`role=menu`/indeterminate 无障碍补齐；顺带修 `#accTable` 表头吸附失效与浅色 `--warn` 对比度。**纯前端、零后端改动**，详见 §4。**⚠️ 版本号口径**：云端 `v1.19.1` Release 是 tag 前移时的旧树，**不含**本次账号池改动；生产实际运行 commit `c50282f`，看到 `1.19.1-panel` 需按 commit 区分）；上一版 1.19.0（2026-10-26 **加固、可观测与测试基线版**，累计 59 个提交：P0 修 SSE 心跳与错误路径并发写 header map 的进程级 fatal + 三个 opt-in 运维开关（入站限流 `rate_limit_rps`、请求体上限 `max_body_mb`、诊断监听 `debug_addr`）+ 出站元数据剥除 `strip_tool_metadata` + 状态快照单调 `revision` + `internal/logx` 分级日志门面（全仓 255 处迁移）+ 面板字号令牌与表头吸附 + 上游错误码映射收敛为单表 + `client.go`/`handler.go` 按职责拆分 + gofmt/LF/CI 门禁 + panel 覆盖率 33.0%→49.4%；**全部新开关默认关闭或零行为变更，升级不改变现有部署语义**）；上一版 1.18.3（2026-10-24 账号池排版清理批：**操作列左对齐修复竖向错位**（右对齐时「签到」起始 x 逐行漂移 ~80px；现签到/余额/任务/标签/变体槽各占稳定竖列、移除 margin-left:auto 钉右）+ 账号池头部工具栏统一紧凑规格（input.xs 新增 + select.xs 补 1px 上下内边距，三控件实测同高 27.7px）+ inline margin 移除统一 gap 12px + 空 #accNote 不占位 + **窄屏（≤860px）卡片头部 flex-wrap 修复工具栏被 overflow:hidden 裁切 319px 的功能缺陷** + 回收站弹窗 footer 按钮同高 + 趋势 footer tabular-nums）；上一版 1.18.2（2026-10-24 审查收尾批：Esc 关弹窗 + 默认值对账快照测试 + 窄屏列降级 + 对比度；**其余审查留档项已评估搁置**（见 §4 决策））；上一版 1.18.1（2026-10-24 审查第二批：安全三件（/status 脱敏/dump 保留/头白名单）+ /status 可观测三组（guards/persist_health/keepalive）+ 噪声治理 + reqlog 早停 + 前端体验批）；上一版 1.18.0（2026-10-24 全面代码审查后第一批：P0 正确性 12 项 + P1 局部性能 3 项；SSE 竞态为首）；上一版 1.17.1（2026-10-24 出厂默认对齐生产验证值：smart 保活 / 余额刷新 10 分钟 / 积分保底 150——**默认值变更，未显式配置的部署升级即生效**；A 机生产无需升级；上一版 1.17.0（2026-10-24 对标 P1 四项：模型降级路由 / 每日限额护栏三件套 / 余额趋势视图 / 会员档位显示；上一版 1.16.1（2026-10-24 对标 hub/misakano 的流式稳定性加固：SSE 空闲心跳双路径 + chunk id 整流 + 签到误判回归钉子；上一版 1.16.0（2026-10-24 发布「会话失效恢复与防复发」：死号一键重登 / 批量判死告警 / RT 轮换审计与外部双花检测 / auths 租约锁 / 任务时点抖动 / smart 智能保活 / 死号探活，八模块全量落地并过沙箱+UI 真实点击走查；**生产两机仍为 1.15.7，升级待办见 §5**。上一版 `1.15.7-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。生产已于 **2026-10-23 16:43** 切到该版本并验收通过（面板 `overview.version` 实测 `1.15.7-panel`，healthz `17 total / 10 healthy / 7 disabled`，`/v1/chat/completions` 真实出 content）。**注意**：16:43 那次重启是直接拉起进程完成的（当时沙箱把 `schtasks.exe` 列入程序黑名单、WMI `Win32_Process.Create` 亦被拦截），进程一度属登录用户而非 SYSTEM；**2026-10-23 17:55 已切回计划任务托管**——停会话实例 → `Start-ScheduledTask -TaskName "wb2api"`（该 cmdlet 不走 `schtasks.exe`，是被黑名单时的可用替代路径），新实例 PID 5496、身份 `NT AUTHORITY\SYSTEM`、监听 `::7863`，`/panel/`、`/panel/api/overview`（17 账号 / 11 启用）、`/panel/api/login/regions` 均 200。本机任务的开机自启延迟以任务定义 `wb2api-task.xml` 为准是 **`PT30S`**（旧文写的 `PT20S` 系机器 A 的 `WorkBuddy2API` 任务口径）。**机器 A（`DESKTOP-DVFFB09`）已于 2026-10-24 00:01 同步切到 `1.15.7-panel` 并验收通过**（healthz 16/17、`overview.version` 实测一致，过程见 §5 首条）——至此两台机器生产均为 1.15.7。
+- **当前版本**：`1.19.2-panel`（2026-11-04 **账号池界面重构版**：首屏 KPI 6→4 格、到期卡改 44px chip + 抽屉（首行 y 1672→245）、表格 9→8 列与 `table-layout:fixed`、行内按钮 7–8→2、行高锁 56、轮询焦点保持、容器查询替代视口断点、筛选六态 + 四档排序、批量并发 2 且带 `role=progressbar` 进度与「停止」、8 秒撤销、站内确认弹窗 `#confirmVeil`、caption/label/`role=menu`/indeterminate 无障碍补齐；顺带修 `#accTable` 表头吸附失效与浅色 `--warn` 对比度。**纯前端、零后端改动**，详见 §4。**本版同时抹平了版本号分叉**：`v1.19.1` 的 Release 二进制由 tag 前移生成、不含账号池改动，从 `1.19.2` 起版本号重新能唯一标识产物）；上一版 1.19.1（请求改写补丁：tools schema `$ref/$defs` 解引用，修上游 11133；该版 Release 为 tag 前移产物，与生产曾运行的 `1.19.1-panel` 同名不同物）；上一版 1.19.0（2026-10-26 **加固、可观测与测试基线版**，累计 59 个提交：P0 修 SSE 心跳与错误路径并发写 header map 的进程级 fatal + 三个 opt-in 运维开关（入站限流 `rate_limit_rps`、请求体上限 `max_body_mb`、诊断监听 `debug_addr`）+ 出站元数据剥除 `strip_tool_metadata` + 状态快照单调 `revision` + `internal/logx` 分级日志门面（全仓 255 处迁移）+ 面板字号令牌与表头吸附 + 上游错误码映射收敛为单表 + `client.go`/`handler.go` 按职责拆分 + gofmt/LF/CI 门禁 + panel 覆盖率 33.0%→49.4%；**全部新开关默认关闭或零行为变更，升级不改变现有部署语义**）；上一版 1.18.3（2026-10-24 账号池排版清理批：**操作列左对齐修复竖向错位**（右对齐时「签到」起始 x 逐行漂移 ~80px；现签到/余额/任务/标签/变体槽各占稳定竖列、移除 margin-left:auto 钉右）+ 账号池头部工具栏统一紧凑规格（input.xs 新增 + select.xs 补 1px 上下内边距，三控件实测同高 27.7px）+ inline margin 移除统一 gap 12px + 空 #accNote 不占位 + **窄屏（≤860px）卡片头部 flex-wrap 修复工具栏被 overflow:hidden 裁切 319px 的功能缺陷** + 回收站弹窗 footer 按钮同高 + 趋势 footer tabular-nums）；上一版 1.18.2（2026-10-24 审查收尾批：Esc 关弹窗 + 默认值对账快照测试 + 窄屏列降级 + 对比度；**其余审查留档项已评估搁置**（见 §4 决策））；上一版 1.18.1（2026-10-24 审查第二批：安全三件（/status 脱敏/dump 保留/头白名单）+ /status 可观测三组（guards/persist_health/keepalive）+ 噪声治理 + reqlog 早停 + 前端体验批）；上一版 1.18.0（2026-10-24 全面代码审查后第一批：P0 正确性 12 项 + P1 局部性能 3 项；SSE 竞态为首）；上一版 1.17.1（2026-10-24 出厂默认对齐生产验证值：smart 保活 / 余额刷新 10 分钟 / 积分保底 150——**默认值变更，未显式配置的部署升级即生效**；A 机生产无需升级；上一版 1.17.0（2026-10-24 对标 P1 四项：模型降级路由 / 每日限额护栏三件套 / 余额趋势视图 / 会员档位显示；上一版 1.16.1（2026-10-24 对标 hub/misakano 的流式稳定性加固：SSE 空闲心跳双路径 + chunk id 整流 + 签到误判回归钉子；上一版 1.16.0（2026-10-24 发布「会话失效恢复与防复发」：死号一键重登 / 批量判死告警 / RT 轮换审计与外部双花检测 / auths 租约锁 / 任务时点抖动 / smart 智能保活 / 死号探活，八模块全量落地并过沙箱+UI 真实点击走查；**生产两机仍为 1.15.7，升级待办见 §5**。上一版 `1.15.7-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。生产已于 **2026-10-23 16:43** 切到该版本并验收通过（面板 `overview.version` 实测 `1.15.7-panel`，healthz `17 total / 10 healthy / 7 disabled`，`/v1/chat/completions` 真实出 content）。**注意**：16:43 那次重启是直接拉起进程完成的（当时沙箱把 `schtasks.exe` 列入程序黑名单、WMI `Win32_Process.Create` 亦被拦截），进程一度属登录用户而非 SYSTEM；**2026-10-23 17:55 已切回计划任务托管**——停会话实例 → `Start-ScheduledTask -TaskName "wb2api"`（该 cmdlet 不走 `schtasks.exe`，是被黑名单时的可用替代路径），新实例 PID 5496、身份 `NT AUTHORITY\SYSTEM`、监听 `::7863`，`/panel/`、`/panel/api/overview`（17 账号 / 11 启用）、`/panel/api/login/regions` 均 200。本机任务的开机自启延迟以任务定义 `wb2api-task.xml` 为准是 **`PT30S`**（旧文写的 `PT20S` 系机器 A 的 `WorkBuddy2API` 任务口径）。**机器 A（`DESKTOP-DVFFB09`）已于 2026-10-24 00:01 同步切到 `1.15.7-panel` 并验收通过**（healthz 16/17、`overview.version` 实测一致，过程见 §5 首条）——至此两台机器生产均为 1.15.7。
 - **生产状态（2026-11-04）**：**B 机 `CHINAMI-DPNMO04` 已升到 `1.19.1-panel`**（commit `c50282f`，PID 18148，healthz 13/17 与升级前一致，流式首帧 `: heartbeat` 正常，回滚备份 `wb2api.exe.pre-1.19.1.bak`）；**A 机 `DESKTOP-DVFFB09` 状态未知**（本机无法操作，最后记录停留在 `1.18.3-panel`）。详见 §4.0.2。
 - **仓库**：`https://github.com/wjf1/workbuddy2api-panel`（推送账号即 `wjf1`），分支 `main`。
   - **⚠️ 批注（2026-10-15 于 `CHINAMI-DPNMO04` 实测）**：原文此处只写一个工作区路径并断言「`F:\AI\wb2api-src` 在本机并不存在」——那句只对 `DESKTOP-DVFFB09` 成立，**在 `CHINAMI-DPNMO04` 恰好相反**（`F:\AI\wb2api-src` 存在且是活动检出，`F:\AI\workbuddy2api-panel` 不存在）。本仓库至少在两台机器上各有检出与生产实例，历史条目里的「本机」不指明机器会互相矛盾，机器标识见下方批注表。
@@ -66,7 +66,7 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（账号池页面重构 + B 机生产升级，2026-11-04，版本号未变）
+## 4. 最近一轮变更与交付成果（账号池界面重构 → 1.19.2-panel，2026-11-04）
 
 > 详细记录见 `CHANGELOG.md` 的 `[Unreleased]` 段。**本轮不动 `appVersion`**（源码版本仍
 > `1.19.1-panel`），但产出了实质前端改动并已部署到 B 机生产。
@@ -85,6 +85,12 @@ data/backups/          备份输出（同上）
 - **顺带修两处既有缺陷**：① `#accTable thead` 的 `sticky top` 在滚动容器改为 `.tbl-wrap`
   后失效（表头停在容器内 62px 处、上方留白透行），覆盖为 `top:0`；② 浅色 `--warn`
   `#9c6410`→`#8f5b0d`（前者在 `--warn-soft` 上仅 4.3:1）。
+- **补完项（首轮遗漏，见 `0b5fbc5`）**：① 批量进度条 `#accBulkProg`（`role=progressbar`
+  + `aria-valuenow/valuemax/valuetext`）；② 批量「停止」按钮（只停**未出队**账号，
+  刻意不 abort 已发出的请求——半完成的账号会停在中间状态而并发断言仍全绿）；
+  ③ 账号池 4 处原生 `confirm()` 换站内 `#confirmVeil`（复用 `showVeil` 拿到 role=dialog
+  + aria-modal + inert，Esc 按取消处理）；④ 新增 `TestAppJSPollPaused`（8 条判据 + 反证：
+  把空搜索框判据改成恒 true 立即变红）。
 - **未覆盖**：真实鼠标点击走查未执行——本机宿主浏览器 `document.visibilityState === 'hidden'`，
   所有节点 `inViewport:false`，`cua.click` / Playwright 定位器 / DOM 节点三条通道均收不到事件
   （非代码问题）。交互链路改由 DOM 事件派发断言验证；**下次在有头环境需补一次真实点击**。
@@ -295,26 +301,29 @@ data/backups/          备份输出（同上）
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 
-### 🔜 本轮遗留（2026-11-04，账号池重构 + B 机升级之后）
+### 🔜 本轮遗留（2026-11-04，账号池重构 + 1.19.2 发版之后）
 
 1. **A 机 `DESKTOP-DVFFB09` 升级**（未做，本机无法操作）：需在该机把
-   `F:\AI\wb2api-panel-v1.13.0-windows-amd64\wb2api.exe` 换成本轮 CI 产物
-   （run `41761169613` 的 windows-amd64 artifact，或等 1.19.2 Release），流程见 §5 首条
-   既有记录（任务名是 `WorkBuddy2API` 而非 `wb2api`，目录也不同，别用错）。该机最后确认
-   版本为 `1.18.3-panel`，升级会一并带上 1.19.x 的 SSE P0 修复。
-2. **版本号分叉待抹平**：云端 `v1.19.1` Release ≠ 生产实际运行的二进制（生产是 `c50282f`
-   的 CI 产物，含账号池重构）。下次发 `1.19.2-panel` 时应把 `appVersion` 提到 1.19.2 并走
-   四文档齐备 + annotated tag + Release，让版本号重新能唯一标识产物。**本轮刻意没动
-   `appVersion`、没打 tag**——用户只要求生产升级，发版是 outward-facing 动作，不自作主张。
-3. **真实点击走查未执行**：宿主浏览器 `document.visibilityState === 'hidden'`，所有节点
+   `F:\AI\wb2api-panel-v1.13.0-windows-amd64\wb2api.exe` 换成 **v1.19.2 Release** 产物，流程见
+   §5 首条既有记录（任务名是 `WorkBuddy2API` 而非 `wb2api`，目录也不同，别用错）。该机最后
+   确认版本为 `1.18.3-panel`，升级会一并带上 1.19.x 的 SSE P0 修复与账号池重构。
+2. **真实点击走查未执行**：宿主浏览器 `document.visibilityState === 'hidden'`，所有节点
    `inViewport:false`，鼠标事件不派发（详见 §4.0.1 末条）。下次在有头环境补一次账号池
    关键路径的真实点击（chip 开抽屉、⋯ 开菜单、勾选批量、移除撤销）。
-4. **390 首卡 356 vs 设计文档 340**：差额是文档纵向预算未计入折叠后的导航条 46px，
+3. **390 首卡 356 vs 设计文档 340**：差额是文档纵向预算未计入折叠后的导航条 46px，
    属文档口径问题；若要严格对齐需重新核定 `--acc-fold` 预算或压缩概览行。
+4. **回收站 / 任务中心仍有 4 处原生 `confirm()`**：本次只统一了账号池（在交接文档范围内）。
+   若要全站统一，把这 4 处也换成 `askConfirm()` 即可，`#confirmVeil` 已就位。
 5. **`go.mod` 的 go 版本仍是 1.22.5**：gofmt 门禁已用「注释独立行化」绕开版本差异，
    但根本解法是升 `go` 指令到 1.23+ 或 CI 锁 `GOTOOLCHAIN` 与本机一致（上轮遗留，仍未做）。
 
-### ✅ 2026-11-04：B 机生产升级到 1.19.1-panel（commit c50282f）
+### ✅ 2026-11-04：发版 1.19.2-panel（抹平版本号分叉）
+
+`v1.19.1` 的 Release 二进制由 tag 前移生成、其树不含账号池改动，导致生产曾运行的
+`1.19.1-panel` 与 Release 同名不同物。本版把 `appVersion` 提到 `1.19.2-panel`，走四文档
+齐备 + annotated tag + Release，版本号重新能唯一标识产物。
+
+### ✅ 2026-11-04：B 机生产升级到 1.19.1-panel（commit c50282f，已被 1.19.2 取代）
 
 详见 §4.0.2。要点：CI 产物部署（非本机 build）、停机约 5 秒、healthz 13/17 零状态丢失、
 流式 `: heartbeat` 正常、回滚备份 `wb2api.exe.pre-1.19.1.bak`。
