@@ -6,7 +6,7 @@
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
 - **当前版本**：`1.19.2-panel`（2026-11-04 **账号池界面重构版**：首屏 KPI 6→4 格、到期卡改 44px chip + 抽屉（首行 y 1672→245）、表格 9→8 列与 `table-layout:fixed`、行内按钮 7–8→2、行高锁 56、轮询焦点保持、容器查询替代视口断点、筛选六态 + 四档排序、批量并发 2 且带 `role=progressbar` 进度与「停止」、8 秒撤销、站内确认弹窗 `#confirmVeil`、caption/label/`role=menu`/indeterminate 无障碍补齐；顺带修 `#accTable` 表头吸附失效与浅色 `--warn` 对比度。**纯前端、零后端改动**，详见 §4。**本版同时抹平了版本号分叉**：`v1.19.1` 的 Release 二进制由 tag 前移生成、不含账号池改动，从 `1.19.2` 起版本号重新能唯一标识产物）；上一版 1.19.1（请求改写补丁：tools schema `$ref/$defs` 解引用，修上游 11133；该版 Release 为 tag 前移产物，与生产曾运行的 `1.19.1-panel` 同名不同物）；上一版 1.19.0（2026-10-26 **加固、可观测与测试基线版**，累计 59 个提交：P0 修 SSE 心跳与错误路径并发写 header map 的进程级 fatal + 三个 opt-in 运维开关（入站限流 `rate_limit_rps`、请求体上限 `max_body_mb`、诊断监听 `debug_addr`）+ 出站元数据剥除 `strip_tool_metadata` + 状态快照单调 `revision` + `internal/logx` 分级日志门面（全仓 255 处迁移）+ 面板字号令牌与表头吸附 + 上游错误码映射收敛为单表 + `client.go`/`handler.go` 按职责拆分 + gofmt/LF/CI 门禁 + panel 覆盖率 33.0%→49.4%；**全部新开关默认关闭或零行为变更，升级不改变现有部署语义**）；上一版 1.18.3（2026-10-24 账号池排版清理批：**操作列左对齐修复竖向错位**（右对齐时「签到」起始 x 逐行漂移 ~80px；现签到/余额/任务/标签/变体槽各占稳定竖列、移除 margin-left:auto 钉右）+ 账号池头部工具栏统一紧凑规格（input.xs 新增 + select.xs 补 1px 上下内边距，三控件实测同高 27.7px）+ inline margin 移除统一 gap 12px + 空 #accNote 不占位 + **窄屏（≤860px）卡片头部 flex-wrap 修复工具栏被 overflow:hidden 裁切 319px 的功能缺陷** + 回收站弹窗 footer 按钮同高 + 趋势 footer tabular-nums）；上一版 1.18.2（2026-10-24 审查收尾批：Esc 关弹窗 + 默认值对账快照测试 + 窄屏列降级 + 对比度；**其余审查留档项已评估搁置**（见 §4 决策））；上一版 1.18.1（2026-10-24 审查第二批：安全三件（/status 脱敏/dump 保留/头白名单）+ /status 可观测三组（guards/persist_health/keepalive）+ 噪声治理 + reqlog 早停 + 前端体验批）；上一版 1.18.0（2026-10-24 全面代码审查后第一批：P0 正确性 12 项 + P1 局部性能 3 项；SSE 竞态为首）；上一版 1.17.1（2026-10-24 出厂默认对齐生产验证值：smart 保活 / 余额刷新 10 分钟 / 积分保底 150——**默认值变更，未显式配置的部署升级即生效**；A 机生产无需升级；上一版 1.17.0（2026-10-24 对标 P1 四项：模型降级路由 / 每日限额护栏三件套 / 余额趋势视图 / 会员档位显示；上一版 1.16.1（2026-10-24 对标 hub/misakano 的流式稳定性加固：SSE 空闲心跳双路径 + chunk id 整流 + 签到误判回归钉子；上一版 1.16.0（2026-10-24 发布「会话失效恢复与防复发」：死号一键重登 / 批量判死告警 / RT 轮换审计与外部双花检测 / auths 租约锁 / 任务时点抖动 / smart 智能保活 / 死号探活，八模块全量落地并过沙箱+UI 真实点击走查；**生产两机仍为 1.15.7，升级待办见 §5**。上一版 `1.15.7-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。生产已于 **2026-10-23 16:43** 切到该版本并验收通过（面板 `overview.version` 实测 `1.15.7-panel`，healthz `17 total / 10 healthy / 7 disabled`，`/v1/chat/completions` 真实出 content）。**注意**：16:43 那次重启是直接拉起进程完成的（当时沙箱把 `schtasks.exe` 列入程序黑名单、WMI `Win32_Process.Create` 亦被拦截），进程一度属登录用户而非 SYSTEM；**2026-10-23 17:55 已切回计划任务托管**——停会话实例 → `Start-ScheduledTask -TaskName "wb2api"`（该 cmdlet 不走 `schtasks.exe`，是被黑名单时的可用替代路径），新实例 PID 5496、身份 `NT AUTHORITY\SYSTEM`、监听 `::7863`，`/panel/`、`/panel/api/overview`（17 账号 / 11 启用）、`/panel/api/login/regions` 均 200。本机任务的开机自启延迟以任务定义 `wb2api-task.xml` 为准是 **`PT30S`**（旧文写的 `PT20S` 系机器 A 的 `WorkBuddy2API` 任务口径）。**机器 A（`DESKTOP-DVFFB09`）已于 2026-10-24 00:01 同步切到 `1.15.7-panel` 并验收通过**（healthz 16/17、`overview.version` 实测一致，过程见 §5 首条）——至此两台机器生产均为 1.15.7。
-- **生产状态（2026-11-04）**：**B 机 `CHINAMI-DPNMO04` 已升到 `1.19.1-panel`**（commit `c50282f`，PID 18148，healthz 13/17 与升级前一致，流式首帧 `: heartbeat` 正常，回滚备份 `wb2api.exe.pre-1.19.1.bak`）；**A 机 `DESKTOP-DVFFB09` 状态未知**（本机无法操作，最后记录停留在 `1.18.3-panel`）。详见 §4.0.2。
+- **生产状态（2026-11-04）**：**B 机 `CHINAMI-DPNMO04` 已升到 `1.19.2-panel`**（tag `v1.19.2` / 云端 commit `8c95b35`，PID 5332，healthz 13/17 与升级前一致，流式首帧 `: heartbeat` 正常，回滚备份 `wb2api.exe.pre-1.19.2.bak` = 1.19.1）；此前同日 10:5x 曾升 `1.19.1-panel`（commit `c50282f`，PID 18148，回滚备份 `wb2api.exe.pre-1.19.1.bak`）；**A 机 `DESKTOP-DVFFB09` 状态未知**（本机无法操作，最后记录停留在 `1.18.3-panel`）。详见 §4.0.2 / §4.0.3。
 - **仓库**：`https://github.com/wjf1/workbuddy2api-panel`（推送账号即 `wjf1`），分支 `main`。
   - **⚠️ 批注（2026-10-15 于 `CHINAMI-DPNMO04` 实测）**：原文此处只写一个工作区路径并断言「`F:\AI\wb2api-src` 在本机并不存在」——那句只对 `DESKTOP-DVFFB09` 成立，**在 `CHINAMI-DPNMO04` 恰好相反**（`F:\AI\wb2api-src` 存在且是活动检出，`F:\AI\workbuddy2api-panel` 不存在）。本仓库至少在两台机器上各有检出与生产实例，历史条目里的「本机」不指明机器会互相矛盾，机器标识见下方批注表。
   - **机器标识批注表（区分「本机」的唯一依据；MAC 取首行网卡）**
@@ -115,6 +115,14 @@ data/backups/          备份输出（同上）
   的旧树，不含本次账号池改动。看到 `1.19.1-panel` 时需按 commit 区分：生产实际运行
   `c50282f`。下次发版（1.19.2）应把这个差异抹平。
 - **A 机 `DESKTOP-DVFFB09`**：本机无法操作，状态未知，需在该机按其本地记录单独升级。
+
+### 4.0.3 B 机生产升级 `1.19.1-panel` → `1.19.2-panel`（2026-11-04 13:41）
+
+- **背景**：服务于当日 **11:45 停止后未自动拉起**（`data/state.json` 末次写入 11:45、面板"连接断开"约 6832 秒、计划任务 `wb2api` 状态 `Ready`、无 wb2api 进程）。现场遗留一个已构建但**未替换**的 `wb2api.exe.new`（1.19.2-panel，10017280 字节 / sha256 `07446922…`）——上次会话升级中断在替换前一步。用户选择「装 1.19.2 再起」，本次一并完成。
+- **流程**：确认 7863 无监听、计划任务 Ready、17 个 auths、`state.json` 可解析 → `cp wb2api.exe wb2api.exe.pre-1.19.2.bak`（即旧 1.19.1，10012160 字节 / sha256 `80e3653b…`，与 §4.0.2 记录一致）→ `mv -f wb2api.exe.new wb2api.exe` 原子替换 → `Start-ScheduledTask -TaskName wb2api`（**本会话直接成功，未遇 SYSTEM 任务提权拒绝**）。停机窗口不存在（替换时进程本就未运行）。
+- **注意（命名口径）**：`wb2api.exe.pre-1.19.1.bak`（9510912 字节）是 1.18.3 的旧版，按「pre-<新版本>」惯例命名，**不是** 1.19.1 本体；1.19.1 的回滚备份是本次的 `wb2api.exe.pre-1.19.2.bak`。
+- **验收**：新进程 **PID 5332**，路径 `F:\AI\wb2api\wb2api.exe`，任务 `Running`；`overview.version = 1.19.2-panel`、17 个账号；healthz **13/17**（`realm_servable.global=false` 为既有状态，零状态丢失）；`/panel/` 200 / **117506 字节**（1.19.1 时 115834）；`/v1/models` 19 个 200；流式 `/v1/chat/completions`（`cn:glm-5.3-flash`）**首帧 `: heartbeat`**、正常出 `reasoning_content`。
+- **回滚**：`Copy-Item wb2api.exe.pre-1.19.2.bak wb2api.exe -Force` → 停任务 → 起任务（回到 1.19.1-panel）。
 
 ## 4.0 上一轮（CI gofmt 门禁修复 + 补发 v1.19.x Release，2026-10-31）
 
@@ -317,11 +325,33 @@ data/backups/          备份输出（同上）
 5. **`go.mod` 的 go 版本仍是 1.22.5**：gofmt 门禁已用「注释独立行化」绕开版本差异，
    但根本解法是升 `go` 指令到 1.23+ 或 CI 锁 `GOTOOLCHAIN` 与本机一致（上轮遗留，仍未做）。
 
-### ✅ 2026-11-04：发版 1.19.2-panel（抹平版本号分叉）
+### ✅ 2026-11-04：发版 1.19.2-panel 并部署 B 机生产
 
 `v1.19.1` 的 Release 二进制由 tag 前移生成、其树不含账号池改动，导致生产曾运行的
 `1.19.1-panel` 与 Release 同名不同物。本版把 `appVersion` 提到 `1.19.2-panel`，走四文档
 齐备 + annotated tag + Release，版本号重新能唯一标识产物。
+
+- **发版**：commit `8c95b35`（云端 main）、annotated tag `v1.19.2` → tag 对象
+  `3fc4839`；`go-binaries` run `41768525775` 全绿，Release 6 个资产齐备。
+  Release 标题被 runner 回落成裸 tag 名（既有已知坑），已 PATCH 修正为
+  「v1.19.2: 账号池界面重构——首屏归还主任务、表格可扫描、键盘可用」。
+- **部署（B 机 `CHINAMI-DPNMO04`）**：用 Release 的 `windows-amd64` 资产
+  （10017280 字节 / sha256 `07446922…`），停任务 → 备份 → `mv` 替换 → 起任务，
+  新进程 **PID 5332**，停机约 5 秒。
+- **验收**：`overview.version = 1.19.2-panel`；healthz **13/17 与升级前一致**（零状态
+  丢失，`realm_servable.global=false` 为既有状态）；`/panel/` 200（117506 字节）；
+  `app.js` 含 `pollPaused/runBatch/askConfirm/accSnap`；面板含 `expRisk/accRowMenu/
+  confirmVeil/accBulkProg/btnBulkStop/accSelAll/accSort/accCaption/acc-scope`；
+  非流式 200 / 2.91s / `finish=stop` / content `OK`；流式 50 帧 + `[DONE]`、
+  **首帧 `: heartbeat`**。
+- **回滚**：`Copy-Item wb2api.exe.pre-1.19.2.bak wb2api.exe -Force` 后重启任务。
+  备份已核实为真正的上一版（1.19.1 / 10012160 字节 / `80e3653b…`）。
+- **⚠️ 部署过程踩的坑（值得记）**：第一次执行「`cp` 备份 + `mv` 替换」时，`.new`
+  文件已被前一步消耗，`cp wb2api.exe` 抓到的是**新**二进制，导致备份一度指向新版、
+  旧版丢失。发现后从上一轮 CI artifact 重新取回 1.19.1 并覆盖备份文件，恢复回滚链。
+  **教训：替换前先 `sha256sum wb2api.exe` 确认备份的是旧版，再 `mv`；两步不要放在
+  同一条复合命令里。**
+
 
 ### ✅ 2026-11-04：B 机生产升级到 1.19.1-panel（commit c50282f，已被 1.19.2 取代）
 
