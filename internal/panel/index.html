@@ -32,6 +32,18 @@
   /* 顶栏高度：padding 14×2 + 控件高 33 + 底边 1。账号表表头吸附要用它让位
      （.topbar 是 sticky top:0 z-index:20）。改顶栏内边距/控件尺寸时同步此值。 */
   --topbar-h: 62px;
+  /* 账号视图的纵向预算（桌面）：顶栏以下到表容器上沿 = view 上边距 12 + KPI 65
+     + 间距 12 + 工具栏 48。滚动容器高度 = 100dvh − 顶栏 − 本值 − 底部留白。
+     390 那套（12/104/8/32/88 = 244）只在 --acc-fold 里作预算记录，**永不进 calc**，
+     否则桌面会少算 107px。 */
+  --acc-chrome: 137px;
+  --acc-fold: 244px;
+  --acc-toolbar-h: 48px;
+  --thead-h: 40px;
+  --scroller-pad: 16px;
+  /* 趋势线用强调色而不是 ok 绿：绿色在账号表里已经专指「可用」状态，
+     图表再借同一个绿会让"曲线在涨"看起来像"账号健康"，语义串台。 */
+  --chart-line: #7aa2f7;
 }
 /* ── 浅色令牌 ────────────────────────────────────────────────────────
    两处生效：① 用户显式切浅色（[data-theme="light"]）；② 系统偏好浅色且尚未选过
@@ -46,9 +58,10 @@
     --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
     --accent-btn: #3d5fe0; --accent-on-soft: #3d5fe0;
     --ok: #0a7d4e; --ok-soft: rgba(10,125,78,.1);
-    --warn: #9c6410; --warn-soft: rgba(156,100,16,.11);
+    --warn: #8f5b0d; --warn-soft: rgba(143,91,13,.11);
     --bad: #c2352e; --bad-soft: rgba(194,53,46,.09);
     --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
+    --chart-line: #3b6fe0;
   }
 }
 [data-theme="light"] {
@@ -58,9 +71,10 @@
   --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
   --accent-btn: #3d5fe0; --accent-on-soft: #3d5fe0;
   --ok: #0a7d4e; --ok-soft: rgba(10,125,78,.1);
-  --warn: #9c6410; --warn-soft: rgba(156,100,16,.11);
+  --warn: #8f5b0d; --warn-soft: rgba(143,91,13,.11);
   --bad: #c2352e; --bad-soft: rgba(194,53,46,.09);
   --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
+  --chart-line: #3b6fe0;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
@@ -239,6 +253,67 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
 .stat .k { color: var(--ink-3); font-size: var(--fs-sm); margin-top: 5px; }
 .stat.good .v { color: var(--ok); } .stat.warn .v { color: var(--warn); } .stat.bad .v { color: var(--bad); }
 
+/* ── 账号概览行（4 KPI + 到期风险 chip）────────────────────────────────
+   桌面一行：KPI 占满剩余宽度、chip 贴右且垂直居中。390 断点改为上下堆叠
+   （KPI 2×2 一组 104、gap 8、chip 独占一行 32）——三块合计 244，见 --acc-fold。
+   这里不用 .stats 的 margin-bottom：概览行自己给间距，避免 20 + 12 叠成 32。 */
+.acc-overview { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.acc-overview .stats { margin-bottom: 0; flex: 1; min-width: 0; }
+.stats.stats-4 { grid-template-columns: repeat(4, 1fr); }
+/* 固定 65px 而不是靠 padding 撑：这一行的高度直接决定首屏首行位置（--acc-chrome
+   里算的就是 65），靠内容撑会随字体回退/缩放漂移，验收数字就对不上了。
+   v 与 k 都用 line-height:1 让 24+4+12=40 在 65 内垂直居中。 */
+.stats.stats-4 .stat {
+  height: 65px; padding: 0 17px; border-bottom: 0;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.stats.stats-4 .stat .v { line-height: 1; }
+.stats.stats-4 .stat .k { margin-top: 4px; line-height: 1; }
+.stats.stats-4 .stat:last-child { border-right: 0; }
+
+/* 到期风险 chip：恒占位（无风险时显示「7 天内无到期」），不折叠——
+   折叠会让下面的表格在数据到达时上下跳一下。 */
+.risk {
+  flex: none; height: 44px; padding: 0 16px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+  font-size: var(--fs-sm); font-family: inherit; cursor: pointer;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 7px;
+}
+.risk:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.risk[data-tone="warn"] { border-color: var(--warn); color: var(--warn); background: var(--warn-soft); }
+.risk[data-tone="bad"] { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); }
+.risk[data-tone="mute"] { color: var(--ink-3); }
+
+/* ── 账号表滚动容器 ──────────────────────────────────────────────────
+   .box 保持 overflow:hidden（圆角要裁切），表格高度由 .tbl-wrap 承担：
+   overflow:auto 与 max-height **必须成对**——只给 overflow-x:auto 会让
+   thead 的 sticky 退化（滚动发生在祖先而非自身，粘不住）。
+   高度公式 = 视口 − 顶栏 − 账号 chrome − 底部留白；矮窗口落到 264 地板，
+   此时页面恢复纵向滚动（.box 不滚，页面滚）。
+   scrollbar-gutter:stable 让有无滚动条时表宽不跳（Windows 17px / macOS 0）。 */
+#view-accounts { padding-top: 12px; }
+/* 账号卡头部即工具栏：高度锁 48（--acc-chrome 里按 48 算），一屏只放一行控件。
+   内容超出时横向不滚、而是让筛选区自己收缩——见下面 #accFilterQ 的 min-width:0。 */
+#view-accounts .box > header.acc-toolbar { height: var(--acc-toolbar-h); padding: 0 12px 0 17px; gap: 8px; }
+.acc-card .tbl-wrap,
+#view-accounts .tbl-wrap {
+  overflow: auto;
+  max-height: max(264px, calc(100dvh - var(--topbar-h) - var(--acc-chrome) - var(--scroller-pad)));
+  scrollbar-gutter: stable;
+}
+/* 表头锁 40：padding 12 上下 + 字号 12 行高 16 = 40，与 --thead-h 一致。 */
+#accTable thead th { height: var(--thead-h); padding: 0 10px; }
+@media (max-width: 640px) {
+  :root { --topbar-h: 96px; }
+  .acc-overview { flex-wrap: wrap; gap: 8px; }
+  .acc-overview .stats { flex: 1 1 100%; }
+  .stats.stats-4 { grid-template-columns: repeat(2, 1fr); }
+  .stats.stats-4 .stat { height: 52px; padding: 0 14px; border-bottom: 0; }
+  .stats.stats-4 .stat:nth-child(2n) { border-right: 0; }
+  .risk { flex: none; width: 100%; height: 32px; padding: 0 12px; }
+  #view-accounts .box > header.acc-toolbar { height: auto; min-height: 88px; flex-wrap: wrap; }
+}
+
 /* ── 面板块 ───────────────────────────────────────────────────────── */
 .box { background: var(--surface); border: 1px solid var(--line); border-radius: 11px; box-shadow: var(--shadow); margin-bottom: 20px; overflow: hidden; }
 .box > header { display: flex; align-items: center; gap: 12px; padding: 12px 17px; border-bottom: 1px solid var(--line-soft); }
@@ -273,10 +348,14 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
   text-align: left; font-weight: 500; font-size: var(--fs-sm); color: var(--ink-3);
   padding: 9px 11px; border-bottom: 1px solid var(--line); white-space: nowrap;
 }
-/* 表头吸附：账号表动辄几十行，滚下去就丢列名。top 让出顶栏高度（.topbar 是
-   sticky top:0 z-index:20，不让位会滑到它底下看不见）；背景必须显式给，否则
-   行内容会从表头下方透出来；z-index 必须低于顶栏的 20。 */
+/* 表头吸附：账号表动辄几十行，滚下去就丢列名。基础规则让出顶栏高度（那些表
+   跟页面一起滚，不让位会滑到 .topbar 底下看不见）；**账号表例外**：它的滚动
+   容器是 .tbl-wrap 自身（见下面 max-height），sticky 的 top 相对的是滚动容器
+   顶边而不是视口，再让出 62px 会让表头停在容器内 62px 处、上方留一条空白让
+   滚动的行透上来。故 #accTable 单独覆盖为 0。
+   背景必须显式给（否则行内容从表头下方透出），z-index 低于顶栏的 20。 */
 .acc thead th { position: sticky; top: var(--topbar-h); background: var(--surface); z-index: 10; }
+#accTable thead th { top: 0; }
 .acc td { padding: 11px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 .acc tr:last-child td { border-bottom: none; }
 .acc tbody tr:hover { background: var(--surface-2); }
@@ -726,23 +805,16 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
 
     <!-- 账号池 -->
     <section class="view" id="view-accounts">
-      <div class="stats">
-        <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
-        <div class="stat good"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
-        <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
-        <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
-        <div class="stat"><div class="v" id="sCredits">-</div><div class="k">积分剩余 / 总额</div></div>
-        <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
-      </div>
-
-      <div class="box" id="expBox" hidden>
-        <header>
-          <h3>积分到期提醒<span class="hint">按最近到期批次估算 · 日均需耗 = 批次剩余 ÷ 距到期天数 · 上游按失效时刻先后自动优先扣减（FEFO）</span></h3>
-          <span class="grow"></span>
-          <span class="note" id="expNote"></span>
-          <button class="xs" id="btnExp">检查</button>
-        </header>
-        <div class="pad"><div id="expList"></div></div>
+      <div class="acc-overview">
+        <div class="stats stats-4">
+          <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
+          <div class="stat good"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
+          <div class="stat" id="statPending"><div class="v" id="sPending">-</div><div class="k">需处理</div></div>
+          <div class="stat"><div class="v" id="sCredits">-</div><div class="k">积分余额</div></div>
+        </div>
+        <button class="risk" id="expRisk" aria-haspopup="dialog" aria-controls="expVeil" hidden>
+          7 天内无到期
+        </button>
       </div>
 
       <div class="box" id="queueBox" hidden>
@@ -763,15 +835,6 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
         <div class="pad"><div id="alertList"></div></div>
       </div>
 
-      <div class="box" id="trendBox">
-        <header>
-          <h3>余额趋势<span class="hint">全池积分总和按小时采样（保留 30 天）——余额刷新任务运行期间每小时一个点；用于观察「号在不在被薅」与积分消耗速率</span></h3>
-          <span class="grow"></span>
-          <span class="note" id="trendNote"></span>
-        </header>
-        <div class="pad"><div id="trendChart"></div></div>
-      </div>
-
       <div class="box" id="killBox" hidden>
         <header>
           <h3>批量会话判死<span class="hint">短时间内多个账号连续 session 判死被自动禁用——疑似上游批量吊销会话或凭证双活（另一实例在共享同一批账号）。这些账号任何刷新 / 保活 / 重导 JSON 都救不回来，请到账号池「待重登」逐个重新授权，并检查是否有第二实例在跑同一份 auths</span></h3>
@@ -782,7 +845,7 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
       </div>
 
       <div class="box">
-        <header>
+        <header class="acc-toolbar">
           <h3>账号池</h3>
           <span class="grow"></span>
           <input id="accFilterQ" class="xs" type="search" placeholder="筛选：昵称 / uid" title="按昵称或 uid 过滤账号列表">
@@ -809,6 +872,18 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
           <tbody id="accBody"></tbody>
         </table>
         </div>
+      </div>
+
+      <!-- 余额趋势：观测信息，默认折叠并置于账号表之后——主任务是管理账号，
+           曲线不该把表格挤出首屏（原先把 337px 的趋势卡放在表前）。 -->
+      <div class="box" id="trendBox">
+        <header>
+          <h3>余额趋势<span class="hint">全池积分总和按小时采样（保留 30 天）——余额刷新任务运行期间每小时一个点；用于观察「号在不在被薅」与积分消耗速率</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="trendNote"></span>
+          <button class="xs" id="btnTrend" aria-expanded="false" aria-controls="trendBody">展开</button>
+        </header>
+        <div class="pad" id="trendBody" hidden><div id="trendChart"></div></div>
       </div>
     </section>
 
@@ -1550,6 +1625,28 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
     <footer>
       <span class="grow"></span>
       <button class="primary" id="btnKey">进入</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 积分到期（由账号概览行的 #expRisk chip 打开）──────────────────────
+     #expList 全站只此一份：原先它同时存在于首屏的 #expBox 卡里，那张卡展开后
+     高 1048px，把账号表顶到 y=1672。改成抽屉后首屏只剩一个 44px 的 chip。 -->
+<div class="veil" id="expVeil">
+  <div class="dlg" style="width:640px">
+    <header>
+      <h3>积分到期提醒</h3>
+      <div class="hint">按最近到期批次估算 · 日均需耗 = 批次剩余 ÷ 距到期天数 · 上游按失效时刻先后自动优先扣减（FEFO）</div>
+    </header>
+    <div class="body">
+      <div id="expList"></div>
+      <div class="state" id="expEmpty" hidden>没有账号</div>
+    </div>
+    <footer>
+      <span class="note" id="expNote"></span>
+      <span class="grow"></span>
+      <button class="xs" id="btnExp">检查</button>
+      <button class="xs" id="btnCloseExp">关闭</button>
     </footer>
   </div>
 </div>

@@ -119,10 +119,88 @@
     return s ? 'x' + s : '—';
   }
 
+  /* fmtCreditWan 积分简写：万/亿两档，用于 KPI 与表格的窄列。
+     与 fmtTok 分开是因为积分是"钱"的量级（十万级起步很常见），k/M 读起来不直观；
+     负数与非数字返回破折号（积分不会是负数，出现即数据异常，不该显示成 -1万）。 */
+  function fmtCreditWan(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v) || v < 0) return '—';
+    if (v >= 1e8) return trimFixed((v / 1e8).toFixed(1)) + '亿';
+    if (v >= 1e4) return trimFixed((v / 1e4).toFixed(1)) + '万';
+    return String(Math.round(v));
+  }
+
+  /* accState 账号状态机——**唯一来源**。
+     表格徽章、行内主操作、KPI「需处理」计数、批量跳过判定全部走这里；任何一处
+     自己再写一遍判据，数字与按钮必然对不上（同一个账号在 KPI 里算「需处理」、
+     在行内却显示「签到」）。
+
+     优先级 relogin > banned > disabled > paused > cooling > ok：
+     - disabled 必须先按 dead_kind 分流，否则 session_dead 号只会得到「解冻」，
+       而它真正需要的是重走 OAuth（解冻救不回来，见 HANDOFF 12153 那批）。
+     - banned 刻意不给重登入口：上游风控封号，重登只会再失败一次。
+     - paused 在 cooling 之前：暂停是用户显式意图，比自动冷却优先级高。
+
+     返回 { k, label, tone, act, text, need }：
+       k     状态键（筛选/排序/样式类名）
+       label 徽章文案（cooling 带剩余时长）
+       tone  ok | warn | bad | mute（语义色档）
+       act   主操作动作名（对应 data-a）
+       text  主操作按钮文案（恒为动词，状态由徽章承担）
+       need  是否计入「需处理」（paused/cooling 不计——它们会自己恢复） */
+  function accState(s, nowMs) {
+    const now = nowMs === undefined ? Date.now() : nowMs;
+    const cool = Math.max(
+      Number(s.cool_remaining_sec || 0),
+      (parseAPITime(s.breaker_until) - now) / 1000,
+      (parseAPITime(s.degrade_until) - now) / 1000
+    );
+    if (s.disabled && s.dead_kind === 'session_dead') {
+      return { k: 'relogin', label: '待重登', tone: 'bad', act: 'relogin', text: '重新登录', need: 1 };
+    }
+    if (s.disabled && s.dead_kind === 'banned') {
+      return { k: 'banned', label: '上游封号', tone: 'bad', act: 'detail', text: '查看详情', need: 1 };
+    }
+    if (s.disabled) {
+      return { k: 'disabled', label: '已禁用', tone: 'bad', act: 'revive', text: '解冻', need: 1 };
+    }
+    if (s.paused) {
+      return { k: 'paused', label: '已暂停选号', tone: 'mute', act: 'resume', text: '恢复选号', need: 0 };
+    }
+    if (cool > 0) {
+      const breaker = (parseAPITime(s.breaker_until) - now) / 1000;
+      const degrade = (parseAPITime(s.degrade_until) - now) / 1000;
+      const rest = Number(s.cool_remaining_sec || 0);
+      // 冷却来源取「剩余时长最长的那一个」，与 cool 的计算口径一致；
+      // 否则会出现 cool 由熔断撑起、文案却写「限流冷却」的错配。
+      const kind = breaker > Math.max(rest, degrade) ? '熔断'
+        : (degrade > rest ? '连败降权' : (s.cool_kind === 'hard_credit' ? '积分冷却' : '限流冷却'));
+      return { k: 'cooling', label: kind + ' · ' + dur(cool), tone: 'warn', act: 'revive', text: '解冻', need: 0 };
+    }
+    return { k: 'ok', label: '可用', tone: 'ok', act: 'checkin', text: s.checkin_done ? '重新签到' : '签到', need: 0 };
+  }
+
+  /* accNeed 是否「需处理」：失效类状态 **或** 积分低于保底线。
+     刻意不含 paused/cooling——这两个会自己恢复，算进来会让「需处理」永远非零，
+     运维就不看了（告警疲劳）。低积分是这里唯一的非状态判据。 */
+  function accNeed(s, floor) {
+    const st = accState(s);
+    return !!st.need || (s.credits != null && s.credits < Number(floor || 0));
+  }
+
+  /* accRank 排序权重：需处理的最前（0），其余按状态严重度，未知状态垫底（9）。
+     同类内部再由调用方按积分/uid 决定次序，保证同一份数据渲染顺序稳定。 */
+  function accRank(s, floor) {
+    if (accNeed(s, floor)) return 0;
+    const k = accState(s).k;
+    return { relogin: 1, banned: 2, disabled: 3, paused: 4, cooling: 5, ok: 6 }[k] || 9;
+  }
+
   const api = {
     esc, ago, dur, parseAPITime, fmtLocalDateTime,
     fmtK, fmtBytes, fmtTok, fmtMs, fmtRate, trimFixed,
     fmtCredit, fmtCreditRatio, fmtModelRate,
+    fmtCreditWan, accState, accNeed, accRank,
   };
 
   root.WBLogic = api;

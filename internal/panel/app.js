@@ -8,6 +8,7 @@ const LS_KEY = 'wb2api.key', LS_THEME = 'wb2api.theme';
 const {
   esc, ago, dur, parseAPITime, fmtLocalDateTime, fmtK, fmtBytes,
   fmtTok, fmtMs, fmtRate, trimFixed, fmtCredit, fmtCreditRatio, fmtModelRate,
+  fmtCreditWan, accState, accNeed, accRank,
 } = window.WBLogic;
 
 /* lsGet/lsSet：localStorage 安全包装——隐私模式/禁用存储的浏览器直接访问会抛
@@ -389,7 +390,9 @@ function go(v) {
   if (v === 'logs') loadLogs();
   if (v === 'usage') loadUsage();
   if (v === 'packages') loadPackages();
-  if (v === 'accounts') { loadExpiry(); loadTrend(); }
+  // 趋势卡默认折叠且已移到表后：进入视图时不预取（省一次上游查询），
+  // 展开时由 #btnTrend 触发。到期 chip 仍需要数据，故 loadExpiry 保留。
+  if (v === 'accounts') loadExpiry();
   if (v === 'taskscenter') reattachQueueView();
 }
 document.querySelectorAll('.nav a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); history.replaceState(null, '', '#' + a.dataset.view); });
@@ -520,12 +523,20 @@ async function loadOverview(quiet) {
     overviewData = d;
     $('sTotal').textContent = d.total;
     $('sHealthy').textContent = d.healthy;
-    $('sCooling').textContent = d.cooling;
-    $('sDisabled').textContent = d.disabled;
+    // 「需处理」= 失效态 ∪ 低积分，与状态筛选里的同名选项共用 accNeed()。
+    // 两处各写一遍判据，数字必然对不上；这里只算、不另立规则。
+    const floor = d.credit_floor || 0;
+    const pending = (d.accounts || []).filter(a => accNeed(a, floor)).length;
+    $('sPending').textContent = pending;
+    $('statPending').classList.toggle('bad', pending > 0);
+    // 积分 KPI 只显示剩余（原来的「剩余 / 总额」在小格子里挤成两行），
+    // 总额放进 title——需要精确值时悬停即可。
     const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
-  const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
-  $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
-    $('sSticky').textContent = d.sticky_sessions;
+    const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
+    $('sCredits').textContent = fmtCreditWan(remSum);
+    $('sCredits').title = totSum > 0
+      ? '剩余 ' + remSum + ' / 总额 ' + totSum
+      : '剩余 ' + remSum + '（旧数据无总额，或余额尚未查询）';
     $('navSub').textContent = 'v' + d.version;
     $('navVer').textContent = 'v' + d.version;
     $('navRedis').textContent = d.redis_mode === 'upstash' ? 'Redis 镜像' : '本地内存';
@@ -642,13 +653,13 @@ function renderTrend() {
   const fmtV = v => v >= 10000 ? (v / 10000).toFixed(1) + 'w' : String(v);
   box.innerHTML =
     '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" role="img" aria-label="余额趋势">' +
-    '<path d="' + area + '" fill="var(--ok, #3a9)" opacity="0.08"/>' +
-    '<path d="' + path + '" fill="none" stroke="var(--ok, #3a9)" stroke-width="1.6"/>' +
+    '<path d="' + area + '" fill="var(--chart-line)" opacity="0.08"/>' +
+    '<path d="' + path + '" fill="none" stroke="var(--chart-line)" stroke-width="1.6"/>' +
     pts.map((p, i) => {
       // 稀疏采样 hover 点：最多 30 个（隔点抽稀）
       if (pts.length > 30 && i % Math.ceil(pts.length / 30) !== 0) return '';
       const v = fmtV(p.c);
-      return '<circle cx="' + X(p.t).toFixed(1) + '" cy="' + Y(p.c).toFixed(1) + '" r="2.2" fill="var(--ok, #3a9)"><title>' + fmtT(p.t) + ' | 全池 ' + v + ' 分</title></circle>';
+      return '<circle cx="' + X(p.t).toFixed(1) + '" cy="' + Y(p.c).toFixed(1) + '" r="2.2" fill="var(--chart-line)"><title>' + fmtT(p.t) + ' | 全池 ' + v + ' 分</title></circle>';
     }).join('') +
     '</svg>' +
     '<div class="hint" style="margin-top:4px;display:flex;justify-content:space-between;font-variant-numeric:tabular-nums">' +
@@ -3410,16 +3421,52 @@ function renderExpiry(d) {
   $('expNote').textContent = (lastPackagesAt && ageMin > 0)
     ? list.length + ' 个账号 · ' + ageMin + ' 分钟前的数据，可点「检查」刷新'
     : list.length + ' 个账号 · 实时查询上游';
-  $('expBox').hidden = false;
+}
+
+/* expiryRiskText 到期风险 chip 的文案与色调。
+   返回 { text, tone }：tone 决定 chip 的描边/文字色（mute 无风险、warn 7 天内、
+   bad 3 天内）。恒返回文案——chip 一直占位，读屏与布局都不因数据缺失而跳变。 */
+function expiryRiskText(d) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  let batches = 0, credits = 0, worst = Infinity, failed = 0;
+  for (const a of (d && d.accounts) || []) {
+    if (a.error) { failed++; continue; }
+    const soon = expBatches(a.packages).filter(b => {
+      const left = expDaysLeft(b.date, today);
+      return left >= 0 && left <= 7;
+    });
+    if (!soon.length) continue;
+    batches += soon.length;
+    credits += soon.reduce((n, b) => n + b.remain, 0);
+    worst = Math.min(worst, expDaysLeft(soon[0].date, today));
+  }
+  // 全部账号都查询失败时不能说「无到期」——那是在掩盖失败。
+  if (failed && !batches && failed === ((d && d.accounts) || []).length) {
+    return { text: '到期数据读取失败 · 重试', tone: 'mute' };
+  }
+  if (!batches) return { text: '7 天内无到期', tone: 'mute' };
+  return {
+    text: '7 天内到期 ' + batches + ' 批 · ' + fmtTok(credits) + ' 分',
+    tone: worst <= 3 ? 'bad' : 'warn',
+  };
+}
+
+/* renderExpRisk 刷新 chip。数据来自 packages 缓存，不额外发请求。 */
+function renderExpRisk(d) {
+  const chip = $('expRisk');
+  if (!chip) return;
+  const r = expiryRiskText(d);
+  chip.textContent = r.text;
+  chip.dataset.tone = r.tone;
+  chip.hidden = false;
 }
 
 async function loadExpiry(force) {
-  if (!$('expBox')) return;
+  if (!$('expRisk')) return;
   if (expFetching) return;
   const fresh = lastPackages && (Date.now() - lastPackagesAt) < EXP_FRESH_MS;
-  if (fresh && !force) { renderExpiry(lastPackages); return; }
+  if (fresh && !force) { renderExpRisk(lastPackages); return; }
   expFetching = true;
-  $('expBox').hidden = false;
   if (!$('expList').children.length) $('expList').innerHTML = '<div class="empty">查询中…（逐账号向上游实时查询）</div>';
   $('expNote').textContent = '查询中…';
   try {
@@ -3427,12 +3474,41 @@ async function loadExpiry(force) {
     lastPackages = d;                            // 与「积分构成」视图共用同一份缓存
     lastPackagesAt = Date.now();
     renderExpiry(d);
+    renderExpRisk(d);
   } catch (e) {
+    // 失败时 chip 自己说失败，抽屉里也只留错误——原实现会在抽屉里同时留下
+    // 「查询中…」的占位与错误提示，看的人分不清到底在查还是查挂了。
     $('expNote').textContent = '查询失败：' + esc(e.message);
+    $('expList').innerHTML = '<div class="state err">查询失败：' + esc(e.message) + '</div>';
+    const chip = $('expRisk');
+    if (chip) { chip.textContent = '到期数据读取失败 · 重试'; chip.dataset.tone = 'mute'; chip.hidden = false; }
   }
   expFetching = false;
 }
 
 if ($('btnExp')) $('btnExp').onclick = () => loadExpiry(true);
+
+/* 到期 chip 打开抽屉：chip 本身就是入口，不再需要卡片标题。 */
+if ($('expRisk')) {
+  $('expRisk').onclick = () => {
+    showVeil('expVeil');
+    loadExpiry();     // 已缓存则秒开，过期才真查
+  };
+}
+if ($('btnCloseExp')) $('btnCloseExp').onclick = () => hideVeil('expVeil');
+registerVeilCloser('expVeil', () => hideVeil('expVeil'));
+
+/* 趋势默认折叠：首次展开才拉数据——它不影响账号管理，不该在进入页面时
+   就为一个未必看的曲线发请求。 */
+if ($('btnTrend')) {
+  $('btnTrend').onclick = () => {
+    const body = $('trendBody');
+    const open = body.hidden;
+    body.hidden = !open;
+    $('btnTrend').textContent = open ? '收起' : '展开';
+    $('btnTrend').setAttribute('aria-expanded', String(open));
+    if (open && !trendData) loadTrend(true);
+  };
+}
 
 if ($('btnPk')) $('btnPk').onclick = loadPackages;

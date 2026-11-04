@@ -104,4 +104,94 @@ eq(L.ago(sec(90), NOW), '1 分钟前', 'ago 分钟级向下取整');
 eq(L.ago(sec(7200), NOW), '2 小时前', 'ago 小时级');
 eq(L.ago(sec(3 * 86400), NOW), '3 天前', 'ago 天级');
 
+/* ── fmtCreditWan：万/亿简写（KPI 与表格积分列）───────────────────── */
+eq(L.fmtCreditWan(0), '0', 'fmtCreditWan(0) 不能变成空串或破折号');
+eq(L.fmtCreditWan(9999), '9999', 'fmtCreditWan 不足一万按原数字显示');
+eq(L.fmtCreditWan(1e4), '1万', 'fmtCreditWan 一万进位');
+eq(L.fmtCreditWan(105046), '10.5万', 'fmtCreditWan 十万级保留一位小数');
+eq(L.fmtCreditWan(1e8), '1亿', 'fmtCreditWan 一亿进位');
+eq(L.fmtCreditWan(null), '0', 'fmtCreditWan(null)：Number(null)=0，与旧的积分口径一致');
+eq(L.fmtCreditWan(-1), '—', '负积分是数据异常，不能显示成 "-1万"');
+eq(L.fmtCreditWan('abc'), '—', '非数字返回破折号');
+
+/* ── accState：六态状态机（唯一来源，表格/KPI/批量共用）────────────── */
+/* 固定的"现在"：时间相关的判据（冷却剩余、熔断到期）全部相对它计算，
+   否则用例会随运行时刻漂移。 */
+const T = Date.parse('2026-10-25T12:00:00Z');
+const iso = ms => new Date(ms).toISOString();
+
+/* 1. 可用：无任何失效标记 → 主操作签到 */
+let st = L.accState({ checkin_done: false }, T);
+eq(st.k, 'ok', 'accState 干净账号为 ok');
+eq(st.text, '签到', 'accState ok 未签到 → 签到');
+eq(st.need, 0, 'accState ok 不计入需处理');
+/* 今日已签到时按钮必须是动词「重新签到」——旧实现用「已签」当按钮文案，
+   那是状态而非动作，与徽章的"可用"语义重复。 */
+eq(L.accState({ checkin_done: true }, T).text, '重新签到', 'accState ok 已签到 → 重新签到（仍为动词）');
+
+/* 2. 待重登：disabled + session_dead → 重走 OAuth */
+st = L.accState({ disabled: true, dead_kind: 'session_dead' }, T);
+eq(st.k, 'relogin', 'accState session_dead 优先于普通 disabled');
+eq(st.act, 'relogin', 'accState session_dead 主操作是重登');
+eq(st.need, 1, 'accState session_dead 计入需处理');
+
+/* 3. 上游封号：disabled + banned → 只查看详情，**不给重登入口** */
+st = L.accState({ disabled: true, dead_kind: 'banned' }, T);
+eq(st.k, 'banned', 'accState banned 与 session_dead 必须分开');
+eq(st.act, 'detail', 'accState banned 主操作是查看详情');
+eq(st.text.trim(), '查看详情', 'accState banned 不出现「重新登录」（重登只会再失败一次）');
+
+/* 4. 已禁用：disabled 但 dead_kind 为空 → 解冻 */
+st = L.accState({ disabled: true }, T);
+eq(st.k, 'disabled', 'accState 无 dead_kind 的 disabled 是普通已禁用');
+eq(st.act, 'revive', 'accState 普通禁用主操作是解冻');
+
+/* 5. 已暂停选号：paused 优先于冷却 */
+st = L.accState({ paused: true, cool_remaining_sec: 60 }, T);
+eq(st.k, 'paused', 'accState paused + cooling 时 paused 优先（用户显式意图更高）');
+eq(st.need, 0, 'accState paused 不计入需处理（会自己恢复）');
+
+/* 6. 冷却：按剩余时长最长者命名来源 */
+st = L.accState({ cool_remaining_sec: 720, cool_kind: 'hard_credit' }, T);
+eq(st.k, 'cooling', 'accState cool_remaining_sec > 0 为冷却');
+eq(st.label, '积分冷却 · 12分00秒', 'accState 冷却文案带来源与剩余时长');
+eq(st.need, 0, 'accState cooling 不计入需处理');
+
+/* 熔断与降权：breaker_until / degrade_until 剩余更长时，来源名必须跟着变——
+   否则会出现"cool 由熔断撑起、文案写限流冷却"的错配。
+   注意 dur() 的口径：≥1 小时只报时分（"1时00分"），<1 小时报分秒（"30分00秒"）。 */
+eq(L.accState({ cool_remaining_sec: 60, breaker_until: iso(T + 3600e3) }, T).label,
+  '熔断 · 1时00分', 'accState breaker_until 更久时来源为熔断');
+eq(L.accState({ cool_remaining_sec: 60, degrade_until: iso(T + 1800e3) }, T).label,
+  '连败降权 · 30分00秒', 'accState degrade_until 更久时来源为连败降权');
+
+/* 7. 已过期的失效时间不算冷却：Go 零值时间与过去时刻都必须落回 ok */
+eq(L.accState({ breaker_until: '0001-01-01T00:00:00Z' }, T).k, 'ok', 'Go 零值 breaker_until 不算冷却');
+eq(L.accState({ degrade_until: iso(T - 60e3) }, T).k, 'ok', '已过去的 degrade_until 不算冷却');
+
+/* ── accNeed：需处理 = 失效态 ∪ 低积分 ────────────────────────────── */
+const FLOOR = 150;
+eq(L.accNeed({}, FLOOR), false, 'accNeed 正常号且积分充足 → 否');
+eq(L.accNeed({ credits: 100 }, FLOOR), true, 'accNeed 积分低于保底线 → 是');
+eq(L.accNeed({ credits: 150 }, FLOOR), false, 'accNeed 积分恰等于保底线 → 否（不含等号）');
+eq(L.accNeed({ credits: 0 }, FLOOR), true, 'accNeed 积分 0 必须计入（falsy 判定会漏）');
+eq(L.accNeed({ credits: null }, FLOOR), false, 'accNeed 积分未知不计入（不能凭空告警）');
+eq(L.accNeed({ credits: 1 }, 0), false, 'accNeed 保底线为 0 时低积分不成立');
+eq(L.accNeed({ paused: true, credits: 99999 }, FLOOR), false, 'accNeed paused 高积分不计入');
+eq(L.accNeed({ cool_remaining_sec: 60, credits: 99999 }, FLOOR), false, 'accNeed cooling 高积分不计入');
+eq(L.accNeed({ disabled: true, dead_kind: 'banned' }, FLOOR), true, 'accNeed 封号计入');
+
+/* ── accRank：排序权重（需处理的最前，ok 最后）──────────────────────── */
+/* 口径说明：accRank 只回答「属于哪一档」，**所有需处理项同为 0**——它们之间的
+   先后由调用方按积分、再按 uid 做次级排序（renderAccountView 的 sort 链）。
+   因此这里断言的是「同一档内数字相等」，而不是 relogin(1) > banned(2) 那种分级：
+   那套 map 只在**不需要处理**的项之间生效（paused/cooling/ok）。 */
+eq(L.accRank({ credits: 10 }, FLOOR), 0, 'accRank 低积分排最前');
+eq(L.accRank({ disabled: true, dead_kind: 'session_dead' }, FLOOR), 0, 'accRank 待重登同属需处理档');
+eq(L.accRank({ disabled: true, dead_kind: 'banned' }, FLOOR), 0, 'accRank 封号同属需处理档');
+eq(L.accRank({ disabled: true }, FLOOR), 0, 'accRank 已禁用同属需处理档');
+eq(L.accRank({ paused: true }, FLOOR), 4, 'accRank 已暂停（不需处理，按状态分级）');
+eq(L.accRank({ cool_remaining_sec: 60 }, FLOOR), 5, 'accRank 冷却');
+eq(L.accRank({ credits: 99999 }, FLOOR), 6, 'accRank 可用垫后');
+
 console.log('logic_test.js: ' + n + ' assertions passed');
