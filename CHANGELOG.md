@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### 安全
+
+- **不安全绑定下的写保护**：监听地址非回环（`:8787` / `0.0.0.0` 等）且未设置 `api_key` 时，非幂等方法（POST/PUT/PATCH/DELETE）一律 405，只读方法放行——局域网内面板可见但改不了，/v1 调用必须配 key；回环自用与已设 key 场景行为不变（`cmd/server/insecure_write_guard.go`）。
+- **Go 工具链升级**：`go.mod` 的 go directive 1.22.5 → 1.27.0（1.22 已出安全支持窗口；CI setup-go 走 `go-version-file` 自动跟随）。
+
 ## [1.19.2-panel] - 2026-11-04
 
 本版为**账号池界面重构版**：把「账号池」从一张被 analytics 卡片挤出首屏、在 1440 就横向

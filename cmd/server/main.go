@@ -434,7 +434,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           h,
+		Handler:           insecureWriteGuard(cfg.Listen, cfg.APIKey, h),
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout 覆盖整个请求读取（含 body 上传）：防慢速 body 拖死连接。
 		// 请求体缺省无网关侧上限（server.max_body_mb 缺省 0；显式 >0 时由 handler

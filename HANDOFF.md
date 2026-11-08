@@ -67,6 +67,7 @@ data/backups/          备份输出（同上）
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
 ## 4. 最近一轮变更与交付成果（账号池界面重构 → 1.19.2-panel，2026-11-04）
+- **2026-11-08（未发版）**：安全与工程健康批次——①非回环绑定+空 api_key 时写操作 405（insecure_write_guard.go，回环自用不变）；②go.mod 升 1.27.0（CI go-version-file 自动跟随）；③.gitleaks/gitleaks workflow 新增；④.gitignore 白名单补 !AGENTS.md。Go build/vet/关键包测试全绿。
 
 > 详细记录见 `CHANGELOG.md` 的 `[Unreleased]` 段。**本轮不动 `appVersion`**（源码版本仍
 > `1.19.1-panel`），但产出了实质前端改动并已部署到 B 机生产。
