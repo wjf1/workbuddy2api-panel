@@ -12,7 +12,7 @@
 <p align="center"><b>English</b>: A multi-account gateway that turns Tencent CodeBuddy (WorkBuddy) accounts into an OpenAI-compatible API, with a built-in web panel — account pool rotation, OAuth login, scheduled check-in / keep-alive, one-click growth tasks, soft-delete recycle bin, account tags, balance alerts and daily backups. It also speaks the <b>Anthropic Messages API</b> (<code>/v1/messages</code>) for Claude Code / ZCode, including a gateway-side <code>web_search</code> server tool that returns <code>server_tool_use</code> / <code>web_search_tool_result</code> blocks, and accepts mid-conversation <code>system</code> messages sent inside the <code>messages</code> array. Upstream free-tier queueing (error codes <code>6020</code>/<code>6021</code>) is treated as an upstream-wide condition rather than account rate limiting: rotation fails fast, no account is penalized, and the panel shows a dedicated "upstream queue busy" banner. Since <b>v1.16.0</b>, session-dead accounts are grouped with a one-click re-login flow (reusing the device OAuth flow), mass session-kill events trigger a banner + webhook alert, every RT rotation is audited with out-of-process double-spend detection, the <code>auths/</code> directory is guarded by a cross-host lease lock, scheduled keep-alive tasks are jittered to avoid burst fingerprints, and a smart keep-alive mode only refreshes tokens nearing expiry. Since <b>v1.19.1</b>, tool schemas that use <code>$ref</code>/<code>$defs</code> (the compressed form emitted by MCP clients such as ZCode) are dereferenced and inlined before being sent upstream — the upstream validator flattens tool schemas without resolving <code>$ref</code> and rejects such requests with <code>400 code=11133</code>; measured side-by-side, keeping <code>$ref</code> returns 400 while inlining returns 200, independent of the model. Only local references are resolved, cyclic references are left intact, and a 16-level depth cap prevents unbounded expansion. See <a href="#核心能力">核心能力</a> below (docs in Chinese).</p>
 
 <p align="center">
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.22.5-00ADD8?logo=go&logoColor=white&style=flat-square">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=white&style=flat-square">
   <img alt="API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square">
   <img alt="Deploy" src="https://img.shields.io/badge/Deploy-Single_Binary%20%7C%20Docker-2496ED?style=flat-square">
   <img alt="Transport" src="https://img.shields.io/badge/Transport-SSE%20%2F%20Streaming-0DBD8B?style=flat-square">
@@ -240,7 +240,7 @@ flowchart LR
 - **Docker + Docker Compose**（服务端部署方式，镜像内已含低权限用户与全部工具脚本）——或
 - **Windows / macOS / Linux 直接跑单文件二进制**（无需 Docker，见下方「Windows 单文件运行」）
 - 一个或多个已注册的 CodeBuddy 账号，用于 OAuth 登录
-- 宿主机 Go ≥ 1.22（仅从源码构建时需要）
+- 宿主机 Go ≥ 1.27（仅从源码构建时需要，与 `go.mod` 的 go directive 对齐）
 
 ### 方式〇：GHCR 镜像（免克隆免构建）
 
@@ -766,7 +766,7 @@ http://127.0.0.1:7863/panel/
 
 ### Docker 镜像
 
-多阶段镜像（`golang:1.23-alpine` 构建 → `alpine:3.20` 运行）一次编译全部四个二进制并随镜像分发：
+多阶段镜像（`golang:1.27-alpine` 构建 → `alpine:3.20` 运行）一次编译全部四个二进制并随镜像分发：
 
 - **wb2api**（主服务）、**signin_bin**、**login**、**credit** + 脚本（`login.sh` / `signin.sh` / `credit.sh` / `scripts/probe_active.py`）
 - 以 `app` 用户（uid 10001）运行，`app/auths` 与 `app/data` 预建

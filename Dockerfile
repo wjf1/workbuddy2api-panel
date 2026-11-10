@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.23-alpine AS build
+# go 版本必须 >= go.mod 的 go directive，否则 `go mod download` 直接失败
+# （GOTOOLCHAIN=local，不会自动下载新工具链）。升级 go.mod 时同步改这里。
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 RUN go mod download
