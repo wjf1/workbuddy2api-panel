@@ -431,6 +431,9 @@ func (h *Handler) messagesAnthropic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pr := h.runOpenAIPass(r.Context(), r, body)
+	// 空截断救援：预算被思考吃光（正文 0B / finish=length）时同额度关思考重发一次。
+	// 救援失败按原结果返回，行为与接线前一致。
+	pr, _ = h.tryStarvedRescue(r, body, pr)
 	writeAnthropicFromPass(w, req.Model, pr)
 }
 

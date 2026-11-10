@@ -383,5 +383,8 @@ func (h *Handler) responses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pr := h.runOpenAIPass(r.Context(), r, body)
+	// 空截断救援（同 /v1/messages 非流式）：Codex CLI 这类客户端给偏小预算时
+	// 思考会独吞额度，表现为「空回复」；关思考重发一次把预算还给正文。
+	pr, _ = h.tryStarvedRescue(r, body, pr)
 	writeResponsesFromPass(w, req.Model, pr)
 }

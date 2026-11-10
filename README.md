@@ -79,6 +79,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 📊 **可观测** | 每请求一行表格日志（TTFB / token 速率 / uid）；`/healthz` 带 `service` 身份标识可接负载均衡 / 宿主探活；可选诊断监听 `server.debug_addr`（pprof + 低基数 `/metrics`，**独立端口**，默认关闭）；上游 `requestId` 与本地上游流水同列落台账 |
 | 🧹 **出站瘦身（1.19.0）** | `features.strip_tool_metadata`：剥除 tool-call 块里的 `metaData`（traceId / traceparent / baggage 等纯观测字段），长对话可省数十 KB 上下文；默认 `false` = 报文逐字节不变 |
 | 🧩 **MCP schema 兼容（1.19.1）** | 解引用 tools JSON Schema 里的 `$ref`/`$defs` 并内联展开、删除定义块。上游对 `tools[].function.parameters` 做扁平化校验、不解析 `$ref`，MCP 类客户端（ZCode 等）的压缩式工具定义会整体触发 400 code=11133；实测保留 `$ref` 返 400、内联后 200，与模型无关。仅解本地引用（远程 `$ref` 不拉）、循环引用保留原样、16 层深度硬上限、无 `$defs` 时报文逐字节不变 |
+| 💊 **空回复救援** | 上游把 reasoning 与正文算在**同一** `max_tokens` 预算里，思考会独吞额度导致「正文 0 字节 + `finish=length`」的空回复（实测 `max_tokens` 100~300 全空）。网关检测到「额度耗尽但零产出」时**同额度关掉思考重发一次**，把预算还给正文；不放大客户端额度、每请求最多一次、失败即按原结果返回。仅 deepseek 系模型（其余模型上游不支持关思考），非流式路径生效 |
 | 🛡️ **风控连坐保护** | 上游把「账号异常行为」（403 / 11140）判在**设备与出口**上而非单个账号——命中后继续换号只会把下一个号也送进去（同类项目实测过一次任务 7 个号全封）。本网关命中即就地停手，且 15 分钟窗内 ≥2 个不同账号被限就**暂停全池派发**（503 + `Retry-After`），不再拿账号去试；`upstream.restriction_hold_seconds` 配 0 可关闭全池暂停 |
 | 🔒 **不安全绑定写保护（1.19.3）** | 监听非回环地址（`:7863` / `0.0.0.0`）且 `api_key` 为空时，写方法（POST/PUT/PATCH/DELETE）一律 405 并带 `Allow: GET, HEAD, OPTIONS`，只读方法放行——忘了配 key 也不会被局域网/公网经 `/v1` 白嫖账号、经 `/panel/api` 增删账号。配了 `api_key` 或监听回环时守卫完全旁路，零行为变更 |
 | 💾 **状态持久化** | 池状态本地原子落盘 + Upstash Redis 异步镜像（可选），重启择新恢复 |

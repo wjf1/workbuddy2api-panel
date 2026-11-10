@@ -126,12 +126,22 @@ git show <sha> -- <相关文件>              # 再看具体实现
 | 序 | 项 | 说明 |
 |---|---|---|
 | R2-1 | ~~`responses.go`~~ ✅ **已完成 2026-11-10** | `POST /v1/responses` 复用 chat 主链路；13 例测试 + 真实上游端到端（非流式/流式各验） |
-| R2-2 | **续写救援四件套** | `starved` + `continue` + `narration` + `toolonly`。**有依赖关系，必须一起做**，否则会出现「救了这个那个又断」 |
+| R2-2 | **续写救援**（部分完成） | ✅ `starved`（非流式路径，2026-11-10 完成，10 例测试 + 真实上游验证）<br>⬜ `continue` / `narration` / `toolonly`（需读取器级改造，见下） |
 
 **R2-2 背景**：本仓 1.19.3 部署验收时实测到 `content='' / finish=length` /
 `reasoning` 吃满预算。当时判断为 `max_tokens` 过小，但上游这四个文件说明
 **这是系统性上游行为**，对 Codex / Claude Code 这类连续执行任务的客户端是致命的
 （工具调用被吞 → agent 断在那里）。
+
+**R2-2 施工判断（2026-11-10）**：四件套中 `continue`（784 行）/ `narration` /
+`toolonly` 全部挂在参照上游的 `continueReader` 上——那是一个把多段上游流拼接成
+单条客户端可见 SSE 的读取器，本仓的流式路径没有该结构，整体移植等于重写流式层，
+风险与收益不成比例。因此本轮**只做 `starved`**（独立性强、走非流式聚合路径、
+不触碰流式管线），并对它做了更严格的安全边界（每请求一次 / 失败即原结果 /
+额度不放大 / 只认 deepseek 系）。
+
+后续若要做流式续写，建议按「先建 `continueReader` 等价物 → 再接四件套」分两步，
+而不是直接抄四件套（它们没有单独可用的形态）。
 
 ### R3 运维手感
 
@@ -175,4 +185,5 @@ git show <sha> -- <相关文件>              # 再看具体实现
 |---|---|---|---|
 | 2026-11-10 | `misakano7545/internal/server/restrict.go` | `internal/server/restrict.go` + `upstream.IsRestrictionMarker` | **R1-1 完成**：命中即停手 + 窗内 2 号被限暂停全池；配置 `upstream.restriction_hold_seconds`（默认 1800，0=关闭）；8 例行为钉子 |
 | 2026-11-10 | `misakano7545/internal/jsonscan/` | `internal/jsonscan/`（整包移植 + 等价性钉子 + 基准） | **R1-2 完成**：接入 `session.ResolveConversationID` 与 `upstream.InjectPromptCacheKey` 快路径。实测 200KB body：**5.7μs vs 195μs（34 倍）**，单请求省 ~190μs；未命中/畸形 body 回落整树解析，语义零变化 |
+| 2026-11-10 | `misakano7545/internal/server/starved.go` | `internal/server/starved.go` | **R2-2（部分）完成**：思考吃光预算的救援重发。仅非流式路径；安全边界比参照更严（每请求一次、失败即原结果、额度不放大、仅 deepseek 系）。真实上游验证 100/200/400/800 全部救回 |
 | 2026-11-10 | `misakano7545/internal/server/responses.go` | `internal/server/responses.go` + `responses_response.go` | **R2-1 完成**：`POST /v1/responses` 适配层。与 Anthropic 层同构（转换型 ResponseWriter 复用 chatCompletions，不复制调度）。支持 input 字符串/数组、instructions、function_call 历史项、内置工具剥离、流式具名事件。13 例测试 + 真实上游端到端（非流式 `text='正常'`、流式 12 事件顺序合规）。**本仓实现比参照更简洁**（参照 1763 行含工具/续写联动，本仓先做协议正确性子集） |

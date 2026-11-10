@@ -37,6 +37,32 @@
     `object=response` / `status=completed` / `text='正常'` / usage 三字段正确；
     流式 12 个事件、顺序合规、拼接文本正确、`[DONE]` 收尾。
 
+### 修复
+
+- **「思考吃光输出预算」导致的空回复（`internal/server/starved.go`）**：上游把
+  reasoning 与正文字节算在**同一个** `max_tokens` 预算里，思考没有独立上限。客户端给
+  偏小的预算时，思考独吞整份额度 → `finish_reason=length`、正文零字节、无 tool_calls，
+  客户端看到「空回复」。本机实测（`cn:deepseek-v4.1-flash`）：`max_tokens` 100/200/300
+  时正文全空，400 起时好时坏。
+  - 救援动作 = **同一份额度、关掉思考重发一次**（`thinking.type=disabled` 并删掉
+    `reasoning_effort`）。不放大客户端要的额度——超发是对客户端的语义违约，也会形成
+    新的可判别形态；只把预算从思考手里拿回来。
+  - 触发条件三条同时成立才救：`finish_reason` 为 `length` 或「思考完直接 stop」、
+    正文为空、无 tool_calls。**有正文的截断是客户端额度语义的正常结果，不救**；
+    有 tool_calls 的合法工具轮不救；`finish=stop` 且无思考（上游真给空回复）不救。
+  - 安全边界：每请求最多重发一次；救援失败按**原结果**返回（不救援时行为与接线前
+    完全一致）；`max_tokens < 16` 不救（key 探活场景）；只对 `deepseek` 系模型改写
+    （其余模型上游不支持 `thinking.type=disabled` 关思考，不猜别的手段）；已
+    `disabled` 的不救（成因不在思考，避免无限重发）。
+  - 接入：`/v1/messages` 与 `/v1/responses` 的**非流式**分支。流式多段续写
+    （`continue` / `narration` / `toolonly`）涉及读取器级改造，风险高，不在本轮范围
+    （见 `docs/UPSTREAM-ALIGNMENT.md`）。
+  - 真实上游验证：`max_tokens` 100/200/400/800 全部由「空回复+length」变为
+    `content='OK'` + `finish=stop`；`max_tokens=32` 仍空（物理限制，正确行为——32 token
+    即使关思考也写不出内容）。
+  - 测试：`starved_test.go` 10 例（两类成因识别 / 5 种不该救的形态 / 改写正确性 /
+    已 disabled 不重发 / 极小额度 / 非 deepseek / 畸形 body / 三别名 / 开关判断）。
+
 ### 安全
 
 - **11140 风控连坐保护**（`internal/server/restrict.go`）：上游把「账号存在异常行为」
