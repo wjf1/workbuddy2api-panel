@@ -79,6 +79,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 📊 **可观测** | 每请求一行表格日志（TTFB / token 速率 / uid）；`/healthz` 带 `service` 身份标识可接负载均衡 / 宿主探活；可选诊断监听 `server.debug_addr`（pprof + 低基数 `/metrics`，**独立端口**，默认关闭）；上游 `requestId` 与本地上游流水同列落台账 |
 | 🧹 **出站瘦身（1.19.0）** | `features.strip_tool_metadata`：剥除 tool-call 块里的 `metaData`（traceId / traceparent / baggage 等纯观测字段），长对话可省数十 KB 上下文；默认 `false` = 报文逐字节不变 |
 | 🧩 **MCP schema 兼容（1.19.1）** | 解引用 tools JSON Schema 里的 `$ref`/`$defs` 并内联展开、删除定义块。上游对 `tools[].function.parameters` 做扁平化校验、不解析 `$ref`，MCP 类客户端（ZCode 等）的压缩式工具定义会整体触发 400 code=11133；实测保留 `$ref` 返 400、内联后 200，与模型无关。仅解本地引用（远程 `$ref` 不拉）、循环引用保留原样、16 层深度硬上限、无 `$defs` 时报文逐字节不变 |
+| 🔒 **不安全绑定写保护（1.19.3）** | 监听非回环地址（`:7863` / `0.0.0.0`）且 `api_key` 为空时，写方法（POST/PUT/PATCH/DELETE）一律 405 并带 `Allow: GET, HEAD, OPTIONS`，只读方法放行——忘了配 key 也不会被局域网/公网经 `/v1` 白嫖账号、经 `/panel/api` 增删账号。配了 `api_key` 或监听回环时守卫完全旁路，零行为变更 |
 | 💾 **状态持久化** | 池状态本地原子落盘 + Upstash Redis 异步镜像（可选），重启择新恢复 |
 | ♻️ **回收站与定时备份** | 「移除账号」软删除进 `data/trash/`（默认保留 30 天，可恢复 / 彻底删除 / 过期自动清理）；每日整点自动备份 `auths/` + 池状态为 zip（保留 N 份轮转，**不含 config.json**），面板内可手动备份与下载 |
 | 📈 **余额趋势与会员档位（1.17.0）** | 账号池「余额趋势」box：全池积分总和按小时采样 SVG 曲线（30 天窗口，观察「号在不在被薅」与消耗速率）；账号行昵称旁显示会员档位胶囊（计费摘要一天一次，失败不写结论） |
@@ -401,8 +402,8 @@ curl -sN http://localhost:7863/v1/messages \
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `listen` | `:7863` | HTTP 监听地址 |
-| `api_key` | 空 | 网关鉴权密钥；**空 = 不鉴权直接放行**（公网必须设置） |
+| `listen` | `:7863` | HTTP 监听地址。`:7863` 等价于 `0.0.0.0:7863`（全部网卡）；本机自用建议改 `127.0.0.1:7863` 收紧暴露面 |
+| `api_key` | 空 | 网关鉴权密钥；**空 + 回环监听 = 不鉴权直接放行**（本机自用）。**空 + 非回环监听**（`:7863` / `0.0.0.0:7863`）= 只读模式：写方法（POST/PUT/PATCH/DELETE）一律 405，只读方法放行（v1.19.3 起）。公网 / 局域网部署必须设置 |
 | `auth_dir` | `./auths` | 账号凭证目录 |
 | `state_file` | `./data/state.json` | 账号池状态持久化文件 |
 | `server.read_timeout` | `300s` | 入站请求读取（含 body 上传）总时长上限；大上下文/文件块经反代转发超时会 400 `read body: i/o timeout`；`0` = 不限制；改动需重启（#100） |
@@ -831,6 +832,7 @@ python3 scripts/probe_max_tokens.py   --base http://127.0.0.1:7863/v1 --key sk-x
 ### 2. 网络暴露与日志敏感度
 
 - 默认监听 `:7863`，compose 暴露 `0.0.0.0:7863`，**无内置 TLS**；公网部署必须设置 `api_key`，建议前置反代 / 内网
+- **写保护兜底（v1.19.3 起）**：`listen` 为非回环地址且 `api_key` 为空时，非幂等方法（POST/PUT/PATCH/DELETE）一律 405 并带 `Allow: GET, HEAD, OPTIONS`——即使忘了配 key，局域网/公网也无法经 `/v1` 消耗账号或经 `/panel/api` 增删账号。设 `api_key` 后守卫完全旁路；`listen` 为 `127.0.0.1` / `localhost` / `::1` 时不受影响（本机自用零配置照旧）
 - 请求日志字段：序号 / 模型 / 模式 / 状态码 / **uid 前 8 位** / TTFB / token 数——**不含** `accessToken` / `refreshToken` / `api_key` 明文（不读取 `Authorization` 头）
 - 日志写 **stdout / stderr**（容器内进入 `docker logs`），代码无任何落盘日志文件
 

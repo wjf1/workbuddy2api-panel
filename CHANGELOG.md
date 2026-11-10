@@ -6,10 +6,30 @@
 
 ## [Unreleased]
 
+## [1.19.3-panel] - 2026-11-10
+
+本版为**不安全绑定写保护版**：堵上「监听面暴露 + 未配 api_key」时局域网任意客户端可经
+`/v1` 消耗账号积分、经 `/panel/api` 增删账号的缺口。**零 API 形状变更、零新增依赖**；
+回环自用与已配 `api_key` 的部署行为完全不变（现有生产实例均属后者，升级无行为变化）。
+
 ### 安全
 
-- **不安全绑定下的写保护**：监听地址非回环（`:8787` / `0.0.0.0` 等）且未设置 `api_key` 时，非幂等方法（POST/PUT/PATCH/DELETE）一律 405，只读方法放行——局域网内面板可见但改不了，/v1 调用必须配 key；回环自用与已设 key 场景行为不变（`cmd/server/insecure_write_guard.go`）。
+- **不安全绑定下的写保护**（`cmd/server/insecure_write_guard.go`）：监听地址**非回环**（`:8787` / `0.0.0.0:7863` 等）且 `api_key` 为空时，非幂等方法（POST/PUT/PATCH/DELETE）一律返回 **405** 并带 `Allow: GET, HEAD, OPTIONS`，正文提示设置 `api_key`；只读方法（GET/HEAD/OPTIONS）照常放行——局域网内面板可见、可看数据，但改不了，`/v1` 调用必须配 key。
+  - 判定口径：`listen` 的 host 段为 `127.0.0.1` / `localhost` / `::1` / `[::1]` 视为回环，其余（含空 host 段的 `:7863`）视为非回环；`api_key` 仅含空白字符视同未设置。
+  - `api_key` 一旦设置，守卫**完全旁路**，鉴权交回既有 `httpauth`（行为不变）。
+  - 挂载点：`cmd/server/main.go` 的 `http.Server.Handler` 外层，先于路由与鉴权中间件生效。
 - **Go 工具链升级**：`go.mod` 的 go directive 1.22.5 → 1.27.0（1.22 已出安全支持窗口；CI setup-go 走 `go-version-file` 自动跟随）。
+
+### 新增
+
+- **测试**：`cmd/server/insecure_write_guard_test.go` 新增 15 例行为钉子——回环四态（`127.0.0.1` / `localhost` / `[::1]` / `::1`）写方法放行、非回环四态（`:7863` / `:8787` / `0.0.0.0:8787`）写方法 405、只读三方法放行、空白 key 等价未设置、已配 key 时守卫旁路；并断言 405 响应的 `Allow` 头与提示正文。
+- **CI**：新增 `.github/workflows/gitleaks.yml`（push / PR / 每周一定时扫描），防凭据误提交。
+
+### 变更
+
+- 版本号 `1.19.2-panel` → `1.19.3-panel`（`cmd/server/main.go` 的 `appVersion`）。
+- `.gitignore` 白名单补 `!AGENTS.md`（根级 `AGENTS.md` 已强制跟踪入库）。
+- 新增根级 `AGENTS.md`（项目级代理上下文：构建 / 测试命令、代码风格、发布纪律）。
 
 ## [1.19.2-panel] - 2026-11-04
 
