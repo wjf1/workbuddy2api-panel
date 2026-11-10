@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [1.20.0-panel] - 2026-11-10
+
+**本版为上游对齐版**：原上游 `linguo2625469/workbuddy2api-panel` 已于 2026-10-21
+停止维护，本仓无可合并上游。自本版起把 `misakano7545/workbuddy2api-panel`
+作为**事实上的参照上游**（变动情报源 + 可借鉴实现），路线与 commit 归因表见
+`docs/UPSTREAM-ALIGNMENT.md`。本轮完成 R1（安全底线）、R2（能力补齐）、
+R3（运维手感）三阶段中的 5 项，2 项按文档标记延后。
+
 ### 新增
 
 - **OpenAI Responses API 兼容层**（`POST /v1/responses`，`internal/server/responses.go`
