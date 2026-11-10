@@ -43,6 +43,13 @@ type Config struct {
 		// 关掉。关闭后 Event.ClientIP/UserAgent 保持为空，归档里不出现该字段。
 		// 热生效（经 livecfg 快照），无需重启。
 		RequestClientInfo bool `json:"request_client_info"`
+		// AdminAuditPath 管理操作审计日志路径（JSONL 追加写）。空 = 不审计。
+		//
+		// 与 request_archive（推理请求流水）是两件事：审计记的是**管理写操作**
+		// （补跑排程、改配置、增删账号），用于事后追责「谁用什么 key 干了什么」。
+		// 只落 key 的 sha256 前 4 字节指纹，不可还原原文。
+		// 缺省关闭（空串）——开启需显式配路径，零行为变更。
+		AdminAuditPath string `json:"admin_audit_path"`
 	} `json:"logging"`
 
 	Server struct {

@@ -41,6 +41,12 @@ type Config struct {
 
 	// StickyCount 返回当前粘性会话绑定数（供 /status）；nil 时报告 0。
 	StickyCount func() int
+	// Audit 管理操作审计（nil = 不审计，零行为变更）。
+	Audit *AuditLog
+	// Tasks 手动补跑排程（/admin/tasks/*）；nil 时该组端点回 503。
+	// 闭包注入而非直接依赖 *scheduler.Scheduler：保持 server 与 scheduler 解耦
+	// （与 GetKeepaliveStats / StickyCount 同模式）。
+	Tasks TaskRunner
 	// RedisMode 观测字段（"upstash" / "noop"），供 /status 透出。
 	RedisMode    string
 	SoftCooldown time.Duration // 429/限流文案软冷却基数，默认 600s（连续触发指数退避，封顶 soft_rate_max）
@@ -237,6 +243,11 @@ func NewHandler(cfg Config) *Handler {
 	// OpenAI Responses API（Codex CLI 等）：与 /v1/messages 同构的适配层，
 	// 复用 chatCompletions 管线，不产生第二套调度逻辑（见 responses.go）。
 	h.mux.HandleFunc("POST /v1/responses", h.withAuth(h.responses))
+	// 手动补跑排程（运维用）：排程按整点跑，错过一次不必等下一个整点。
+	h.mux.HandleFunc("GET /admin/tasks", h.withAuth(h.adminTasksList))
+	// 补跑是写操作（会打上游、有副作用），挂审计。
+	h.mux.HandleFunc("POST /admin/tasks/{name}/run",
+		h.withAuth(h.audit("task.run", auditPathValue("name"), h.adminTaskRun)))
 	h.mux.HandleFunc("POST /v1/messages/count_tokens", h.withAuth(h.countTokensAnthropic))
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向

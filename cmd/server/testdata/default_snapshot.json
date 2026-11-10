@@ -10,7 +10,8 @@
     "request_archive_enabled": true,
     "request_retention_days": 7,
     "request_archive_max_mb": 100,
-    "request_client_info": true
+    "request_client_info": true,
+    "admin_audit_path": ""
   },
   "server": {
     "read_timeout": "300s",

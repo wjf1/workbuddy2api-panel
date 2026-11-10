@@ -37,6 +37,29 @@
     `object=response` / `status=completed` / `text='正常'` / usage 三字段正确；
     流式 12 个事件、顺序合规、拼接文本正确、`[DONE]` 收尾。
 
+### 新增
+
+- **手动补跑排程**（`POST /admin/tasks/{name}/run`、`GET /admin/tasks`，
+  `internal/server/admin_tasks.go`）：排程按整点跑，错过一次（进程重启、机器休眠、
+  上游临时故障）就得等下一个整点。本端点让你立刻补跑一次，不必改配置或重启。
+  - 支持 6 个任务：`checkin` / `activity` / `keepalive` / `travel` / `blackcat` / `streak`。
+  - `POST` 立即回 **202**，任务在后台 goroutine 执行（补跑可能持续数分钟，不等）。
+  - 同一任务并发触发回 **409**（避免重复打上游、签到类任务重复执行有副作用）。
+  - 未知任务名回 404 并**列出全部已知任务**（运维不必翻源码猜）。
+  - 后台 panic 被 recover 兜住并释放任务锁——否则一次补跑炸掉会带走整个进程，
+    且锁不释放会让该任务永久 409。
+  - `GET /admin/tasks` 列出任务与运行态，便于脚本先查再打。
+- **管理操作审计**（`logging.admin_audit_path`，`internal/server/admin_audit.go`）：
+  把管理写操作追加一行 JSONL，用于事后追责「谁在什么时候用哪把 key 干了什么、成没成」。
+  - 与 `request_archive`（推理请求流水）是两个维度：后者记用量与耗时，本项记管理操作。
+  - **缺省关闭**（空串 = 不启用，零行为变更）；开启只需配一个路径。
+  - 只落 key 的 **sha256 前 4 字节指纹**，不可还原原文——审计文件常被收集备份，
+    落明文等于把凭据泄漏到日志里。
+  - **写失败不让请求失败**：审计是旁路，磁盘满/权限错只记日志，业务照常生效。
+  - 挂在鉴权之内，匿名请求不落盘。
+  - 已接入 `POST /admin/tasks/{name}/run`；可选 `reason` 字段（运维备注）会被记录，
+    且请求体在 peek 后被完整恢复给下游。
+
 ### 修复
 
 - **「思考吃光输出预算」导致的空回复（`internal/server/starved.go`）**：上游把

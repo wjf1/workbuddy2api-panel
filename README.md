@@ -419,6 +419,7 @@ curl -sN http://localhost:7863/v1/messages \
 | `logging.request_retention_days` | `7` | 请求归档保留天数；超期文件在启动和周期清理时删除 |
 | `logging.request_archive_max_mb` | `100` | 请求归档总容量上限（MiB）；超限优先删除最旧文件 |
 | `logging.request_client_info` | `true` | 请求日志是否记录**调用来源**（客户端 IP + User-Agent）：写入 JSONL 归档、stdout 流水行与面板「运行日志」。IP 取 `X-Forwarded-For` 首段 / `X-Real-IP`，无代理头时回落 TCP 对端；UA 截断 200 字节。关闭后来源字段留空（IP 属个人信息，共享部署可关）。**热生效** |
+| `logging.admin_audit_path` | 空 | **管理操作审计**日志路径（JSONL 追加写）。空 = 不启用。记录补跑排程等管理写操作的动作/目标/状态码/来源 IP/key 指纹（sha256 前 4 字节，**不落明文**）。写失败只记日志不影响业务。需重启 |
 | `upstream.restriction_hold_seconds` | `1800` | **11140 风控连坐的全池暂停时长**。上游把「账号存在异常行为」判在设备与出口上而非单个账号，换号只会把下一个号也送进去。窗口（15 分钟）内 ≥2 个**不同**账号被限即暂停全池派发，期间请求回 503 + `Retry-After`。显式配 `0` = 关闭全池暂停（仍保留「命中即停手不换号」）。需重启 |
 | `cooldown.soft_rate` | `600s` | 软限流（429 / 限流文案）冷却基数；同一账号连续触发按 2 倍指数退避 |
 | `cooldown.soft_rate_max` | `2h` | 软冷却指数退避封顶 |
@@ -691,6 +692,8 @@ http://127.0.0.1:7863/panel/
 | `POST /v1/messages` | `x-api-key` 或 Bearer（`api_key` 非空时） | **Anthropic Messages API 兼容层**（流式 / 非流式）：支持服务端 `web_search_*` 工具（检索由网关执行）、客户端自定义工具回传（`stop_reason: tool_use`）与图片块；错误体为 Anthropic 形状（`{"type":"error","error":{...}}`） |
 | `POST /v1/messages/count_tokens` | `x-api-key` 或 Bearer（`api_key` 非空时） | token 数**估算**（无 tokenizer，按请求 JSON 字节数 / 3 折算） |
 | `GET /v1/models` | Bearer（`api_key` 非空时） | 模型列表（纯动态拉取，缓存 10min；失败返回空列表 + 5min 负缓存）；每模型带 `context_length`/`max_output_tokens`（四级查找链：上游目录 → 内置知识表 → model.json 缓存 → models.dev）、`reasoning_supported_efforts`/`reasoning_default_effort` 思考档位及描述/标签/倍率等全字段（上游有返回时） |
+| `GET /admin/tasks` | Bearer（`api_key` 非空时） | 列出可手动补跑的排程任务与当前运行态 |
+| `POST /admin/tasks/{name}/run` | Bearer（`api_key` 非空时） | **手动补跑排程**：`checkin` / `activity` / `keepalive` / `travel` / `blackcat` / `streak`。立即回 202、后台执行；同一任务并发触发回 409；未知任务回 404 并列出已知任务 |
 | `GET /status` | Bearer（`api_key` 非空时） | 账号状态汇总 + 每账号详情（积分/冷却/熔断/在途/粘性） |
 | `GET /healthz` | 无 | 健康检查：有 healthy 且未占满账号返回 200，否则 503；响应带身份标识（见下） |
 

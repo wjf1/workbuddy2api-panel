@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -373,15 +374,32 @@ func main() {
 			cfg.Search.MaxResults, cfg.Search.TimeoutSeconds)
 	}
 
+	// 管理操作审计（可选）：路径为空则不启用；打开失败只告警不阻断启动
+	// （审计是旁路，不能因为它把网关挡在门外）。
+	var auditLog *server.AuditLog
+	if p := strings.TrimSpace(cfg.Logging.AdminAuditPath); p != "" {
+		al, err := server.NewAuditLog(p, cfg.APIKey)
+		if err != nil {
+			logx.Warnf("[server] 管理操作审计未启用：%v", err)
+		} else {
+			auditLog = al
+			logx.Infof("[server] 管理操作审计已启用 -> %s", al.Path())
+		}
+	}
+
 	h := server.NewHandler(server.Config{
 		GetKeepaliveStats: func() any { return sch.KeepaliveStats() },
-		Pool:              p,
-		Upstream:          up,
-		APIKey:            cfg.APIKey,
-		Session:           sessRouter,
-		StickyCount:       sessCount,
-		RedisMode:         redisMode,
-		SoftCooldown:      cfg.SoftRateDur,
+		// 手动补跑排程（/admin/tasks/*）：*scheduler.Scheduler 直接满足 TaskRunner。
+		Tasks: sch,
+		// 管理操作审计（logging.admin_audit_path 为空时不启用）。
+		Audit:        auditLog,
+		Pool:         p,
+		Upstream:     up,
+		APIKey:       cfg.APIKey,
+		Session:      sessRouter,
+		StickyCount:  sessCount,
+		RedisMode:    redisMode,
+		SoftCooldown: cfg.SoftRateDur,
 		// 11140 风控连坐的全池暂停时长。0 在 handler 侧语义是「关闭全池暂停」
 		// （仍保留命中即停手），所以配置缺省时由 NewHandler 填 30m 兜底。
 		RestrictionHold: cfg.RestrictionHoldDur,

@@ -147,10 +147,10 @@ git show <sha> -- <相关文件>              # 再看具体实现
 
 | 序 | 项 | 说明 |
 |---|---|---|
-| R3-1 | `admin_audit.go` | `/admin` 操作追加 JSONL，缺省关闭，写失败不失败请求 |
-| R3-2 | `admin_tasks.go` | `POST /admin/tasks/{name}/run` 手动补跑，立刻 202 |
-| R3-3 | `upstreamhealth.go` | 上游「劣化但不报错」的滑窗告警 |
-| R3-4 | `busy.go` | 模型忙预检端点 |
+| R3-1 | ~~`admin_audit.go`~~ ✅ **已完成 2026-11-10** | 管理操作 JSONL 审计（`logging.admin_audit_path`，缺省关闭，7 例测试含"绝不落 key 明文"） |
+| R3-2 | ~~`admin_tasks.go`~~ ✅ **已完成 2026-11-10** | 手动补跑 6 任务，202 + 并发 409 + panic 隔离（6 例测试） |
+| R3-3 | ⬜ `upstreamhealth.go` | 上游「劣化但不报错」滑窗告警——**延后**（本仓已有 `alert` 包 + webhook 冷却，需求部分覆盖；等出现真实劣化场景再做） |
+| R3-4 | ⬜ `busy.go` | 模型忙预检端点——**延后**（上游 6004/14003 已有分类与模型级冷却，独立预检端点收益低） |
 
 ### ❌ 明确不做（记录决策，避免反复讨论）
 
