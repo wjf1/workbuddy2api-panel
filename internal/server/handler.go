@@ -200,6 +200,9 @@ type Handler struct {
 	// wafIP WAF IP 级拦截状态机（fail-fast，wafip.go）：短窗多号 WAF 403 →
 	// 激活期轮转遇 WAF 403 直接终止（不放大请求量）。进程内状态、重启清零。
 	wafIP wafIPGate
+	// taskRuns 手动补跑排程的运行态（admin_tasks.go）：实例级，
+	// 避免不同 Handler 实例互相干扰（见 taskRunState 注释）。
+	taskRuns taskRunState
 	// restrict 11140 风控连坐状态机（restrict.go）：命中即停手 + 窗内多号被限
 	// → 全池暂停。与 wafIP 同属进程级 fail-fast，但判定信号不同互不干涉。
 	restrict restrictionGate

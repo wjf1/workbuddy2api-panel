@@ -34,14 +34,15 @@ type TaskRunner interface {
 // adminTaskNames 可补跑的任务名（对外文档与错误提示用；顺序即提示顺序）。
 var adminTaskNames = []string{"checkin", "activity", "keepalive", "travel", "blackcat", "streak"}
 
-// adminTaskMu 与 adminTaskRunning 保护「同一任务不并发跑」。
+// taskRunState 「同一任务不并发跑」的运行态锁。
 //
-// 放包级而非 Handler 字段：补跑是运维动作，与 handler 实例无关；
-// 且进程内只有一份调度器，包级状态语义更直接。
-var (
-	adminTaskMu      sync.Mutex
-	adminTaskRunning = map[string]bool{}
-)
+// 是 Handler 的字段而非包级变量：包级会让不同 Handler 实例（测试里很常见，
+// 生产也可能有多个 mux）互相干扰——一个实例的补跑会把另一个实例的同名任务
+// 挡成 409。v1.20.0 首推时 CI 就是被这个共享状态打成假失败（本地跑得快没暴露）。
+type taskRunState struct {
+	mu      sync.Mutex
+	running map[string]bool
+}
 
 // taskRunners 任务名 → 触发函数。Tasks 未注入（测试/裸用）时返回 nil。
 func (h *Handler) taskRunners() map[string]func() {
@@ -75,20 +76,24 @@ func (h *Handler) adminTaskRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminTaskMu.Lock()
-	if adminTaskRunning[name] {
-		adminTaskMu.Unlock()
+	rs := &h.taskRuns
+	rs.mu.Lock()
+	if rs.running[name] {
+		rs.mu.Unlock()
 		writeOpenAIError(w, http.StatusConflict, "busy", "task already running: "+name)
 		return
 	}
-	adminTaskRunning[name] = true
-	adminTaskMu.Unlock()
+	if rs.running == nil {
+		rs.running = map[string]bool{}
+	}
+	rs.running[name] = true
+	rs.mu.Unlock()
 
 	go func() {
 		defer func() {
-			adminTaskMu.Lock()
-			delete(adminTaskRunning, name)
-			adminTaskMu.Unlock()
+			rs.mu.Lock()
+			delete(rs.running, name)
+			rs.mu.Unlock()
 			// panic 隔离：补跑炸了不能带走整个进程（后台 goroutine panic 会整个进程退出）。
 			if rec := recover(); rec != nil {
 				logx.Errorf("[admin] 手动补跑 %s panic: %v", name, rec)
@@ -108,14 +113,14 @@ func (h *Handler) adminTaskRun(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) adminTasksList(w http.ResponseWriter, r *http.Request) {
 	runners := h.taskRunners()
 	out := make([]map[string]any, 0, len(adminTaskNames))
-	adminTaskMu.Lock()
+	h.taskRuns.mu.Lock()
 	for _, name := range adminTaskNames {
 		out = append(out, map[string]any{
 			"name":    name,
-			"running": adminTaskRunning[name],
+			"running": h.taskRuns.running[name],
 			"wired":   runners != nil,
 		})
 	}
-	adminTaskMu.Unlock()
+	h.taskRuns.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": out})
 }

@@ -37,24 +37,23 @@ func (f *fakeTaskRunner) RunTravelNow()      { f.bump(&f.travel) }
 func (f *fakeTaskRunner) RunBlackcatNow()    { f.bump(&f.blackcat) }
 func (f *fakeTaskRunner) RunStreakBonusNow() { f.bump(&f.streak) }
 
-// resetAdminTaskState 清空包级任务运行态（每个测试用 t.Cleanup 调用）。
+// waitTaskIdle 等某任务在给定 handler 上退出运行态。
 //
-// 包级状态（adminTaskMu / adminTaskRunning）会跨测试残留：上一个测试的异步任务
-// 若还没跑完，下一个测试同名任务就会读到 409。CI 上 v1.20.0 首版因此假失败
-// （本地快、CI 慢，残留窗口更大）。清理两次是为了覆盖「清理时后台任务仍在跑、
-// 结束后又写了 key」的竞态。
-func resetAdminTaskState(t *testing.T) {
+// 运行态现在是 Handler 实例字段（不再是包级变量），所以测试之间天然隔离；
+// 这里只需要等本测试自己的异步任务收尾，避免影响同一测试内的后续断言。
+func waitTaskIdle(t *testing.T, h *Handler, name string) {
 	t.Helper()
-	clear := func() {
-		adminTaskMu.Lock()
-		adminTaskRunning = map[string]bool{}
-		adminTaskMu.Unlock()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		h.taskRuns.mu.Lock()
+		running := h.taskRuns.running[name]
+		h.taskRuns.mu.Unlock()
+		if !running {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	clear()
-	t.Cleanup(func() {
-		time.Sleep(50 * time.Millisecond)
-		clear()
-	})
+	t.Fatalf("任务 %s 在 3s 内未退出运行态", name)
 }
 
 // newTaskTestHandler 构造只关心 Tasks 的最小 handler。
@@ -63,7 +62,6 @@ func newTaskTestHandler(tr TaskRunner) *Handler {
 }
 
 func TestAdminTaskRunUnknownTask(t *testing.T) {
-	resetAdminTaskState(t)
 	h := newTaskTestHandler(&fakeTaskRunner{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/tasks/nope/run", nil)
 	req.SetPathValue("name", "nope")
@@ -81,7 +79,6 @@ func TestAdminTaskRunUnknownTask(t *testing.T) {
 }
 
 func TestAdminTaskRunAcceptedAndExecutes(t *testing.T) {
-	resetAdminTaskState(t)
 	fr := &fakeTaskRunner{}
 	h := newTaskTestHandler(fr)
 
@@ -114,7 +111,6 @@ func TestAdminTaskRunAcceptedAndExecutes(t *testing.T) {
 //
 // 补跑可能持续数分钟，并发跑会重复打上游（签到任务重复执行有副作用）。
 func TestAdminTaskRunConcurrentRejected(t *testing.T) {
-	resetAdminTaskState(t)
 	fr := &fakeTaskRunner{delay: 200 * time.Millisecond}
 	h := newTaskTestHandler(fr)
 
@@ -145,12 +141,11 @@ func TestAdminTaskRunConcurrentRejected(t *testing.T) {
 	if rec3.Code != http.StatusAccepted {
 		t.Fatalf("任务结束后应能再次触发, got %d", rec3.Code)
 	}
-	time.Sleep(300 * time.Millisecond) // 收尾，避免影响后续测试的包级状态
+	waitTaskIdle(t, h, "travel") // 收尾
 }
 
 // TestAdminTaskRunNotWired Tasks 未注入时回 503（而不是 panic）。
 func TestAdminTaskRunNotWired(t *testing.T) {
-	resetAdminTaskState(t)
 	h := NewHandler(Config{}) // Tasks 为 nil
 	req := httptest.NewRequest(http.MethodPost, "/admin/tasks/checkin/run", nil)
 	req.SetPathValue("name", "checkin")
@@ -163,7 +158,6 @@ func TestAdminTaskRunNotWired(t *testing.T) {
 
 // TestAdminTasksList 列出任务与运行态。
 func TestAdminTasksList(t *testing.T) {
-	resetAdminTaskState(t)
 	h := newTaskTestHandler(&fakeTaskRunner{})
 	rec := httptest.NewRecorder()
 	h.adminTasksList(rec, httptest.NewRequest(http.MethodGet, "/admin/tasks", nil))
@@ -185,7 +179,6 @@ func TestAdminTasksList(t *testing.T) {
 // 后台 goroutine 里的 panic 会让整个进程退出——对网关来说是致命的，
 // 必须被 recover 兜住。
 func TestAdminTaskPanicIsolated(t *testing.T) {
-	resetAdminTaskState(t)
 	h := newTaskTestHandler(&panicRunner{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/tasks/checkin/run", nil)
 	req.SetPathValue("name", "checkin")
@@ -205,9 +198,9 @@ func TestAdminTaskPanicIsolated(t *testing.T) {
 		t.Fatalf("panic 后进程应仍可用, got %d", rec2.Code)
 	}
 	// 锁也应已释放
-	adminTaskMu.Lock()
-	still := adminTaskRunning["checkin"]
-	adminTaskMu.Unlock()
+	h.taskRuns.mu.Lock()
+	still := h.taskRuns.running["checkin"]
+	h.taskRuns.mu.Unlock()
 	if still {
 		t.Fatal("panic 后任务锁未释放（后续补跑会被永久 409）")
 	}
