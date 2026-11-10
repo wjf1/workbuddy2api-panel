@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -119,6 +120,20 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIErrorHint(w, http.StatusBadRequest, "model_unavailable",
 			"model is hidden by gateway configuration, try another model", "")
 		st.status = http.StatusBadRequest
+		st.outcome = reqlog.OutcomeHTTPError
+		return
+	}
+
+	// 11140 风控连坐暂停（restrict.go）：同一窗口里已经有多个账号被上游判
+	//「异常行为」，说明这轮扫荡是冲设备/出口来的。此时再拿账号去试只会扩大
+	// 损失（参照上游实测：一次任务 7 个号全封），直接快速失败让客户端等。
+	if d := h.restrict.remaining(); d > 0 {
+		secs := int(d.Seconds() + 0.999)
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		writeOpenAIErrorHint(w, http.StatusServiceUnavailable, "account_restricted_hold",
+			fmt.Sprintf("upstream restricted several accounts recently (403 / code 11140); dispatch paused for %ds to avoid further bans — do not retry in a loop", secs),
+			"wait for the restriction hold to expire, or appeal to WorkBuddy in the client; rotating accounts during a restriction wave gets more of them banned")
+		st.status = http.StatusServiceUnavailable
 		st.outcome = reqlog.OutcomeHTTPError
 		return
 	}
@@ -622,6 +637,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			fail(acct.UID)
+			// 11140 风控连坐（restrict.go）：上游判的是设备/出口而不是单个账号，
+			// 换号等于把下一个号也送进去 → 就地停手，并把这次限制喂给全池暂停判定。
+			// 优先于排队/WAF 分支之外的所有处置：它决定的是「本请求还换不换号」。
+			if kind == upstream.ErrAccountFault && upstream.IsRestrictionMarker(string(respBody)) {
+				h.restrict.note(acct.UID, h.cfg.RestrictionHold)
+				break
+			}
 			// 上游排队 fail-fast（优先于 WAF/rotateBackoff）：6020/6021 是上游服务端
 			// 队列水位，换账号、换模型都不会绕过（实测两模型回同一排队码）——继续轮转
 			// 只会把一个请求放大 MaxRotate 倍打已经堵住的上游。账号侧零惩罚

@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+### 安全
+
+- **11140 风控连坐保护**（`internal/server/restrict.go`）：上游把「账号存在异常行为」
+  （403 / code 11140 的 `request illegal` 与 `unusual activity`）判在**设备与出口**上，
+  不是判在单个账号上。原处置是「禁用这个号、继续换下一个号」，一个请求能顺着轮转
+  把池子挨个撞一遍（参照上游实测：一次任务 7 个号全封）。
+  两道闸：① 命中即**就地停手不换号**；② 同一 15 分钟窗口内 ≥2 个**不同**账号被限 →
+  判定连坐扫荡，全池暂停派发，期间请求返回 503 + `Retry-After` 快速失败，不再拿账号去试。
+  配置 `upstream.restriction_hold_seconds`（默认 `1800`，显式 `0`/负数 = 关闭全池暂停，
+  仍保留「命中即停手」）。状态在进程内、重启清零。
+- **风控词表补 `unusual activity`**（`internal/upstream/classify.go`）：上游 11140 的第二种
+  文案此前未收录，会漏判账号级风控。
+
+### 性能
+
+- **请求体热路径零分配字段扫描**（新增 `internal/jsonscan`）：线上 body 常 100~500KB，
+  而网关对一个请求要做多次整树 `json.Unmarshal` 只为取一两个短串。新增扫描器一次遍历
+  只解出被问到的字段，其余值按 JSON 语法跳过（零分配）。
+  接入点：`session.ResolveConversationID`（会话粘性取 conversation_id）与
+  `upstream.InjectPromptCacheKey`（判客户端是否已带 `prompt_cache_key`）。
+  实测 200KB body：**5.7μs vs 195μs，约 34 倍**，单请求省约 190μs CPU。
+  扫描器走不完（畸形 JSON / 顶层非对象）时返回 `Ok=false`，调用方**回落原整树解析**，
+  语义零变化——由等价性测试锁死。
+
 ## [1.19.3-panel] - 2026-11-10
 
 本版为**不安全绑定写保护版**：堵上「监听面暴露 + 未配 api_key」时局域网任意客户端可经

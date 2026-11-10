@@ -27,6 +27,11 @@ type Config struct {
 	Upstream  *upstream.Client
 	APIKey    string // 空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
 	MaxRotate int    // 单请求最多换号次数，默认 3
+	// RestrictionHold 11140 风控连坐的全池暂停时长（upstream.restriction_hold，
+	// 默认 30m）。<=0 关闭连坐保护，只保留「命中即停手不换号」那道闸
+	// （见 restrict.go）。上游判的是设备/出口而非单账号，连坐期再拿号去试
+	// 只会扩大损失。
+	RestrictionHold time.Duration
 	// Session 会话粘性路由器（可选；nil = 关闭粘性，纯 Pick 轮换）。
 	Session *session.Router
 	// GetKeepaliveStats 返回保活可观测快照（供 /status；nil 时该键为 null）。
@@ -189,6 +194,9 @@ type Handler struct {
 	// wafIP WAF IP 级拦截状态机（fail-fast，wafip.go）：短窗多号 WAF 403 →
 	// 激活期轮转遇 WAF 403 直接终止（不放大请求量）。进程内状态、重启清零。
 	wafIP wafIPGate
+	// restrict 11140 风控连坐状态机（restrict.go）：命中即停手 + 窗内多号被限
+	// → 全池暂停。与 wafIP 同属进程级 fail-fast，但判定信号不同互不干涉。
+	restrict restrictionGate
 	// upstreamQueue 上游排队门控（fail-fast，queuegate.go）：6020/6021 免费档排队
 	// 是上游服务端队列水位（与账号、模型都无关）→ 首次命中即 fail-fast 终止轮转，
 	// 账号侧零惩罚。进程内状态、重启清零；任一请求成功即清除。
@@ -205,6 +213,9 @@ func NewHandler(cfg Config) *Handler {
 	}
 	if cfg.RefreshSkew <= 0 {
 		cfg.RefreshSkew = 10 * time.Minute
+	}
+	if cfg.RestrictionHold == 0 {
+		cfg.RestrictionHold = 30 * time.Minute // 连坐默认暂停 30m；显式 <0 或配置 0 关闭
 	}
 	if cfg.PromptMode == "" {
 		cfg.PromptMode = "custom" // 缺省 custom：网关自有提示词

@@ -898,3 +898,38 @@ func TestServerReadTimeout(t *testing.T) {
 		t.Error("unparsable read_timeout should fail fast")
 	}
 }
+
+// TestRestrictionHoldConfig 11140 风控连坐暂停时长的配置口径。
+//
+// 关键语义：**显式配 0 是有意义的**（关闭全池暂停），所以 normalize 不能做
+// 0 → 默认 的兜底——那会把用户的关闭意图吞掉。默认值只能由 Default() 提供。
+func TestRestrictionHoldConfig(t *testing.T) {
+	// 缺省 1800s（30m）
+	c := Default()
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.RestrictionHoldDur != 30*time.Minute {
+		t.Errorf("缺省 restriction_hold 应为 30m，got %v", c.RestrictionHoldDur)
+	}
+
+	// 显式 0 = 关闭，不能被兜底成默认值
+	c2 := Default()
+	c2.Upstream.RestrictionHoldSeconds = 0
+	if err := c2.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c2.RestrictionHoldDur != 0 {
+		t.Errorf("显式 0 应保持 0（关闭），got %v", c2.RestrictionHoldDur)
+	}
+
+	// 自定义值生效
+	c3 := Default()
+	c3.Upstream.RestrictionHoldSeconds = 600
+	if err := c3.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c3.RestrictionHoldDur != 10*time.Minute {
+		t.Errorf("600s 应解析为 10m，got %v", c3.RestrictionHoldDur)
+	}
+}

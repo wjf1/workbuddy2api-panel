@@ -160,12 +160,38 @@ var sessionDeadMarkers = []string{"Offline user session not found", "12153"}
 //
 // 注意 11140 **不能**按 code 判定：该 code 也承载模型级限流文案（"The model provider
 // is rate-limiting requests."），那种场景必须保持 ErrSoftRate（下方 softRateMarkers
-// 后判定）。故此处只收 msg 关键词 "request illegal"（auth_forbidden 的真实文案）。
+// 后判定）。故此处只收 msg 关键词（auth_forbidden 的真实文案）。
 // 14017 文案唯一（无软限流歧义），可安全收录。
 var accountFaultMarkers = []string{
 	"request illegal",
+	"unusual activity",
 	"trial not activated",
 	"trial version is not yet activated",
+}
+
+// restrictionMarkers 11140 风控连坐信号词表（**是** accountFaultMarkers 的子集）。
+//
+// 与 14017（trial not activated）的区别：后者是 register 未完成，补完 register
+// 即自愈，属单账号状态，不构成「设备/出口被判定」的证据；而 11140 的两种文案
+// 是上游按设备与出口做的风控判定——换号只会把下一个号也送进去。
+var restrictionMarkers = []string{
+	"request illegal",
+	"unusual activity",
+}
+
+// IsRestrictionMarker 判定 body 是否为 11140 风控连坐信号。
+//
+// 命中即应「就地停手不换号」，并把这次限制喂给全池暂停判定（见 server/restrict.go），
+// 否则一个客户端请求会顺着轮转把池子挨个撞一遍（参照上游实测：一次任务 7 个号全封）。
+// 大小写不敏感子串匹配，与 accountFaultMarkers 同口径。
+func IsRestrictionMarker(body string) bool {
+	lower := strings.ToLower(body)
+	for _, m := range restrictionMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // contentBlockedMarkers 内容策略拦截关键词（大小写不敏感子串匹配）。

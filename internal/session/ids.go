@@ -16,6 +16,8 @@ import (
 	"math/rand/v2"
 	"strings"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/jsonscan"
 )
 
 // ResolveConversationID 从请求体提取会话头族的 conversationId（snake/camel 双形态，
@@ -27,6 +29,26 @@ func ResolveConversationID(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
+	// 快路径：只取 4 个候选键，不解析整棵树（线上 body 常 100~500KB，
+	// 整树解析要为每条历史消息的字符串建对象，而这里只需要 1 个短串）。
+	// 扫描器走不完（畸形 JSON 等）时 Ok=false，回落原来的整树解析保证语义不变。
+	if res := jsonscan.Lookup(body, jsonscan.Query{
+		Top:        []string{"conversation_id", "conversationId"},
+		Nested:     "metadata",
+		NestedKeys: []string{"conversation_id", "conversationId"},
+	}); res.Ok {
+		if v := res.GetNested("conversation_id"); v != "" {
+			return v
+		}
+		if v := res.GetNested("conversationId"); v != "" {
+			return v
+		}
+		if v := res.Get("conversation_id"); v != "" {
+			return v
+		}
+		return res.Get("conversationId")
+	}
+
 	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return ""

@@ -69,7 +69,36 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（不安全绑定写保护 → 1.19.3-panel，2026-11-10）
+## 4. 最近一轮变更与交付成果（上游对齐 R1 完成 → 未发版，2026-11-10）
+
+### 4.0.-1 上游对齐 R1：风控连坐保护 + 热路径提速（2026-11-10，未发版）
+
+**背景**：原上游 `linguo2625469` 已停维护（2026-10-21），本仓库无可合并上游。
+自本轮起把 `misakano7545/workbuddy2api-panel` 作为**事实上的参照上游**，
+路线与归因表见 `docs/UPSTREAM-ALIGNMENT.md`（新会话必读）。
+
+- **R1-1 风控连坐保护**（`internal/server/restrict.go` + `upstream.IsRestrictionMarker`）
+  - 起因：上游把 11140 判在**设备/出口**上而非单账号。本仓原逻辑是 `Disable` 后
+    继续轮转（`MaxRotate` 默认 3），最坏一个请求连撞 3 个号；参照上游实测
+    同类事故是一次任务 7 个号全封。
+  - 两道闸：命中即停手不换号 + 15min 窗内 ≥2 个不同账号被限 → 全池暂停 30min，
+    期间 503 + `Retry-After`。
+  - 配置 `upstream.restriction_hold_seconds`（默认 1800；显式 0 = 只保留停手那道闸）。
+  - 测试：`restrict_test.go` 8 例（词表口径 / 单号不触发 / 多号触发 / hold=0 旁路 /
+    到期解除 / 窗口剪枝 / 暂停期 503 / 缺省值）+ `config_test.go` 配置口径 1 例。
+- **R1-2 热路径零分配扫描**（`internal/jsonscan`，整包移植）
+  - 起因：一个 chat 请求对同一 body 做 10+ 次整树 `json.Unmarshal`，而线上 body
+    常 100~500KB，只为取一两个短串。
+  - 接入 `session.ResolveConversationID` 与 `upstream.InjectPromptCacheKey` 快路径；
+    未命中/畸形 body 回落原整树解析。
+  - 实测 200KB body：**5.7μs vs 195μs（34 倍）**，单请求省 ~190μs。
+  - 测试：`equivalence_test.go` 等价性钉子（快路径 vs 整树解析逐字段一致）+
+    畸形回落 + 基准对照。
+- **验证**：`go build` / `go vet` 干净、`gofmt -l` 空、**27 包全量测试绿**
+  （基线 26 包 + 新增 jsonscan 包）。默认值快照按流程重新生成
+  （新增 `restriction_hold_seconds: 1800` 一行）。
+
+## 4.0 上一轮（不安全绑定写保护 → 1.19.3-panel，2026-11-10）
 
 ### 4.0.0 1.19.3-panel：不安全绑定写保护发版并部署 A 机（2026-11-10）
 

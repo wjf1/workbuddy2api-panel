@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/jsonscan"
 )
 
 // InjectPromptCacheKey 在已改写的出站 body 上注入 prompt_cache_key 字段。
@@ -37,6 +39,16 @@ func InjectPromptCacheKey(body []byte, uid, conversationID string) []byte {
 	if len(body) == 0 {
 		return body
 	}
+	// 快路径：客户端已显式带 prompt_cache_key 是「上游客户端直连」场景的常态，
+	// 此时本函数什么都不做。用零分配扫描先判，命中即原样返回，省掉一次整树
+	// 解析 + 一次 Marshal 往返（body 常 100~500KB）。
+	// 扫描器走不完（畸形 JSON）时 Ok=false，回落到下面的整树解析走原有语义。
+	if res := jsonscan.Lookup(body, jsonscan.Query{Top: []string{"prompt_cache_key"}}); res.Ok {
+		if res.Get("prompt_cache_key") != "" {
+			return body
+		}
+	}
+
 	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return body

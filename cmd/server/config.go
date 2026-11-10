@@ -222,6 +222,12 @@ type Config struct {
 		// 长会话把 tools 定义排在几百条 messages 之后，256 KB 常在中途截断，
 		// 排障时看不到工具声明（issue #44 的反馈）。0 = 用默认值。
 		DumpMaxBytes int `json:"dump_max_bytes"`
+		// RestrictionHoldSeconds 11140 风控连坐的全池暂停时长（秒），默认 1800。
+		// 上游把「账号存在异常行为」（403 / code 11140）判在**设备与出口**上而非
+		// 单个账号：命中后继续换号只会把下一个号也送进去（上游实测过一次任务
+		// 7 个号全封）。窗口内 ≥2 个不同账号被限即暂停全池派发，期间请求 503 +
+		// Retry-After 快速失败。设 0 = 关闭全池暂停（仍保留「命中即停手不换号」）。
+		RestrictionHoldSeconds int `json:"restriction_hold_seconds"`
 	} `json:"upstream"`
 
 	Features struct {
@@ -338,7 +344,10 @@ type Config struct {
 	} `json:"notify"`
 
 	// 解析后
-	SoftRateDur            time.Duration `json:"-"`
+	SoftRateDur time.Duration `json:"-"`
+	// RestrictionHoldDur 11140 风控连坐全池暂停时长（由 upstream.restriction_hold_seconds
+	// 解析）。0 语义在 handler 侧是「关闭全池暂停」；缺省（未配该键）由 normalize 填 1800s。
+	RestrictionHoldDur     time.Duration `json:"-"`
 	SoftRateMaxDur         time.Duration `json:"-"`
 	BreakerCooldownDur     time.Duration `json:"-"`
 	BreakerCooldownMaxD    time.Duration `json:"-"`
@@ -422,6 +431,8 @@ func Default() *Config {
 	c.Schedule.KeepaliveMode = "smart"
 	c.Schedule.SmartKeepaliveDays = 14
 	c.Upstream.TimeoutSeconds = 120
+	// 11140 风控连坐全池暂停 30 分钟（显式配 0 可关闭，见 normalize）。
+	c.Upstream.RestrictionHoldSeconds = 1800
 	// HeaderTimeoutSeconds/IdleTimeoutSeconds 默认 0（未设置态），回落见 normalize()。
 	c.Upstream.HeaderTimeoutSeconds = 0
 	c.Upstream.IdleTimeoutSeconds = 0
@@ -669,6 +680,11 @@ func (c *Config) normalize() error {
 	if c.SoftRateDur, err = time.ParseDuration(c.Cooldown.SoftRate); err != nil {
 		return fmt.Errorf("cooldown.soft_rate: %w", err)
 	}
+	// 11140 风控连坐暂停时长。约定：缺省 1800s（由 Default() 写入）；显式配 0
+	// 或负数 = 关闭全池暂停（handler 侧 hold<=0 即只保留「命中即停手不换号」）。
+	// 因为是「显式 0 有意义」的键，这里不做 0→默认 的兜底——那会把用户的
+	// 关闭意图吞掉。Default() 未覆盖的手工构造路径按 0 处理（安全侧：不暂停）。
+	c.RestrictionHoldDur = time.Duration(c.Upstream.RestrictionHoldSeconds) * time.Second
 	// 空值回落默认 2h（Default() 已置值；此兜底覆盖显式 "" 与 Default() 被绕过的场景）。
 	if c.Cooldown.SoftRateMax == "" {
 		c.Cooldown.SoftRateMax = "2h"

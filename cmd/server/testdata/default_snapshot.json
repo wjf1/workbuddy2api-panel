@@ -88,7 +88,8 @@
     "device_token_file": "",
     "passthrough_ip": false,
     "dump_dir": "",
-    "dump_max_bytes": 0
+    "dump_max_bytes": 0,
+    "restriction_hold_seconds": 1800
   },
   "features": {
     "sanitize_blacklist_fingerprints": true,

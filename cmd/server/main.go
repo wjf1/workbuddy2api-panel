@@ -382,12 +382,15 @@ func main() {
 		StickyCount:       sessCount,
 		RedisMode:         redisMode,
 		SoftCooldown:      cfg.SoftRateDur,
-		Panel:             pn,
-		Live:              live,
-		Usage:             rec,
-		RequestLog:        requestLog,
-		PromptMode:        cfg.Prompt.Mode,
-		PromptText:        cfg.PromptText,
+		// 11140 风控连坐的全池暂停时长。0 在 handler 侧语义是「关闭全池暂停」
+		// （仍保留命中即停手），所以配置缺省时由 NewHandler 填 30m 兜底。
+		RestrictionHold: cfg.RestrictionHoldDur,
+		Panel:           pn,
+		Live:            live,
+		Usage:           rec,
+		RequestLog:      requestLog,
+		PromptMode:      cfg.Prompt.Mode,
+		PromptText:      cfg.PromptText,
 		// 来源记录开关经 livecfg 热生效；此处同时填静态字段，供 Live 为 nil 的
 		// 裸用/测试路径拿到同一缺省值。
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
