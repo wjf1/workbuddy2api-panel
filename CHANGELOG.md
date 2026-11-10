@@ -6,6 +6,37 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **OpenAI Responses API 兼容层**（`POST /v1/responses`，`internal/server/responses.go`
+  + `responses_response.go`）：此前本仓只支持 Chat Completions 与 Anthropic Messages，
+  **Codex CLI 这类只认 Responses 协议的客户端整条路径走不通**——这是与头部同类项目
+  最实质的一处能力缺口。
+  - 实现策略与 Anthropic 兼容层完全同构：通过「转换型 ResponseWriter」把
+    `chatCompletions` 的输出逐帧改写为 Responses 事件流，**不复制轮转与错误处置**，
+    行为与 `/v1/chat/completions` 完全同源，不产生第二套调度逻辑。
+  - 请求侧映射：`input` 支持字符串与消息数组；`instructions` → 首条 system；
+    `max_output_tokens` → `max_tokens`；`reasoning.effort` → `reasoning_effort`；
+    `function_call` / `function_call_output` 历史项 → Chat 的 `tool_calls` / `tool` 消息
+    （Codex CLI 多轮工具会话会带）；`tool_choice` 归一成 Chat 嵌套形态。
+  - 响应侧：`output` 项按 reasoning → message(output_text) → function_call 排序；
+    `usage` 换成 Responses 口径（`input_tokens` / `output_tokens` /
+    `input_tokens_details.cached_tokens` / `output_tokens_details.reasoning_tokens`）；
+    `finish_reason=length` 标 `status: incomplete` + `incomplete_details`（客户端据此续读）。
+  - 流式事件：`response.created` / `output_item.added` / `content_part.added` /
+    `output_text.delta` / `output_text.done` / `content_part.done` / `output_item.done` /
+    `response.completed`，工具调用另有 `function_call_arguments.delta/done`；
+    结束发 `[DONE]`。上游一帧未出也会兜底发 created+completed，不让客户端挂住。
+  - 明确边界：`previous_response_id` 忽略（网关无状态，客户端已在 input 带全量上下文）；
+    内置工具（`web_search_preview` / `file_search` / `code_interpreter`）剥离后模型照常
+    回答（能力降级而非报错）；自定义 function 工具正常透传。
+  - 测试：`responses_test.go` 13 例（请求映射 / 内置工具剥离 / tool_choice 归一 /
+    响应形状与 usage 字段名 / incomplete 标记 / 流式事件顺序 / 工具调用分片累计 /
+    空流兜底 / 错误体形状）。
+  - **真实上游端到端验证**（沙箱实例 :7874，17 账号）：非流式出
+    `object=response` / `status=completed` / `text='正常'` / usage 三字段正确；
+    流式 12 个事件、顺序合规、拼接文本正确、`[DONE]` 收尾。
+
 ### 安全
 
 - **11140 风控连坐保护**（`internal/server/restrict.go`）：上游把「账号存在异常行为」

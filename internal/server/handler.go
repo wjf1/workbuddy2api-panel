@@ -234,6 +234,9 @@ func NewHandler(cfg Config) *Handler {
 	// Anthropic Messages API 兼容层（ZCode/Claude Code 等 anthropic 协议客户端；
 	// web_search 服务端工具见 anthropic_websearch.go）。count_tokens 为估算实现。
 	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.messagesAnthropic))
+	// OpenAI Responses API（Codex CLI 等）：与 /v1/messages 同构的适配层，
+	// 复用 chatCompletions 管线，不产生第二套调度逻辑（见 responses.go）。
+	h.mux.HandleFunc("POST /v1/responses", h.withAuth(h.responses))
 	h.mux.HandleFunc("POST /v1/messages/count_tokens", h.withAuth(h.countTokensAnthropic))
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向

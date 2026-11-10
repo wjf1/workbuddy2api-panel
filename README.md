@@ -85,6 +85,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | ♻️ **回收站与定时备份** | 「移除账号」软删除进 `data/trash/`（默认保留 30 天，可恢复 / 彻底删除 / 过期自动清理）；每日整点自动备份 `auths/` + 池状态为 zip（保留 N 份轮转，**不含 config.json**），面板内可手动备份与下载 |
 | 📈 **余额趋势与会员档位（1.17.0）** | 账号池「余额趋势」box：全池积分总和按小时采样 SVG 曲线（30 天窗口，观察「号在不在被薅」与消耗速率）；账号行昵称旁显示会员档位胶囊（计费摘要一天一次，失败不写结论） |
 | 🏷️ **账号标签与预警** | 账号多标签（落盘随导出/导入往返）+ 列表按标签 / 关键字筛选；积分低于「积分保底线」的账号自动进面板预警横幅（与选号保底共用阈值，零上游请求） |
+| 🧠 **OpenAI Responses 兼容（1.20.0）** | `POST /v1/responses`：**Codex CLI** 这类只认 Responses 协议的客户端直连。复用 Chat 主链路（转换型 ResponseWriter），不产生第二套调度逻辑；`input` 支持字符串与消息数组、`instructions`→system、`function_call` 历史项→`tool_calls`、内置工具剥离降级；响应 `output` 按 reasoning→message→function_call 排序、usage 转 Responses 口径、`finish=length` 标 `incomplete`；流式具名事件序列齐全 |
 | 🤖 **Anthropic 协议兼容** | `POST /v1/messages`（+ `POST /v1/messages/count_tokens`）：Claude Code / ZCode 等 Anthropic 协议客户端直连；流式 SSE 事件序列（`message_start` / `content_block_*` / `message_delta` / `message_stop`）与非流式均支持，错误体同为 Anthropic 形状；`x-api-key` 与 `Authorization: Bearer` 双凭证任一命中；`messages` 内联的中途 `system` 消息（ZCode / Claude Code 形态）同样接受（1.15.2 起） |
 | 🌐 **服务端 web_search（网关自执行）** | 客户端声明 `web_search_*` 工具时，检索由**网关代替上游执行**（so.com 抓取解析），回吐 `server_tool_use` / `web_search_tool_result` 块并支持一轮内多轮检索（`max_uses` 预算，缺省 8；耗尽自动撤工具 + 限额提示）；正文未引用来源时自动补 `Sources:` 列表；伪工具调用文本（全角竖线 DSML 标记 / `<tool_call>` 伪 XML）在流式与非流式路径一致清洗，不漏进正文 |
 | 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题，弹窗 Esc 关闭、窄屏列自动降级、WCAG 对比度），账号运维 / cockpit 兼容账号导入导出 / 模型档位查询 / 在线改配置（热生效）/ 运行日志 / 积分任务，见 [Web 管理面板](#-web-管理面板) |
@@ -685,6 +686,7 @@ http://127.0.0.1:7863/panel/
 | 端点 | 鉴权 | 说明 |
 |---|---|---|
 | `POST /v1/chat/completions` | Bearer（`api_key` 非空时） | OpenAI 兼容补全；流式/非流式；请求体默认不限制，`server.max_body_mb` > 0 时超限返回 413 |
+| `POST /v1/responses` | Bearer（`api_key` 非空时） | **OpenAI Responses API 兼容层**（流式 / 非流式）：供 Codex CLI 等只认 Responses 的客户端。`input` 支持字符串与消息数组；支持自定义 function 工具（内置 `web_search_preview` / `file_search` / `code_interpreter` 剥离降级）；`finish=length` 回 `status: incomplete`；`previous_response_id` 忽略（网关无状态） |
 | `POST /v1/messages` | `x-api-key` 或 Bearer（`api_key` 非空时） | **Anthropic Messages API 兼容层**（流式 / 非流式）：支持服务端 `web_search_*` 工具（检索由网关执行）、客户端自定义工具回传（`stop_reason: tool_use`）与图片块；错误体为 Anthropic 形状（`{"type":"error","error":{...}}`） |
 | `POST /v1/messages/count_tokens` | `x-api-key` 或 Bearer（`api_key` 非空时） | token 数**估算**（无 tokenizer，按请求 JSON 字节数 / 3 折算） |
 | `GET /v1/models` | Bearer（`api_key` 非空时） | 模型列表（纯动态拉取，缓存 10min；失败返回空列表 + 5min 负缓存）；每模型带 `context_length`/`max_output_tokens`（四级查找链：上游目录 → 内置知识表 → model.json 缓存 → models.dev）、`reasoning_supported_efforts`/`reasoning_default_effort` 思考档位及描述/标签/倍率等全字段（上游有返回时） |

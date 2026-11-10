@@ -125,7 +125,7 @@ git show <sha> -- <相关文件>              # 再看具体实现
 
 | 序 | 项 | 说明 |
 |---|---|---|
-| R2-1 | **`responses.go`** | `POST /v1/responses` → 复用现有 chat 主链路。Codex CLI 只认它 |
+| R2-1 | ~~`responses.go`~~ ✅ **已完成 2026-11-10** | `POST /v1/responses` 复用 chat 主链路；13 例测试 + 真实上游端到端（非流式/流式各验） |
 | R2-2 | **续写救援四件套** | `starved` + `continue` + `narration` + `toolonly`。**有依赖关系，必须一起做**，否则会出现「救了这个那个又断」 |
 
 **R2-2 背景**：本仓 1.19.3 部署验收时实测到 `content='' / finish=length` /
@@ -175,3 +175,4 @@ git show <sha> -- <相关文件>              # 再看具体实现
 |---|---|---|---|
 | 2026-11-10 | `misakano7545/internal/server/restrict.go` | `internal/server/restrict.go` + `upstream.IsRestrictionMarker` | **R1-1 完成**：命中即停手 + 窗内 2 号被限暂停全池；配置 `upstream.restriction_hold_seconds`（默认 1800，0=关闭）；8 例行为钉子 |
 | 2026-11-10 | `misakano7545/internal/jsonscan/` | `internal/jsonscan/`（整包移植 + 等价性钉子 + 基准） | **R1-2 完成**：接入 `session.ResolveConversationID` 与 `upstream.InjectPromptCacheKey` 快路径。实测 200KB body：**5.7μs vs 195μs（34 倍）**，单请求省 ~190μs；未命中/畸形 body 回落整树解析，语义零变化 |
+| 2026-11-10 | `misakano7545/internal/server/responses.go` | `internal/server/responses.go` + `responses_response.go` | **R2-1 完成**：`POST /v1/responses` 适配层。与 Anthropic 层同构（转换型 ResponseWriter 复用 chatCompletions，不复制调度）。支持 input 字符串/数组、instructions、function_call 历史项、内置工具剥离、流式具名事件。13 例测试 + 真实上游端到端（非流式 `text='正常'`、流式 12 事件顺序合规）。**本仓实现比参照更简洁**（参照 1763 行含工具/续写联动，本仓先做协议正确性子集） |
