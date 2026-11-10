@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 )
 
 // sseHeartbeatInterval 流式透传的空闲心跳间隔：距上一次写出超过该时长即写一条
@@ -607,7 +609,27 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 
 	// writeFrame 把 payload 按规范白名单重建后以 data: 帧写出并 flush。
 	// 仅 JSON 解析成功时计数记为一次有效转发（JSON 解析失败照常降级原样写出，但不计数）。
-	writeFrame := func(payload string) (int, error) {
+	// 声明与赋值分开：粘帧拆分（issue #197）需要递归调用本函数。
+	var writeFrame func(string) (int, error)
+	writeFrame = func(payload string) (int, error) {
+		// 粘帧（issue #197）：上游偶发把两个 chunk 塞进同一个 data 行，形如
+		// `data: {a} {b}`。原样透传会让客户端按 SSE 规范把整行当一个 JSON 解析，
+		// 直接失败在「第二个对象」上——报错是
+		// `Unexpected non-whitespace character after JSON at position N`
+		// 并且整轮对话作废。拆成多个对象逐个走常规路径，客户端每秒都在解析
+		// 合法帧，不会看到这个形态。
+		if parts := splitConcatenatedJSON(payload); len(parts) > 1 {
+			logx.Warnf("[upstream] data 帧内含 %d 个 JSON 对象（上游粘帧）→ 拆成独立帧透传", len(parts))
+			n := 0
+			for _, part := range parts {
+				c, werr := writeFrame(part)
+				if werr != nil {
+					return n, werr
+				}
+				n += c
+			}
+			return n, nil
+		}
 		var obj map[string]any
 		valid := 0
 		if json.Unmarshal([]byte(payload), &obj) == nil {
@@ -656,6 +678,11 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 		_, werr := io.WriteString(w, "data: "+payload+"\n\n")
 		if werr == nil && fl != nil {
 			fl.Flush()
+		}
+		if valid == 0 && looksLikeJSON(payload) {
+			// 非 JSON 帧：原样降级写出，不计数（与修复前一致）。留下 WARN 是因为
+			// 这是「客户端收到非协议帧」的唯一线索，静默透传时线上完全查不到。
+			logx.Warnf("[upstream] data 帧不是合法 JSON → 原样透传（%.160s）", payload)
 		}
 		wmu.Unlock()
 		if werr == nil {

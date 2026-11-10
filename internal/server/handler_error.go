@@ -168,6 +168,11 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 不罚账号（无冷却/熔断/NoteError，同 ErrContentBlocked 待遇）；chatCompletions
 		// 已 fail-fast 400 透传原文、终止轮转——「换号可能有不同模型权限」属 11102
 		// （ErrModelBlocked）的分类域，与本类无关。
+	case upstream.ErrEmptyContent:
+		// 11151 空 text 段：请求内容的问题（历史里某个 text 段是空串/缺失），同一 body
+		// 换任何账号都是同样的拒绝。零动作（不冷却/不熔断/不 NoteError/不喂连败，同
+		// ErrPromptTooLong/ErrModelParamInvalid 待遇）；出站前 empty_text_part.go 已补位，
+		// 走到这里说明补位没覆盖该形态，chatCompletions 已 fail-fast 400 透传原文、终止轮转。
 	case upstream.ErrModelParamInvalid:
 		// 11133「model_param_invalid」：请求参数被上游模型提供方拒绝，属请求级错误
 		// （同一 body 换任何号都被同样拒绝，payload.go 已记录「schema 级拒绝换账号

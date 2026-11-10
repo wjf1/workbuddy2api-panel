@@ -33,6 +33,7 @@ const (
 	ErrImageInvalid                     // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
 	ErrModelParamInvalid                // 11133「model_param_invalid」→ 请求参数被上游模型提供方拒绝：请求级错误，不罚号、不轮转，末端透传原文 400
 	ErrUpstreamQueue                    // 6020/6021 上游免费档排队（queue.waiting / queue.full）→ 上游整体过载，与账号/模型都无关：不罚号、不轮转，末端透传原文 429
+	ErrEmptyContent                     // 11151「a message has empty content」→ 请求内容级空段（出站已补位，这里是兜底）：请求级错误，不罚号、不轮转，末端透传原文 400
 	ErrClient                           // 其他 4xx / 业务错误
 )
 
@@ -64,6 +65,8 @@ func (k ErrKind) String() string {
 		return "model_param_invalid"
 	case ErrUpstreamQueue:
 		return "upstream_queue"
+	case ErrEmptyContent:
+		return "empty_content"
 	case ErrAccountFault:
 		return "account_fault"
 	case ErrClient:
@@ -816,6 +819,13 @@ func Classify(status int, body string) ErrKind {
 	// （11133 code / extError.code=model_param_invalid / 精确文案），并绑定 400 状态码收紧。
 	if status == http.StatusBadRequest && isModelParamInvalid(body) {
 		return ErrModelParamInvalid
+	}
+	// 11151「a message has empty content」：请求里有空 text 段。出站管线已在
+	// payload.go 补位（guardEmptyTextParts），这里兜住漏网形态（如上游校验口径
+	// 变化）。与 11133 同为请求级错误——同一 body 换任何账号都必然失败，轮转
+	// 只会白烧健康号配额。fail-fast 400 透传原文，不罚号、不轮转。
+	if status == http.StatusBadRequest && strings.Contains(lower, "11151") {
+		return ErrEmptyContent
 	}
 	// 内容策略拦截（HTTP 400 + 审核文案）：判在通用 ErrClient 之前。
 	// 这是误报信号，不罚账号，由网关降级重试处理（见 handler.applyErrorPolicy）。

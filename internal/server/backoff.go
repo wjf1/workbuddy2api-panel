@@ -7,6 +7,8 @@ import (
 	"context"
 	"math/rand/v2"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
 // rotateBackoffBase 轮转退避基数（对齐官方 intl CLI computeRequestRetryDelayMs
@@ -72,4 +74,56 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
+}
+
+// egressBackoffBase 出口级瞬时失败的退避基数（egress.go：秒级、1s 起、翻倍、
+// 封顶 15s、±25% 抖动，对齐参照上游 bfdba51 / hub wb_egress.py）。
+//
+// 与 rotateBackoffBase 的区别是**记账对象**不同，不是同一件事换个数字：轮转退避
+// 是「换号前歇一下，让上游频控窗口滑过」；本阶梯是「这条出口连续失败 N 次，整条
+// 链路歇一下」——直连出口被全池账号共用，换号换不到别的链路。测试置 0 跳过真实
+// 等待（TestMain 已置）。
+var egressBackoffBase = 1 * time.Second
+
+const (
+	// egressBackoffCap 出口级退避封顶。
+	egressBackoffCap = 15 * time.Second
+	// egressGiveUpStreak 连续失败到这么多次就不再换号重试：链路已经证明是断的，
+	// 换号只是把同样的等待与失败重复一遍（同一出口）。4 次刚好走完 1s/2s/4s
+	// 三级阶梯——累计约 7 秒，对客户端是可忍的等待，对池子是「别把整池号一个个
+	// 拖进惩罚」的分界线。
+	egressGiveUpStreak = 4
+)
+
+// egressBackoff 出口连续失败 streak 次后应等待的时长：base·2^(streak-1) 封顶
+// egressBackoffCap，再施加 ±25% 抖动（与轮转退避同一 jitterDur，单一来源）。
+// base<=0（测试）或 streak<=0 恒 0。
+func egressBackoff(streak int, base time.Duration) time.Duration {
+	if base <= 0 || streak <= 0 {
+		return 0
+	}
+	d := base
+	for k := 1; k < streak && d < egressBackoffCap; k++ {
+		d *= 2
+		if d <= 0 { // 溢出防御（实际到不了：cap 15s）
+			return jitterDur(egressBackoffCap)
+		}
+	}
+	if d > egressBackoffCap {
+		d = egressBackoffCap
+	}
+	return jitterDur(d)
+}
+
+// egressKey 这次传输层失败该记到哪个出口上。
+//
+// 键 = "direct:" + 域：cn 与 global 是不同的上游域名与网络环境，共用一条阶梯会让
+// 一个域的抖动压住另一个域刚恢复的那几秒。本仓无 per-account 代理（全部直连），
+// 故不存在节点身份维度；将来引入代理池时应取代理节点 ID，而不是在账号上猜。
+func egressKey(a *auth.Auth) string {
+	realm := "cn"
+	if a != nil && a.Realm() != "" {
+		realm = a.Realm()
+	}
+	return "direct:" + realm
 }

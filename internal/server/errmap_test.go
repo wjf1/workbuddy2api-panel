@@ -18,6 +18,7 @@ func TestHTTPStatusForKind(t *testing.T) {
 		upstream.ErrPromptTooLong:     http.StatusBadRequest,
 		upstream.ErrImageInvalid:      http.StatusBadRequest,
 		upstream.ErrModelParamInvalid: http.StatusBadRequest,
+		upstream.ErrEmptyContent:      http.StatusBadRequest,
 		upstream.ErrContentBlocked:    http.StatusBadRequest,
 		upstream.ErrModelBlocked:      http.StatusBadRequest,
 

@@ -493,17 +493,23 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					logfmt.Label(acct.UID, acct.Nickname), terr)
 				break
 			}
-			// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
-			// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
-			// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
-			// 上游 client 已打 transport error 日志。
+			// 出口级归因（pool/egress.go）：本仓全部请求共享同一直连出口，拨号/TLS
+			// 失败发生在上游看到这个号之前，不携带「这个号坏了」的任何证据。记到
+			// 账号头上时，一次链路抖动会顺着轮转逐个给被选中的号记连败——hub 现场
+			// 实测 4 小时 196 次 URLError 陆续降权 13 个号，而链路只断了几秒。
+			// 改记出口（键按域分开），退避降到秒级；ErrClient（未知 4xx）仍喂
+			// NoteFailures 不受影响——那里有「这个号被拒」的证据。
 			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 			st.status = http.StatusServiceUnavailable
 			lastErr = terr
-			h.cfg.Pool.NoteFailures(acct.UID)
-			fail(acct.UID)
-			if !rotateBackoff(i, r.Context()) {
-				break // ctx 取消：终止轮转（传输层错误换号退避）
+			streak := h.cfg.Pool.NoteEgressFailure(egressKey(acct), time.Now())
+			if streak >= egressGiveUpStreak {
+				// 链路连续失败：换号只是把同样的等待与失败重复一遍（换不到别的
+				// 链路），快速失败让客户端按自己的节奏重试。
+				break
+			}
+			if !sleepCtx(r.Context(), egressBackoff(streak, egressBackoffBase)) {
+				break // ctx 取消：终止轮转（传输层错误换路退避）
 			}
 			continue
 		}
@@ -575,6 +581,23 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				}
 				writeOpenAIErrorHint(w, httpStatusForKind(kind), "image_invalid", msg,
 					h.hintOf(upstream.ErrImageInvalid, string(respBody), bareModel, reqHasImage, uerr))
+				st.status = httpStatusForKind(kind)
+				st.outcome = reqlog.OutcomeHTTPError
+				return
+			}
+			// 空 text 段（11151）：出站前 empty_text_part.go 已补位，走到这里是兜底
+			// （上游校验口径变化等）。与 11115 / 11133 同一哲学——同一 body 换任何账号
+			// 都是同样的拒绝，轮转只会白烧健康号配额再把 503 丢给客户端（客户端会对
+			// 必然失败的请求无限重试）。立即透传上游原文回 400，不罚号不轮转。
+			if kind == upstream.ErrEmptyContent {
+				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+				fail(acct.UID)
+				msg := string(respBody)
+				if strings.TrimSpace(msg) == "" {
+					msg = "a message in the request history has empty content"
+				}
+				writeOpenAIErrorHint(w, httpStatusForKind(kind), "empty_content", msg,
+					h.hintOf(upstream.ErrEmptyContent, string(respBody), bareModel, reqHasImage, uerr))
 				st.status = httpStatusForKind(kind)
 				st.outcome = reqlog.OutcomeHTTPError
 				return

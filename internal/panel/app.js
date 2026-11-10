@@ -3267,11 +3267,18 @@ function parsePointTime(p) {
   return isNaN(d.getTime()) ? null : d.getTime();
 }
 
+/* fmtTokDateLabel 时间点的 "M-DD" 短日期（月不补零、日补零）。日桶标签与
+   小时桶的跨天消歧前缀共用这一口径。 */
+function fmtTokDateLabel(p) {
+  const d = new Date(p.t);
+  return (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 /* fmtTokTimeLabel 时间桶的短标签，与 x 轴刻度同一口径（日桶 MM-DD，小时桶 HH:00）。 */
 function fmtTokTimeLabel(p) {
   const d = new Date(p.t);
   return p.scope === 'day'
-    ? (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0')
+    ? fmtTokDateLabel(p)
     : String(d.getHours()).padStart(2, '0') + ':00';
 }
 
@@ -3286,6 +3293,80 @@ function fmtTokTimeRange(p) {
   const pad = n => String(n).padStart(2, '0');
   const h = d.getHours();
   return md + ' ' + pad(h) + ':00–' + pad(h + 1) + ':00';
+}
+
+/* usXAxisLabels 用量图 x 轴刻度的选点与避让（纯函数，node vm 可测）。
+ *
+ * 输入 pts（{t, scope}，按 t 升序）、xOf（时间 → x 坐标）、layout（W/PL/PR/y/fs）；
+ * 返回 [{x, y, anchor, text}]。三步：
+ *   1. 候选：按真实时间均匀取 ≤6 个目标位、各吸附最近的实际柱子，按索引去重
+ *      （target 取 t0/t1 时最近点必是首末点，所以首末候选必入选）；
+ *   2. 消歧：候选里出现重复文本（跨天窗口里两天的 "22:00"）时，这几个点统一加
+ *      "M-DD " 日期前缀——只给后者加，宽度估算就会和最终文本不一致；
+ *   3. 防重叠：首点必放；中间候选按 x 升序贪心，与前一个已放标签的中心距小于
+ *      两侧半宽和 + 呼吸空隙则跳过；末点必放，冲突时挤掉最后放的非首标签。
+ *
+ * 标签宽度按 mono 等宽估算（字符 ≈ 0.62 × fs，.tk 用 var(--fs-xs)=11px）：
+ * 不依赖 DOM 测量，node 单测可直接断言间距。旧实现（≤1.20.0）直接输出吸附
+ * 结果，数据断档两侧相邻柱子的标签会叠字、跨天同名小时分不清是哪天
+ * （2026-11-10 实案：近 3 天窗口 7 个点，轴上出现两个挤在一起的 "22:00"）。
+ */
+function usXAxisLabels(pts, xOf, layout) {
+  const { W, PL, PR, y, fs } = layout;
+  const n = pts.length;
+  const t0 = pts[0].t, t1 = pts[n - 1].t;
+  const span = Math.max(1, t1 - t0);
+  const TICKS = Math.min(6, n);
+
+  // 1. 均匀目标吸附，索引去重
+  const cand = new Map();
+  for (let k = 0; k < TICKS; k++) {
+    const target = t0 + span * (TICKS === 1 ? 0.5 : k / (TICKS - 1));
+    let bi = 0, best = Infinity;
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(pts[i].t - target);
+      if (d < best) { best = d; bi = i; }
+    }
+    if (!cand.has(bi)) cand.set(bi, true);
+  }
+  const idxs = [...cand.keys()].sort((a, b) => a - b);
+
+  // 2. 文本消歧：重复文本统一带日期前缀
+  const byText = {};
+  for (const i of idxs) {
+    const label = fmtTokTimeLabel(pts[i]);
+    (byText[label] = byText[label] || []).push(i);
+  }
+  const text = {};
+  for (const label in byText) {
+    for (const i of byText[label]) {
+      text[i] = byText[label].length > 1 ? fmtTokDateLabel(pts[i]) + ' ' + label : label;
+    }
+  }
+
+  // 3. 防重叠放置。halfW 是半宽 + 两侧各 3 用户单位呼吸空隙。
+  const halfW = i => text[i].length * fs * 0.62 / 2 + 3;
+  const out = [];
+  const place = i => {
+    const cx = Math.max(PL, Math.min(W - PR, xOf(pts[i].t)));
+    // 首尾标签靠边对齐，避免被裁掉
+    const anchor = cx < PL + 14 ? 'start' : (cx > W - PR - 14 ? 'end' : 'middle');
+    out.push({ x: cx, y, anchor, text: text[i], hw: halfW(i) });
+  };
+  place(idxs[0]);
+  for (let j = 1; j < idxs.length - 1; j++) {
+    const i = idxs[j], last = out[out.length - 1];
+    if (xOf(pts[i].t) - last.x < halfW(i) + last.hw) continue;
+    place(i);
+  }
+  const lastIdx = idxs[idxs.length - 1];
+  if (lastIdx !== idxs[0]) {
+    const last = out[out.length - 1];
+    // 末点优先：与最后放的非首标签贴得太近时，挤掉它（首点永不被挤）
+    if (out.length > 1 && xOf(pts[lastIdx].t) - last.x < halfW(lastIdx) + last.hw) out.pop();
+    place(lastIdx);
+  }
+  return out;
 }
 
 function renderUsageChart(series) {
@@ -3358,14 +3439,32 @@ function renderUsageChart(series) {
            '" text-anchor="end">' + fmtTok(max * i / 4) + '</text>';
   }
 
+  // 峰值标注的几何提前算好：均值标签的避让要用，峰值段直接复用。
+  // estW 按 mono 等宽估文本宽（.tk-avg/.tk-peak 都是 var(--fs-xs)=11px）。
+  const peakPx = Math.max(PL, Math.min(W - PR, xOf(peak.t)));
+  const peakPy = Math.max(10, yOf(peak.tt) - 5);
+  const peakAnchor = xOf(peak.t) > W - PR - 90 ? 'end' : 'middle';
+  const peakText = '峰值 ' + fmtTok(peak.tt);
+  const estW = s => s.length * 11 * 0.62;
+  const peakLeft = peakAnchor === 'end' ? peakPx - estW(peakText) : peakPx - estW(peakText) / 2;
+  const peakRight = peakAnchor === 'end' ? peakPx : peakPx + estW(peakText) / 2;
+
   // 均值参考线：一眼看出"这根是不是异常高"，比只给刻度省心。
   // 标签放左侧：右侧常被峰值柱占用（峰值柱往往就是最后一根），贴左不会被压住。
+  // 但 avg 逼近 max 时标签会和峰值标注叠进同一行（两条线几乎贴着图顶）——
+  // 水平区间也相交时把均值标签挪到均值线下方避让。
   if (avg > 0 && avg < max) {
     const y = yOf(avg);
+    const avgText = '均值 ' + fmtTok(avg);
+    let ty = y - 4;
+    if (Math.abs(peakPy - ty) < 13 &&
+        peakLeft < PL + 5 + estW(avgText) && PL + 5 < peakRight) {
+      ty = y + 16;
+    }
     out += '<line class="avg" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) +
            '" y2="' + y.toFixed(1) + '"/>';
-    out += '<text class="tk-avg" x="' + (PL + 5) + '" y="' + (y - 4).toFixed(1) +
-           '" text-anchor="start">均值 ' + fmtTok(avg) + '</text>';
+    out += '<text class="tk-avg" x="' + (PL + 5) + '" y="' + ty.toFixed(1) +
+           '" text-anchor="start">' + esc(avgText) + '</text>';
   }
 
   // 柱子：每个点用 <g> 包住「输入柱 + 输出柱 + <title>」。
@@ -3397,38 +3496,22 @@ function renderUsageChart(series) {
   }
 
   // 峰值标注：柱子够窄时文字压在柱顶，够宽时贴右侧避免和柱体重叠。
-  {
-    const px = xOf(peak.t);
-    const py = yOf(peak.tt);
-    const anchor = px > W - PR - 90 ? 'end' : 'middle';
-    out += '<text class="tk-peak" x="' + Math.max(PL, Math.min(W - PR, px)).toFixed(1) +
-           '" y="' + Math.max(10, py - 5).toFixed(1) + '" text-anchor="' + anchor + '">' +
-           '峰值 ' + fmtTok(peak.tt) + '</text>';
-  }
+  // 几何在均值段之前算好（peakPx/peakPy/peakAnchor），那里要用它判避让。
+  out += '<text class="tk-peak" x="' + peakPx.toFixed(1) +
+         '" y="' + peakPy.toFixed(1) + '" text-anchor="' + peakAnchor + '">' +
+         esc(peakText) + '</text>';
 
   // x 轴基线画在柱子之后，避免压在柱底
   out += '<line class="ax" x1="' + PL + '" y1="' + yBase + '" x2="' + (W - PR) +
          '" y2="' + yBase + '"/>';
 
-  // x 轴刻度：按真实时间等距取 6 个位置，取该位置**最近的实际柱子**做标签，
-  // 所以标签永远落在有数据的点上，不会指到空档里。
-  const TICKS = Math.min(6, pts.length);
-  const usedLabel = new Set();
-  for (let k = 0; k < TICKS; k++) {
-    const target = t0 + span * (TICKS === 1 ? 0.5 : k / (TICKS - 1));
-    let bi = 0, best = Infinity;
-    for (let i = 0; i < pts.length; i++) {
-      const d = Math.abs(pts[i].t - target);
-      if (d < best) { best = d; bi = i; }
-    }
-    if (usedLabel.has(bi)) continue;
-    usedLabel.add(bi);
-    const p = pts[bi];
-    // 首尾标签靠边对齐，避免被裁掉
-    const cx = xOf(p.t);
-    const anchor = cx < PL + 14 ? 'start' : (cx > W - PR - 14 ? 'end' : 'middle');
-    out += '<text class="tk" x="' + Math.max(PL, Math.min(W - PR, cx)).toFixed(1) +
-           '" y="' + (PT + ih + 15) + '" text-anchor="' + anchor + '">' + esc(fmtTokTimeLabel(p)) + '</text>';
+  // x 轴刻度：按真实时间等距取 6 个目标位、吸附最近的实际柱子（标签永远落在
+  // 有数据的点上，不会指到空档里）；防重叠与跨天文本消歧交给 usXAxisLabels——
+  // 旧实现直接输出，断档两侧相邻柱子的标签会叠字，跨天的两个 "22:00" 分不清
+  // 是哪天（2026-11-10 实案）。
+  for (const tk of usXAxisLabels(pts, xOf, { W, PL, PR, y: PT + ih + 15, fs: 11 })) {
+    out += '<text class="tk" x="' + tk.x.toFixed(1) + '" y="' + tk.y +
+           '" text-anchor="' + tk.anchor + '">' + esc(tk.text) + '</text>';
   }
 
   // 跨天时补一条日期分隔线，让「日界」在长窗口里可见

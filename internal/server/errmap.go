@@ -29,6 +29,7 @@ func httpStatusForKind(kind upstream.ErrKind) int {
 		upstream.ErrPromptTooLong,     // 11115 上下文超限
 		upstream.ErrImageInvalid,      // 图片格式/数据无效
 		upstream.ErrModelParamInvalid, // 11133 参数被模型提供方拒绝
+		upstream.ErrEmptyContent,      // 11151 空 text 段（出站已补位，这里是兜底）
 		upstream.ErrContentBlocked,    // 内容策略拦截（降级重试已在上游侧做完）
 		upstream.ErrModelBlocked:      // 11102 该号无此模型（换号无用、换模型有用）
 		return http.StatusBadRequest

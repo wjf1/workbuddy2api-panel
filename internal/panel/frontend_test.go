@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -897,5 +898,115 @@ process.stdout.write(JSON.stringify([
 	const want = `[true,"",true,"",false,false,"secret"]`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("collectConfig=%s want %s", strings.TrimSpace(string(out)), want)
+	}
+}
+
+// 用量图 x 轴刻度必须防重叠、跨天重复小时必须带日期消歧（2026-11-10 实案：
+// 近 3 天窗口 7 个稀疏点，轴上出现两个挤在一起的 "22:00"）。
+func TestAppJSUsageAxisLabels(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; usage axis label test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function fmtTokDateLabel');
+const end = src.indexOf('function renderUsageChart');
+if (start < 0 || end < 0) throw new Error('axis label helpers not found');
+const ctx = { Date, Number, String, Math, Map, Object, Infinity };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.usXAxisLabels = usXAxisLabels;', ctx);
+
+const PL = 58, PR = 14, W = 1200, iw = W - PL - PR;
+const layout = { W, PL, PR, y: 185, fs: 11 };
+const mk = (mo, d, h) => ({ t: new Date(2026, mo - 1, d, h).getTime(), scope: 'hour' });
+function linearXOf(pts) {
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t, span = Math.max(1, t1 - t0);
+  const bw = 10;
+  return t => PL + bw / 2 + (t - t0) / span * Math.max(1, iw - bw);
+}
+function noOverlap(out) {
+  for (let i = 1; i < out.length; i++) {
+    if (out[i].x - out[i - 1].x < out[i].hw + out[i - 1].hw) return false;
+  }
+  return true;
+}
+// A：复现实案——7 个稀疏点带断档，跨天重复 "22:00"
+const sparse = [mk(11,7,19), mk(11,7,23), mk(11,8,21), mk(11,8,22), mk(11,9,3), mk(11,9,21), mk(11,9,22)];
+const a = ctx.usXAxisLabels(sparse, linearXOf(sparse), layout);
+// B：末点优先的挤掉分支——xOf 手工映射让末两点贴近
+const popPts = [mk(11,7,19), mk(11,7,23), mk(11,8,3), mk(11,8,21), mk(11,8,22), mk(11,9,21), mk(11,9,22)];
+const xs = [58, 200, 342, 484, 626, 1100, 1105];
+const popts = popPts.map(p => p.t);
+const b = ctx.usXAxisLabels(popPts, t => xs[popts.indexOf(t)], layout);
+// C：连续 40 个小时桶（近 3 天常规窗口）
+const dense = [];
+for (let i = 0; i < 40; i++) dense.push({ t: new Date(2026, 10, 7, 10).getTime() + i * 3600000, scope: 'hour' });
+const c = ctx.usXAxisLabels(dense, linearXOf(dense), layout);
+// D：单点
+const d = ctx.usXAxisLabels([mk(11,9,22)], linearXOf([mk(11,9,22)]), layout);
+process.stdout.write(JSON.stringify({
+  a: { texts: a.map(o => o.text), ok: noOverlap(a), n: a.length },
+  b: { texts: b.map(o => o.text), ok: noOverlap(b), n: b.length },
+  c: { texts: c.map(o => o.text), ok: noOverlap(c), n: c.length },
+  d: { texts: d.map(o => o.text), n: d.length, anchor: d[0].anchor },
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "usage-axis-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("usage axis label node test failed: %v\n%s", err, out)
+	}
+	var got struct {
+		A struct {
+			Texts []string `json:"texts"`
+			OK    bool     `json:"ok"`
+			N     int      `json:"n"`
+		} `json:"a"`
+		B struct {
+			Texts []string `json:"texts"`
+			OK    bool     `json:"ok"`
+			N     int      `json:"n"`
+		} `json:"b"`
+		C struct {
+			Texts []string `json:"texts"`
+			OK    bool     `json:"ok"`
+			N     int      `json:"n"`
+		} `json:"c"`
+		D struct {
+			Texts  []string `json:"texts"`
+			N      int      `json:"n"`
+			Anchor string   `json:"anchor"`
+		} `json:"d"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &got); err != nil {
+		t.Fatalf("usage axis label output not JSON: %v\n%s", err, out)
+	}
+	// A：断档吸附下 5 个刻度齐全、互不重叠（k2 吸附 11-8 21:00 而非 22:00，
+	// 候选里只有一个 "22:00"，不触发消歧——消歧由 B/C 的跨天重复覆盖）
+	wantA := []string{"19:00", "23:00", "21:00", "03:00", "22:00"}
+	if !got.A.OK || got.A.N != len(wantA) || !reflect.DeepEqual(got.A.Texts, wantA) {
+		t.Fatalf("sparse labels=%v (n=%d ok=%v) want %v", got.A.Texts, got.A.N, got.A.OK, wantA)
+	}
+	// B：末点 22:00 必在，被挤掉的是倒数第二个 "11-9 21:00"
+	wantB := []string{"19:00", "03:00", "11-08 21:00", "11-08 22:00", "11-09 22:00"}
+	if !got.B.OK || !reflect.DeepEqual(got.B.Texts, wantB) {
+		t.Fatalf("pop labels=%v (ok=%v) want %v", got.B.Texts, got.B.OK, wantB)
+	}
+	// C：连续桶常规窗口——吸附后无同名小时，标签保持裸 "HH:00" 不加前缀
+	wantC := []string{"10:00", "18:00", "02:00", "09:00", "17:00", "01:00"}
+	if !got.C.OK || !reflect.DeepEqual(got.C.Texts, wantC) {
+		t.Fatalf("dense labels=%v (ok=%v) want %v", got.C.Texts, got.C.OK, wantC)
+	}
+	// D：单点退化为单个 start 对齐标签
+	if got.D.N != 1 || got.D.Anchor != "start" || got.D.Texts[0] != "22:00" {
+		t.Fatalf("single label=%v (anchor=%s)", got.D.Texts, got.D.Anchor)
 	}
 }

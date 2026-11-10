@@ -35,6 +35,7 @@ import (
 func TestMain(m *testing.M) {
 	chatLogEnabled = false
 	rotateBackoffBase = 0
+	egressBackoffBase = 0 // 出口退避同为秒级真实等待，既有传输层失败用例不睡
 	os.Exit(m.Run())
 }
 
