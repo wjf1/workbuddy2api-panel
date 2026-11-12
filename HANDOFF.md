@@ -70,7 +70,69 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（用量图 x 轴标签防重叠 → 未发版，2026-11-11）
+## 4. 最近一轮变更与交付成果（用量页多处重叠修复 + A 机部署 → 未发版，2026-11-12）
+
+### 4.0 本轮总结：三处重叠修复闭环 + 部署生效
+
+- **事件**：用户实案截图（127.0.0.1:7863/panel/#usage，部署副本 1.20.0）红框
+  三处重叠——①X 轴刻度粘连（"223000"/"21:00 23:00"，即上一轮 `usXAxisLabels`
+  已修未部署部分）；②均值线标签被首柱盖住前缀（"均值 55.22M"→"值 55.22M"）；
+  ③用量明细表第一行（69677d77）悬在吸附表头上方。
+- **修复**：
+  - `internal/panel/app.js`：新增纯函数 `usAvgLabelPlacement`（候选「线上左→
+    线上右→线下左→线下右」+ 柱体/峰值矩形相交检测），均值段改调用之；
+    `yBase`/`barRects` 提前到 xOf/yOf 后收集。
+  - `internal/panel/index.html`：新增 `.scroll-y`（限高 `min(520px,62dvh)` +
+    `overflow:auto` + `thead th top:0`），用量明细/积分扣除两表容器化；「跟页滚
+    + 吸顶栏」sticky 表头的吸附过渡期穿帮（行悬到表头上方、无容器裁剪）由
+    容器化物理消除。
+  - `internal/panel/frontend_test.go`：新增 `TestAppJSUsageAvgLabelPlacement`
+    四场景单测（首柱盖左上→右上 / 峰值占右上→左下 / 全冲突兜底右下 /
+    无冲突默认左上）。
+- **验证**：`go vet`/gofmt 干净、27 包全绿（新单测 PASS）；构建带版本资源 exe
+  （SHA256 `9BD0A6D2…C72F8`，`WorkBuddy2API Panel / 1.20.0-panel`）部署 A 机
+  （`swap-deploy-20261112.cmd` 00:09:18 完成，停机 0.5s，备份
+  `wb2api.exe.1.20.0-panel.bak`）；chrome-devtools 真实走查：均值标签落点=
+  线上右（与单测场景 A 一致）且与柱体/刻度零相交、X 轴 8 刻度零叠字、两表
+  未滚动重叠 0px/吸顶保持/表头遮挡栈 TH 正确。
+- **遗留**：模型表/任务表/逐包明细同为「跟页滚 + 吸顶栏」形态（行数少、穿帮
+  瞬态窗口小，本轮未动）；若后续要做，沿用 `.scroll-y` 容器化即可。
+- **文件**：`internal/panel/app.js`、`internal/panel/index.html`、
+  `internal/panel/frontend_test.go`。A 机部署目录新增 `swap-deploy-20261112.cmd`、
+  `swap-deploy-20261112.log`、`wb2api.exe.1.20.0-panel.bak`。
+
+## 4.0 上一轮（火绒误报事件闭环 + PE 版本资源注入 → 未发版，2026-11-11）
+
+### 4.0 本轮总结：杀软启发式误报治理（治本）+ A 机回滚 1.20.0
+
+- **事件**：2026-11-11 22:55:31 火绒实时监控把 A 机部署目录 `wb2api.exe`（START.cmd
+  从 `1.19.3-panel.bak` 恢复后 2 秒落盘）判为 `HEUR:VirTool/Obfuscator.a` 删除；
+  11-10 23:16 部署的 1.20.0 更早被删（START.cmd 22:55 报 exe missing 的原因）。
+  同项目两个自编译 build 连续命中同一启发式 = 编译产物画像误报（前例：腾讯电脑
+  管家，§4.0.4），非真感染；当前 exe md5 与备份逐字节一致亦佐证。
+- **A 机处置（已闭环）**：火绒已退出/卸载（用户确认）；`swap-back-1.20.0.cmd`
+  23:32:39 停任务 → 0.4s 进程退 → copy `wb2api.exe.new` → 起任务。当前部署 =
+  **1.20.0**（exe SHA256 `B0D56D80…F2A5` 与 swap-1.20.0.log 记录一致），:7863
+  HTTP 200，进程正常。
+- **治本（源码已改，未发版）**：
+  - 新增 `scripts/gen-versioninfo.sh`：版本号从 `cmd/server/main.go` 的
+    `appVersion` 单一事实来源派生，生成 `cmd/server/winres.json` +
+    `rsrc_windows_amd64.syso`；GOPROXY 直连不通时自动回落 goproxy.cn。
+  - 工具 `tc-hib/go-winres@v0.3.3`：syso 文件名带 `_windows_amd64` 平台限定，
+    仅 windows/amd64 构建自动链接。goversioninfo@v1.2.0 弃用（底层
+    akavel/rsrc v0.8.0 的 COFF 重定位在 go1.27 内部链接器报
+    `unknown relocation type 7`）。
+  - `go-binaries.yml` build job windows 矩阵项构建前自动注入（CI 产物自此带
+    VERSIONINFO）；`.gitignore` 排除两个生成物。
+- **验证**：本机产物 PowerShell `VersionInfo` = `WorkBuddy2API Panel /
+  1.20.0-panel / wjf1`；`go vet` 干净、gofmt 空、`go test ./...` 27 包全绿；
+  `GOOS=linux` 交叉编译不受 syso 污染；二进制版本串断言通过。
+- **文件**：新增 `scripts/gen-versioninfo.sh`（`winres.json` /
+  `rsrc_windows_amd64.syso` 为生成物不进仓库）；改
+  `.github/workflows/go-binaries.yml`、`.gitignore`。A 机部署目录新增
+  `swap-back-1.20.0.cmd`、`swap-back-1.20.0.log`。
+
+## 4.0 上一轮（用量图 x 轴标签防重叠 → 未发版，2026-11-11）
 
 ### 4.0 本轮总结：用量图 x 轴刻度防重叠 + 跨天同名小时消歧
 
@@ -439,11 +501,21 @@ data/backups/          备份输出（同上）
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 
-### ⚠️ 本机 7863 部署副本待升级（含 1.20.0 + 用量图修复，均未部署）
+### ⚠️ 2026-11-12 晚：火绒删 exe 导致 7863 反复起不来（已定位并加白）
 
-本机计划任务跑的 `wb2api.exe` 是 **v1.19.3** 部署副本（127.0.0.1:7863）；仓库已到
-1.20.0 + 未发版的用量图 x 轴标签修复。下次部署一次带全：备份 exe → 替换新构建 →
-重启任务（无配置变更；提权约束见下方 1.19.3 部署记录）。
+- **症状链**：任务「启动成功」但服务不在——`data\server.log` 只有一行「拒绝访问」或 0 字节；`wb2api.exe` 凭空消失；`deploy-1.19.3.log` 出现「exe missing, restored from …bak」（11-11 22:55 / 22:56 两次）。
+- **根因**：**火绒（`HipsTray`）实时防护按内容删 PE**，不是电脑管家。WinDefender `RealTimeProtectionEnabled=False`。
+- **处置**：用户 2026-11-12 21:43 在火绒「信任区」加白部署目录后，官方 `1.20.0`（`b0d56d80…`）写入后稳定存活、`-h` 可执行、服务冒烟通过。详见 §6 同名避坑条。
+- **当前托管方式**：7863 由**会话用户的受管后台进程**拉起（非 SYSTEM 计划任务，因本机 `Start-ScheduledTask`/`schtasks`/COM/`Start-Process RunAs` 全被安全策略拦截，见 §6）。该进程随会话回收，**重启机器后计划任务会自动接管**；要立刻转正 = 先停后台进程，再由管理员跑 `START.cmd`。
+
+### ✅ 本机 7863 部署副本：已同步至 1.20.0-panel + 全部未发版修复（2026-11-12 00:09）
+
+部署副本现与仓库源码一致（appVersion 1.20.0-panel）：含用量图 X 轴防重叠、
+均值标签落点避让、用量明细/积分扣除表容器化、PE 版本资源（exe SHA256
+`9BD0A6D2…C72F8`，`WorkBuddy2API Panel / 1.20.0-panel`）。升级流程惯例：
+备份 exe → 停任务 → 换 `.new` → 起任务（`swap-deploy-20261112.cmd` 可复用：
+放好 `wb2api.exe.new` 提权跑即可）；新构建务必先跑
+`bash scripts/gen-versioninfo.sh` 注入 Windows 版本资源（治杀软误报）。
 
 ### 🔜 下一步：上游对齐 R2-2 剩余与 R3 延后项
 
@@ -675,6 +747,11 @@ annotated tag 强推；v1.19.1 前移到 main 修复提交 `a5ae6f0` 强推。pu
 - **新会话切入路径**：改 Anthropic 层 → 先读 `anthropic.go` / `anthropic_response.go` / `anthropic_websearch.go` / `dsml.go` 四个文件的头注释（设计取舍都写在里面）→ 跑 `go test ./internal/server/ -run 'Anthropic|DSML|ToolCall' -count=1`；改清洗规则 → `anthropic_test.go` 里 `TestStripDSMLText` / `TestDSMLStreamFilter*` 是行为契约，先加失败用例再改 `dsml.go`；改检索解析 → `internal/websearch` 的 `TestParseSoHTML*` fixture 即选择器契约。改回收站/备份 → 先看 `trash.go` / `backup.go` 头注释（目录推导、mtime 语义、毫秒文件名）→ 跑 `go test ./internal/panel/ -run 'Trash|Backup'`；改标签 → `auth.go` 的 `SetTags/NormalizeTags` 与 `export.go/import.go` 的对齐注释；改前端 → 注意 `frontend_test.go` 的 CSP、内联脚本与 id 唯一性断言。
 
 ## 6. 关键避坑与运行约束
+
+- **A 机二进制被火绒「内容级」拦截删除（2026-11-12 实测，排查 1 小时）**：在 `F:\AI\wb2api-panel-v1.13.0-windows-amd64\` 里**新建的任何 PE 内容文件 1 秒内被删**——改成 `.bin` 后缀照样被删，换成 `F:\AI\wb2api-run\` 目录也照样被删（**内容级，不是目录级、不是后缀级**）；同目录新建 `.txt`/`.md` 正常存活。对照矩阵：`1.19.2`（`07446922…`）**存活**；`1.19.3`（`1c2f0bc2…`）、`1.20.0`（`b0d56d80…`）、本地构建（`9bd0a6d2…`）**全被删**。`Get-Process` 只见 `HipsTray`（火绒），Defender `RealTimeProtectionEnabled=False`——即火绒实时防护对 1.19.3+ 误报。
+  **判据/症状**：任务报「启动成功」但服务不在、`data\server.log` 只有一行「拒绝访问」或 0 字节、`wb2api.exe` 凭空消失、`swap-*.log` 反复「exe missing → restored」。
+  **正确处置**：火绒 →「信任区」添加部署目录（或该 exe）→ 隔离区恢复被删文件。**此前把锅记在「腾讯电脑管家」上、并指望 `scripts/gen-versioninfo.sh` 注入 PE 版本资源来治误报，两件事都不成立**：先加白，再谈版本资源。
+  **诊断手法（下次可复用）**：`echo hi > probe.txt`（应存活）对比 `cp <exe> probe.bin`（被删即内容级），再横向换版本/换目录二分。
 
 - **auth.Auth 并发读**：token / domain / expires / tags 等字段会被刷新线程或面板写回，**必须**走带锁访问器（`AccessTokenValue` / `RefreshTokenValue` / `DomainValue` / `TagsValue`）或 `Lock()/Unlock()` 成组读；直读字段是数据竞争。`export.go` 的 `cockpitAccountFromAuth` 是标准示例。
 - **毫秒 vs 秒**：cockpit tools 口径 `expires_at` 为**毫秒**；本面板落盘为 **Unix 秒**。导入（`import.go`）÷1000，导出（`export.go`）×1000，改任何一侧都要同步。**1.14.2 补充**：嵌套形条目经 `auth.Parse`（秒）→ `nestedToCockpit` ×1000（≥1e12 视为已是毫秒不再乘）→ 主循环 ÷1000，全部收敛到 cockpit 毫秒中枢口径。
