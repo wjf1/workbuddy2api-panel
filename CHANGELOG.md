@@ -6,8 +6,43 @@
 
 ## [Unreleased]
 
+## [1.21.0-panel] - 2026-11-12
+
+### 新增
+
+- **Windows PE 版本资源注入（治杀软启发式误报）**：火绒实时监控把 A 机部署的
+  `1.19.3`/`1.20.0` 两个自编译 build 判为 `HEUR:VirTool/Obfuscator.a` 秒杀
+  （此前腾讯电脑管家对源码目录 `go build` 产物 3 秒即清，见 HANDOFF §4.0.4）。
+  根因是自编译 Go 产物「无签名、无版本资源、无产品信息」的裸二进制画像命中
+  启发式规则。治本：新增 `scripts/gen-versioninfo.sh`——版本号从 `appVersion`
+  单一事实来源派生，经 `go-winres@v0.3.3` 生成 `rsrc_windows_amd64.syso`
+  （平台限定命名，仅 windows/amd64 构建自动链接，linux/darwin 交叉编译不受
+  影响），`go-binaries.yml` windows 矩阵项构建前自动注入；产物 exe 自此带
+  ProductName / FileVersion / CompanyName 等完整 VERSIONINFO。工具选型注：
+  goversioninfo@v1.2.0 产物在 go1.27 内部链接器报「unknown relocation
+  type 7」，不可用。
+
 ### 修复
 
+- **用量页多处重叠修复（均值标签被首柱遮挡 + 明细表行穿表头）**：
+  - **均值线标签落点避让**（`internal/panel/app.js` 新增纯函数 `usAvgLabelPlacement`）：
+    旧实现固定画左侧 `x=PL+5`，而首柱恰好从 `PL` 起画——首柱高过均值线时柱子
+    后绘制直接盖住文字前缀（2026-11-11 实案："均值 55.22M" 被 22:30 的 66M
+    首柱盖成 "值 55.22M"）。候选「线上左→线上右→线下左→线下右」按与柱体/
+    峰值标注的矩形相交检测取第一个不冲突落点；node vm 单测
+    `TestAppJSUsageAvgLabelPlacement` 覆盖四场景（首柱盖左上/峰值占右上/
+    全冲突兜底/无冲突默认）。
+  - **用量明细/积分扣除表容器化**（`internal/panel/index.html` 新增 `.scroll-y`）：
+    两表从「跟页滚 + 吸顶栏」改为「限高容器内滚 + 表头吸容器顶」——跟页滚的
+    sticky 表头在吸附过渡期会把第一行数据裸露到吸住的表头上方（跟页滚的表
+    没有容器裁剪兜着；2026-11-11 实案：69677d77 行悬在表头上方与卡片头之间）。
+    行滚出容器顶即被裁剪，穿帮物理消失。模型表/任务表/逐包明细行数少、瞬态
+    窗口小，保持原样（同类形态遗留，HANDOFF §5 记录）。
+  - **X 轴刻度叠字**为上一轮 `usXAxisLabels` 修复的未部署部分，本轮随构建
+    部署一并生效（2026-11-11 实案截图的 "223000" 粘连即旧版形态）。
+  - 验证：27 包全绿 + 新单测 PASS；部署后 chrome-devtools 真实走查——均值
+    标签落点=线上右且与柱体/刻度零相交、X 轴 8 刻度零叠字、两表重叠 0px +
+    吸顶保持 + 表头遮挡栈正确。
 - **空 text 段出站补位 + 11151 分类 + reasoning 镜像**（对齐参照上游 `f987bac`，
   源头为 hub 2026-11-08 实测，两条都是「同 body 换任何账号都必然失败」的形态）：
   - **空 text 段补位**（`internal/upstream/empty_text_part.go`）：上游对 `text` 为

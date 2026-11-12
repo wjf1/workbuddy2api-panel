@@ -3369,6 +3369,46 @@ function usXAxisLabels(pts, xOf, layout) {
   return out;
 }
 
+/* usAvgLabelPlacement 均值线标签的落点选择（纯函数，node vm 可测）。
+ *
+ * 输入 avgText（标签文本）、lineY（均值线 y）、bars（柱体矩形数组）、
+ * occupied（其他已放标注的矩形，如峰值标注）、PL/PR/W（绘图区几何）；
+ * 返回 {x, ty, anchor}。
+ *
+ * 候选按「线上左 → 线上右 → 线下左 → 线下右」顺序取第一个与 bars/occupied
+ * 都不相交的；全冲突时取最后一个兜底（有标签总比没有强）。标签矩形按基线
+ * ty-11 ~ ty+3、宽度按 mono 等宽估算（字符 ≈ 0.62 × fs，.tk-avg 用
+ * var(--fs-xs)=11px）——与 usXAxisLabels 的估算口径一致，不依赖 DOM。
+ *
+ * 背景：旧实现固定画左侧（x=PL+5），而首柱恰好从 PL 起画——首柱高度过均值
+ * 线时柱子后绘制、直接盖住文字前缀（2026-11-11 实案："均值 55.22M" 被
+ * 22:30 的 66M 首柱盖成 "值 55.22M"）。旧的"同行避让"分支只处理均值标签
+ * vs 峰值标注，处理不了标签 vs 柱体。
+ */
+function usAvgLabelPlacement(avgText, lineY, bars, occupied, PL, PR, W) {
+  const w = avgText.length * 11 * 0.62;
+  const est = (x, anchor, dy) => {
+    const ty = lineY + dy;
+    const x0 = anchor === 'start' ? x : x - w;
+    return { x, ty, anchor, x0, x1: x0 + w, y0: ty - 11, y1: ty + 3 };
+  };
+  const cands = [
+    est(PL + 5, 'start', -4),
+    est(W - PR - 5, 'end', -4),
+    est(PL + 5, 'start', 16),
+    est(W - PR - 5, 'end', 16),
+  ];
+  const hit = r =>
+    bars.some(b => r.x0 < b.x1 && b.x0 < r.x1 && r.y0 < b.y1 && b.y0 < r.y1) ||
+    occupied.some(o => r.x0 < o.x1 && o.x0 < r.x1 && r.y0 < o.y1 && o.y0 < r.y1);
+  let last = cands[cands.length - 1];
+  for (const c of cands) {
+    if (!hit(c)) return { x: c.x, ty: c.ty, anchor: c.anchor };
+    last = c;
+  }
+  return { x: last.x, ty: last.ty, anchor: last.anchor };
+}
+
 function renderUsageChart(series) {
   const host = $('usChart');
 
@@ -3414,6 +3454,18 @@ function renderUsageChart(series) {
   // （末点柱子贴着卡片右边缘被切掉），刻度仍用同一个 xOf，标签与柱子始终对齐。
   const xOf = t => PL + bw / 2 + (t - t0) / span * Math.max(1, iw - bw);
   const yOf = v => PT + ih - ih * (v / max);
+  const yBase = PT + ih;
+
+  // 柱体矩形提前收集：均值标签的避让要用（首柱会盖住固定在左侧的标签，见
+  // usAvgLabelPlacement 注释）；绘制段自行现算几何，不共用这份矩形。
+  const barRects = [];
+  for (const p of pts) {
+    const hTot = ih * (p.tt / max);
+    if (hTot > 0) barRects.push({
+      x0: xOf(p.t) - bw / 2, x1: xOf(p.t) + bw / 2,
+      y0: yBase - hTot, y1: yBase,
+    });
+  }
 
   let out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
             'preserveAspectRatio="xMidYMid meet">';
@@ -3450,28 +3502,25 @@ function renderUsageChart(series) {
   const peakRight = peakAnchor === 'end' ? peakPx : peakPx + estW(peakText) / 2;
 
   // 均值参考线：一眼看出"这根是不是异常高"，比只给刻度省心。
-  // 标签放左侧：右侧常被峰值柱占用（峰值柱往往就是最后一根），贴左不会被压住。
-  // 但 avg 逼近 max 时标签会和峰值标注叠进同一行（两条线几乎贴着图顶）——
-  // 水平区间也相交时把均值标签挪到均值线下方避让。
+  // 标签落点交给 usAvgLabelPlacement：候选「线上左→线上右→线下左→线下右」
+  // 按与柱体/峰值标注的矩形相交检测取第一个不冲突的——旧实现固定画左侧，
+  // 会被从 PL 起画的高首柱盖住文字前缀（2026-11-11 实案），旧"同行避让"
+  // 分支只处理峰值标注、处理不了柱体。
   if (avg > 0 && avg < max) {
     const y = yOf(avg);
     const avgText = '均值 ' + fmtTok(avg);
-    let ty = y - 4;
-    if (Math.abs(peakPy - ty) < 13 &&
-        peakLeft < PL + 5 + estW(avgText) && PL + 5 < peakRight) {
-      ty = y + 16;
-    }
+    const occ = [{ x0: peakLeft, x1: peakRight, y0: peakPy - 11, y1: peakPy + 3 }];
+    const pos = usAvgLabelPlacement(avgText, y, barRects, occ, PL, PR, W);
     out += '<line class="avg" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) +
            '" y2="' + y.toFixed(1) + '"/>';
-    out += '<text class="tk-avg" x="' + (PL + 5) + '" y="' + ty.toFixed(1) +
-           '" text-anchor="start">' + esc(avgText) + '</text>';
+    out += '<text class="tk-avg" x="' + pos.x.toFixed(1) + '" y="' + pos.ty.toFixed(1) +
+           '" text-anchor="' + pos.anchor + '">' + esc(avgText) + '</text>';
   }
 
   // 柱子：每个点用 <g> 包住「输入柱 + 输出柱 + <title>」。
   // 关键：<title> 只描述它的**父元素**。此前把它与 <rect> 平级挂在 <svg> 下，
   // 浏览器就把它当成整张图的说明且只取第一个——于是不管悬停哪根柱子，提示都
   // 显示第一个桶的数字（实测：14:00 的 24.29M 峰值柱上悬停显示 09:00 的 4.62M）。
-  const yBase = PT + ih;
   for (const p of pts) {
     const x = xOf(p.t) - bw / 2;
     const hTot = ih * (p.tt / max);

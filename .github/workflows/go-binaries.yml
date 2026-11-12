@@ -88,6 +88,13 @@ jobs:
         id: ver
         run: echo "v=$(grep -oP 'appVersion = "\K[^"]+' cmd/server/main.go)" >> "$GITHUB_OUTPUT"
 
+      # Windows 目标先注入 PE 版本资源（治国产杀软启发式误报，选型与产物说明见
+      # scripts/gen-versioninfo.sh 头注释）；syso 为 _windows_amd64 平台限定命名，
+      # 只进 windows 构建链路，linux/darwin job 不跑本步也不受影响。
+      - name: 生成 Windows 版本资源
+        if: matrix.goos == 'windows'
+        run: bash scripts/gen-versioninfo.sh
+
       - name: 构建（剥离符号，对齐本地发布口径）
         env:
           GOOS: ${{ matrix.goos }}

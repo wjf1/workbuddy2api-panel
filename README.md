@@ -87,6 +87,8 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 📈 **余额趋势与会员档位（1.17.0）** | 账号池「余额趋势」box：全池积分总和按小时采样 SVG 曲线（30 天窗口，观察「号在不在被薅」与消耗速率）；账号行昵称旁显示会员档位胶囊（计费摘要一天一次，失败不写结论） |
 | 🏷️ **账号标签与预警** | 账号多标签（落盘随导出/导入往返）+ 列表按标签 / 关键字筛选；积分低于「积分保底线」的账号自动进面板预警横幅（与选号保底共用阈值，零上游请求） |
 | 🧠 **OpenAI Responses 兼容（1.20.0）** | `POST /v1/responses`：**Codex CLI** 这类只认 Responses 协议的客户端直连。复用 Chat 主链路（转换型 ResponseWriter），不产生第二套调度逻辑；`input` 支持字符串与消息数组、`instructions`→system、`function_call` 历史项→`tool_calls`、内置工具剥离降级；响应 `output` 按 reasoning→message→function_call 排序、usage 转 Responses 口径、`finish=length` 标 `incomplete`；流式具名事件序列齐全 |
+| 🩺 **静默失败修复三批（1.21.0）** | 三处「不报错但会默默变坏」的形态：① **传输层失败归因到出口而非账号**——拨号/DNS/TLS 失败发生在上游看到账号之前，原先把它们记进账号连败会把健康号拖进降权（上游同类项目实测 4 小时 196 次 URL 错误降权 13 个号），现改记 `direct:<域>` 出口，秒级退避（1s 起、封顶 15s、±25% 抖动），同一出口连续 4 次失败直接 503 快速失败；② **SSE 单行粘帧拆分**——上游偶发两 chunk 塞进同一 `data:` 行，客户端整轮解析失败，现按字节扫描（跟踪转义与括号深度）切成独立帧，每帧单独验 JSON 合法性，切不开就原样透传；③ **空 text 段出站补位 + 11151 分类 + reasoning 镜像**——上游对空 `text` 段整条拒绝且不可自愈，出站前就地补一个空格（只补值不删段），漏网时 fail-fast 400 不罚号；六家族模型把 `reasoning_content` 镜像进空的 `reasoning` 保证多轮一致性（绝不新建字段、不填占位） |
+| 🪟 **Windows PE 版本资源（1.21.0）** | `scripts/gen-versioninfo.sh` 从 `appVersion` 派生并注入 VERSIONINFO（ProductName / FileVersion / CompanyName），CI 的 windows 矩阵项构建前自动执行。治国产杀软对「无签名、无版本资源、无产品信息」裸 Go 二进制的启发式误杀（火绒 `HEUR:VirTool/Obfuscator.a`）。syso 为 `_windows_amd64` 平台限定命名，linux/darwin 交叉编译不受影响 |
 | 🤖 **Anthropic 协议兼容** | `POST /v1/messages`（+ `POST /v1/messages/count_tokens`）：Claude Code / ZCode 等 Anthropic 协议客户端直连；流式 SSE 事件序列（`message_start` / `content_block_*` / `message_delta` / `message_stop`）与非流式均支持，错误体同为 Anthropic 形状；`x-api-key` 与 `Authorization: Bearer` 双凭证任一命中；`messages` 内联的中途 `system` 消息（ZCode / Claude Code 形态）同样接受（1.15.2 起） |
 | 🌐 **服务端 web_search（网关自执行）** | 客户端声明 `web_search_*` 工具时，检索由**网关代替上游执行**（so.com 抓取解析），回吐 `server_tool_use` / `web_search_tool_result` 块并支持一轮内多轮检索（`max_uses` 预算，缺省 8；耗尽自动撤工具 + 限额提示）；正文未引用来源时自动补 `Sources:` 列表；伪工具调用文本（全角竖线 DSML 标记 / `<tool_call>` 伪 XML）在流式与非流式路径一致清洗，不漏进正文 |
 | 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题，弹窗 Esc 关闭、窄屏列自动降级、WCAG 对比度），账号运维 / cockpit 兼容账号导入导出 / 模型档位查询 / 在线改配置（热生效）/ 运行日志 / 积分任务，见 [Web 管理面板](#-web-管理面板) |
@@ -303,6 +305,7 @@ docker compose down             # 停止并移除容器（数据在 ./auths 与 
 
 ```powershell
 # 1) 下载 Release 中的 wb2api.exe，或从源码构建
+bash scripts/gen-versioninfo.sh   # 注入 Windows 版本资源（治杀软误报，CI 同款）
 go build -trimpath -ldflags="-s -w" -o wb2api.exe ./cmd/server
 
 # 2) 直接运行：首次启动自动生成 config.json（含随机 api_key，日志打印一次）

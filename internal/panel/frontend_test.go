@@ -1010,3 +1010,90 @@ process.stdout.write(JSON.stringify({
 		t.Fatalf("single label=%v (anchor=%s)", got.D.Texts, got.D.Anchor)
 	}
 }
+
+// TestAppJSUsageAvgLabelPlacement 均值线标签落点：候选「线上左→线上右→线下左→
+// 线下右」按与柱体/峰值标注的矩形相交检测取第一个不冲突的。复现 2026-11-11
+// 实案——旧实现固定画左侧，被从 PL 起画的高首柱盖住文字前缀（"均值 55.22M"
+// 被首柱盖成 "值 55.22M"）。
+func TestAppJSUsageAvgLabelPlacement(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; usage avg label placement test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function usAvgLabelPlacement');
+const end = src.indexOf('function renderUsageChart');
+if (start < 0 || end < 0) throw new Error('avg label placement helper not found');
+const ctx = { Math, Number };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.usAvgLabelPlacement = usAvgLabelPlacement;', ctx);
+
+const W = 1200, PL = 58, PR = 14;
+const text = '均值 55.22M';
+const highFirstBar = [{ x0: 58, x1: 88, y0: 80, y1: 170 }];
+const crossBar = [{ x0: 58, x1: 88, y0: 80, y1: 124 }];
+const peakTopRight = [{ x0: 1080, x1: 1195, y0: 100, y1: 125 }];
+const a = ctx.usAvgLabelPlacement(text, 120, highFirstBar, [], PL, PR, W);
+const b = ctx.usAvgLabelPlacement(text, 120, crossBar, peakTopRight, PL, PR, W);
+const c = ctx.usAvgLabelPlacement(text, 120,
+  [{ x0: 58, x1: 88, y0: 80, y1: 130 }],
+  [{ x0: 1080, x1: 1195, y0: 100, y1: 125 }, { x0: 1080, x1: 1195, y0: 125, y1: 150 }],
+  PL, PR, W);
+const d = ctx.usAvgLabelPlacement(text, 120, [], [], PL, PR, W);
+process.stdout.write(JSON.stringify({ a, b, c, d }));`
+	f, err := os.CreateTemp(t.TempDir(), "usage-avg-label-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("usage avg label placement node test failed: %v\n%s", err, out)
+	}
+	var got struct {
+		A struct {
+			X      float64 `json:"x"`
+			TY     float64 `json:"ty"`
+			Anchor string  `json:"anchor"`
+		} `json:"a"`
+		B struct {
+			X      float64 `json:"x"`
+			TY     float64 `json:"ty"`
+			Anchor string  `json:"anchor"`
+		} `json:"b"`
+		C struct {
+			X      float64 `json:"x"`
+			TY     float64 `json:"ty"`
+			Anchor string  `json:"anchor"`
+		} `json:"c"`
+		D struct {
+			X      float64 `json:"x"`
+			TY     float64 `json:"ty"`
+			Anchor string  `json:"anchor"`
+		} `json:"d"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &got); err != nil {
+		t.Fatalf("avg label placement output not JSON: %v\n%s", err, out)
+	}
+	// A：复现实案——高首柱盖住左上候选，标签挪到线上右（右端对齐 x=W-PR-5=1181）
+	if got.A.Anchor != "end" || got.A.X != 1181 {
+		t.Fatalf("A anchor=%s x=%v want end x=1181", got.A.Anchor, got.A.X)
+	}
+	// B：右上被峰值标注占用、柱底不及线下标签区 → 线下左（ty=120+16）
+	if got.B.Anchor != "start" || got.B.TY != 136 {
+		t.Fatalf("B anchor=%s ty=%v want start ty=136", got.B.Anchor, got.B.TY)
+	}
+	// C：四候选全冲突 → 兜底取最后候选（线下右），宁可叠也不空手
+	if got.C.Anchor != "end" || got.C.TY != 136 {
+		t.Fatalf("C anchor=%s ty=%v want end ty=136 (last-candidate fallback)", got.C.Anchor, got.C.TY)
+	}
+	// D：无冲突 → 默认线上左（ty=120-4=116，x=PL+5=63）
+	if got.D.Anchor != "start" || got.D.TY != 116 || got.D.X != 63 {
+		t.Fatalf("D anchor=%s ty=%v x=%v want start ty=116 x=63", got.D.Anchor, got.D.TY, got.D.X)
+	}
+}

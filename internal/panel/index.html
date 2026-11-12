@@ -387,6 +387,14 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
    背景必须显式给（否则行内容从表头下方透出），z-index 低于顶栏的 20。 */
 .acc thead th { position: sticky; top: var(--topbar-h); background: var(--surface); z-index: 10; }
 #accTable thead th { top: 0; }
+
+/* 纵向限高滚动容器（.scroll-y）：行滚出容器顶即被裁剪，表头吸容器顶（top:0）
+   始终可见。跟页滚 + 吸顶栏（.acc thead th 的 top:var(--topbar-h)）在吸附过渡
+   期会把第一行数据裸露到吸住的表头上方——跟页滚的表没有容器裁剪兜着
+   （2026-11-11 实案：用量明细表第一行悬在表头上方与卡片头之间）。行多、需要
+   长时间对照列名的表才值得容器化：滚动条 + 卡片视口变短是代价。 */
+.scroll-y { max-height: min(520px, 62dvh); overflow: auto; }
+.scroll-y thead th { top: 0; }
 .acc td { padding: 11px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 .acc tr:last-child td { border-bottom: none; }
 .acc tbody tr:hover { background: var(--surface-2); }
@@ -1265,7 +1273,7 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
             </select>
           </label>
         </header>
-        <div class="tbl-wrap">
+        <div class="tbl-wrap scroll-y">
           <table class="acc zebra">
             <thead id="usDimHead"></thead>
             <tbody id="usDimBody"></tbody>
@@ -1284,7 +1292,7 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
           <span class="note" id="usCreditNote">—</span>
         </header>
         <div class="kpis k4" id="usCreditStats"></div>
-        <div class="tbl-wrap">
+        <div class="tbl-wrap scroll-y">
           <table class="acc zebra">
             <thead id="usCreditHead"></thead>
             <tbody id="usCreditBody"></tbody>

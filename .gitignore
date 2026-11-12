@@ -57,3 +57,7 @@ server.exe
 # 上面的 *.md 通配同样会命中，故目录与其下文件都要白名单——gitignore 规则后者优先）
 !docs/
 !docs/**
+
+# Generated version resources (see scripts/gen-versioninfo.sh)
+cmd/server/winres.json
+cmd/server/rsrc_windows_amd64.syso

@@ -12,7 +12,7 @@ Go >= 1.22.5（go.mod），运行时依赖仅 `redis/go-redis/v9`。以下命令
 
 | 命令 | 作用 |
 |---|---|
-| `go build -ldflags "-s -w" -o wb2api.exe ./cmd/server` | 构建生产二进制（CI 同款） |
+| `bash scripts/gen-versioninfo.sh && go build -ldflags "-s -w" -o wb2api.exe ./cmd/server` | 构建生产二进制（先注入 Windows PE 版本资源治杀软误报，CI 同款；直接 `go build` 可编但产物无版本资源，易被杀软启发式误杀） |
 | `go test ./...` | 全量测试（含 `internal/panel/frontend_test.go` 的 DOM 守卫：`node --check` + `TestIndexHTMLUniqueIDs`，无 node 时 skip——本机已装 node 必须跑） |
 | `gofmt -l .` | 格式门禁（CI 有 gofmt 检查，go1.22/1.27 对同行注释分歧：注释必须独立行） |
 | `docker-compose up` | Docker 部署（data/ 卷持久化）；另有 docker-ghcr.yml 出镜像 |

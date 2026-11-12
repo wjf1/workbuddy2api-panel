@@ -70,7 +70,14 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（用量页多处重叠修复 + A 机部署 → 未发版，2026-11-12）
+## 4. 最近一轮变更与交付成果（1.21.0-panel 发版，2026-11-12）
+
+### 4.0.0 本轮：定版 1.21.0-panel 并发布（2026-11-12）
+
+- **范围**：把 `v1.20.0` 之后的 4 个提交（`b96fdf7` 上游对齐 P0/P1/P2 三批修复、`74deece` 用量图 x 轴记账、两份 HANDOFF 文档）连同本轮未提交的**用量页重叠修复 + PE 版本资源注入**一并定版。
+- **版本**：`cmd/server/main.go` 的 `appVersion` 1.20.0-panel → **1.21.0-panel**；CHANGELOG `[Unreleased]` 转正为 `[1.21.0-panel] - 2026-11-12`；README 功能表补三条（静默失败修复三批 / Windows PE 版本资源 / 用量图重叠修复并入三批那条的验证口径）。
+- **发版前门禁**：`go test ./...` 27 包全绿（含新增 `TestAppJSUsageAvgLabelPlacement` 四场景）；`gofmt -l ./cmd ./internal` 零输出。
+- **本机部署现状（注意，与上文历史记录不同）**：`F:\AI\wb2api-panel-v1.13.0-windows-amd64\wb2api.exe` 实测版本串已是 **1.20.0-panel**，进程 PID 38284 于 2026-11-12 21:46 启动、监听已收紧为 `127.0.0.1:7863`；同目录还有一份 `wb2api.exe.new`（2026-11-12 00:08，哈希与现役 exe 不同，同样带 1.20.0-panel 版本串）——**属未收尾的部署中间产物，下次换装到 1.21.0 时一并清理**。
 
 ### 4.0 本轮总结：三处重叠修复闭环 + 部署生效
 
@@ -500,6 +507,10 @@ data/backups/          备份输出（同上）
 - 账号回收站（软删除）/ 账号标签（tags）/ 余额预警横幅 / 定时备份四件套 + `trash.retention_days`、`backup.enabled/hour/keep` 四配置键（详见 CHANGELOG 1.14.0 条目）。
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
+
+### 🔜 本机 7863 待升级到 1.21.0-panel（发版后首件）
+
+Release `v1.21.0` 产物出来后按既有流程换装：**先确认 Release 资产与 `checksums.txt` 一致 → 备份现役 exe → 替换 → 重启托管进程**（托管方式见下条，非 SYSTEM 计划任务）。`listen` 保持 `127.0.0.1:7863`。换装后顺手删掉同目录残留的 `wb2api.exe.new`（1.20.0 的中间产物，无回滚价值，回滚点用 `.bak` 系列）。
 
 ### ⚠️ 2026-11-12 晚：火绒删 exe 导致 7863 反复起不来（已定位并加白）
 
