@@ -18,6 +18,10 @@
   <img alt="Transport" src="https://img.shields.io/badge/Transport-SSE%20%2F%20Streaming-0DBD8B?style=flat-square">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/panel-accounts.png" alt="Web 管理面板 — 账号池总览（截图为全新实例的空态；账号池页提供统计卡、状态/标签/风险筛选与签到 / 保活 / 旅行等一键运维入口）" width="960">
+</p>
+
 ---
 
 > **本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强分支**（fork）。

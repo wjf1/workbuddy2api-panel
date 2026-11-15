@@ -8,6 +8,14 @@
 
 ### 新增
 
+- **README 补面板实拍截图**：`docs/screenshots/panel-accounts.png`（1280×860，全新实例空态，
+  不含任何真实账号数据）——账号池页展示统计卡、状态 / 标签 / 风险筛选与签到 / 保活 / 旅行 /
+  活跃上报等一键运维入口。截图取自本地 `build/wb2api-dev.exe` 无鉴权空实例（Chrome headless
+  渲染），README 徽章区下方居中展示。（`README.md`）
+- **社区健康文件四件套**：新增 `SECURITY.md`（私密漏洞上报通道 + 「自部署服务边界 /
+  auths/ 明文凭证保管 / 面板鉴权」安全边界说明）、`.github/ISSUE_TEMPLATE/`（bug /
+  feature 模板与 config.yml）与 `PULL_REQUEST_TEMPLATE.md`；`.gitignore` 的 `*.md`
+  规则放行 `SECURITY.md` 入库。（`.gitignore`）
 - **开发期构建规范脚本 `scripts/build-dev.sh`（杀软误报规避流程化收口）**：2026-11-12 晚
   agent 临时验证构建（`go build -ldflags "-s -w" -o %TEMP%/wb2api_verify.exe ./cmd/server`）
   被火绒实时防护判 `HEUR:VirTool/Obfuscator.a` 删除——部署目录虽已加白（见 1.21.0 事件
