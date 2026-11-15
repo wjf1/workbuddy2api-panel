@@ -51,6 +51,7 @@ server.exe
 
 # 发布产物与本地缓存（不入版本库）
 /dist/
+/build/
 /rel.json
 
 # 设计文档纳入版本库（原 docs/ 整目录被忽略，导致 DESIGN-v1.16.0.md 从未入库；

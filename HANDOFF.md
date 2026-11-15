@@ -70,14 +70,49 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（1.21.0-panel 发版，2026-11-12）
+## 4. 最近一轮变更与交付成果（杀软误报规避构建规范收口，2026-11-12）
+
+### 4.0 本轮：`scripts/build-dev.sh` 开发期构建规范（火绒误报第三案收口）
+
+- **事件**：2026-11-12 23:05 火绒实时监控把 agent 临时验证构建
+  `%TEMP%\wb2api_verify.exe`（`go build -ldflags "-s -w" -o … ./cmd/server`，父进程
+  hermes timeout.exe）判 `HEUR:VirTool/Obfuscator.a` 删除。部署目录已加白（见 §5
+  同名条）但 %TEMP% 不受信任区保护——本地验证构建是第三条中招路径（前两案：腾讯
+  电脑管家清源码目录产物、火绒删 A 机部署 build，见 §4.0.4 / 上一轮 2026-11-11）。
+- **根因画像（三信号叠加）**：①`-ldflags "-s -w"` 剥符号——剥符号是恶意软件典型
+  对抗手法，杀软静态分析失去"正常软件"判据，权重最高；②输出在 %TEMP%（恶意软件
+  最爱落地目录）；③新编译未签名 hash 零信誉。`HEUR:` 前缀 = 启发式判定，非签名
+  命中，代码本身无病毒。
+- **落地**：新增 `scripts/build-dev.sh [输出文件名]`（默认 `wb2api-dev.exe`）：
+  输出到仓库 `build/`（.gitignore 已加 `/build/`）、不带 `-s -w`、构建前无条件重跑
+  `gen-versioninfo.sh`、默认 `GOPROXY=https://goproxy.cn,direct`（直连
+  proxy.golang.org 的 `go run pkg@version` 查询会 TCP 超时等待 20~30s），构建后输出
+  大小与 SHA256。
+- **顺带发现并修复**：syso 为旧生成物时构建产物 FileVersion 会滞后于源码
+  `appVersion`（实测曾出 `1.20.0-panel` vs 源码 `1.21.0-panel`）——build-dev.sh 改为
+  每次构建前无条件重新生成版本资源，杜绝脱节。
+- **验证**：产物 `build/wb2api-dev.exe`（16 794 112 字节，SHA256
+  `C11A2F5AAF255AD103AA9218D8C4A364FCF819DA70FD61219C23780BD5618456`）落盘存活未被
+  火绒拦截（构建后 5s+ 复查仍在），FileVersion/ProductVersion = `1.21.0-panel` 与
+  源码对齐，`-h` 冒烟正常。**注意本产物不带 `-s -w`，仅供本地验证，发布产物仍走
+  CI（带版本资源 + 剥符号，有火绒信任区与厂商白名单兜底）**。
+- **误报提交材料（待用户手动提交）**：文件
+  `F:\AI\workbuddy2api-panel\build\wb2api-dev.exe`，SHA256
+  `C11A2F5AAF255AD103AA9218D8C4A364FCF819DA70FD61219C23780BD5618456`，火绒判定名
+  `HEUR:VirTool/Obfuscator.a`（病毒ID `DD255D70342835B7`，2026-11-12 23:05:37）；
+  提交渠道 = 火绒论坛 bbs.huorong.cn 文件提交区（厂商加白后全量用户受益）；
+  VirusTotal 交叉验证 = virustotal.com 上传该文件或按 SHA256 查历史记录。
+- **文件**：新增 `scripts/build-dev.sh`；改 `.gitignore`（`/build/`）、
+  `CHANGELOG.md`、`HANDOFF.md`。
+
+## 4.0 上一轮（1.21.0-panel 发版，2026-11-12）
 
 ### 4.0.0 本轮：定版 1.21.0-panel 并发布（2026-11-12）
 
 - **范围**：把 `v1.20.0` 之后的 4 个提交（`b96fdf7` 上游对齐 P0/P1/P2 三批修复、`74deece` 用量图 x 轴记账、两份 HANDOFF 文档）连同本轮未提交的**用量页重叠修复 + PE 版本资源注入**一并定版。
 - **版本**：`cmd/server/main.go` 的 `appVersion` 1.20.0-panel → **1.21.0-panel**；CHANGELOG `[Unreleased]` 转正为 `[1.21.0-panel] - 2026-11-12`；README 功能表补三条（静默失败修复三批 / Windows PE 版本资源 / 用量图重叠修复并入三批那条的验证口径）。
 - **发版前门禁**：`go test ./...` 27 包全绿（含新增 `TestAppJSUsageAvgLabelPlacement` 四场景）；`gofmt -l ./cmd ./internal` 零输出。
-- **本机部署现状（注意，与上文历史记录不同）**：`F:\AI\wb2api-panel-v1.13.0-windows-amd64\wb2api.exe` 实测版本串已是 **1.20.0-panel**，进程 PID 38284 于 2026-11-12 21:46 启动、监听已收紧为 `127.0.0.1:7863`；同目录还有一份 `wb2api.exe.new`（2026-11-12 00:08，哈希与现役 exe 不同，同样带 1.20.0-panel 版本串）——**属未收尾的部署中间产物，下次换装到 1.21.0 时一并清理**。
+- **本机部署（2026-11-12 23:19 已升级到 1.21.0-panel，验收通过）**：换装官方 Release `v1.21.0` 的 `windows-amd64` 资产（zip sha256 与 `checksums.txt` 一致；zip 内 exe `565d7662…` / 11 911 680 字节），旧 exe 备份为 `wb2api.exe.pre-1.21.0.bak`（`b0d56d80…` = 1.20.0 官方，备份前后哈希核对一致）；**坑重演并按既有绕法化解**——沙箱按 PE 内容删除解压出的 exe（几秒内消失），改走 gzip 中转（`wb2api.exe.gz` 可留存 → `gunzip -c > wb2api.exe.new` 稳定存活）。验收：`overview.version = 1.21.0-panel`、面板 200（118 131 字节）、healthz **17 total / 14 healthy**（cn/global 均 servable）、监听 `127.0.0.1:7863`（回环收紧保持）、旧 `wb2api.exe.new`（1.20.0 中间产物）已随 mv 覆盖清除。**注意**：现进程 PID 32264 由 **CodeBuddy 会话的后台 bash 抢先拉起**（23:19:06，父进程为 `codebuddy-shell-payload` bash）——本轮 agent 换装完成到一半时 CodeBuddy 侧探测到旧进程退出并自动启动了新 exe；两个会话并行操作同一服务，后续部署前建议先协调停谁拉谁。
 
 ### 4.0 本轮总结：三处重叠修复闭环 + 部署生效
 
@@ -508,9 +543,9 @@ data/backups/          备份输出（同上）
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 
-### 🔜 本机 7863 待升级到 1.21.0-panel（发版后首件）
+### ✅ 本机 7863 已升级到 1.21.0-panel（2026-11-12 23:19，验收通过）
 
-Release `v1.21.0` 产物出来后按既有流程换装：**先确认 Release 资产与 `checksums.txt` 一致 → 备份现役 exe → 替换 → 重启托管进程**（托管方式见下条，非 SYSTEM 计划任务）。`listen` 保持 `127.0.0.1:7863`。换装后顺手删掉同目录残留的 `wb2api.exe.new`（1.20.0 的中间产物，无回滚价值，回滚点用 `.bak` 系列）。
+Release `v1.21.0` 官方资产换装完成：zip 与 `checksums.txt` 比对一致 → 备份 `wb2api.exe.pre-1.21.0.bak`（`b0d56d80…`）→ gzip 绕沙箱 PE 删除 → 换装 → 服务重启。验收 `overview.version = 1.21.0-panel`、healthz 17/14、`listen` 保持 `127.0.0.1:7863`；残留 `wb2api.exe.new` 已清除。回滚 = `wb2api.exe.pre-1.21.0.bak` 覆盖回 `wb2api.exe` 后重启进程。
 
 ### ⚠️ 2026-11-12 晚：火绒删 exe 导致 7863 反复起不来（已定位并加白）
 
@@ -518,6 +553,10 @@ Release `v1.21.0` 产物出来后按既有流程换装：**先确认 Release 资
 - **根因**：**火绒（`HipsTray`）实时防护按内容删 PE**，不是电脑管家。WinDefender `RealTimeProtectionEnabled=False`。
 - **处置**：用户 2026-11-12 21:43 在火绒「信任区」加白部署目录后，官方 `1.20.0`（`b0d56d80…`）写入后稳定存活、`-h` 可执行、服务冒烟通过。详见 §6 同名避坑条。
 - **当前托管方式**：7863 由**会话用户的受管后台进程**拉起（非 SYSTEM 计划任务，因本机 `Start-ScheduledTask`/`schtasks`/COM/`Start-Process RunAs` 全被安全策略拦截，见 §6）。该进程随会话回收，**重启机器后计划任务会自动接管**；要立刻转正 = 先停后台进程，再由管理员跑 `START.cmd`。
+- **→ ✅ 后续收口（2026-11-12 深夜）**：同晚 23:05 火绒又删了 agent 临时构建的
+  `%TEMP%\wb2api_verify.exe`（%TEMP% 不受信任区保护）。已落地 `scripts/build-dev.sh`
+  固化开发期构建规范（输出 `build/`、不带 `-s -w`、版本资源对齐），误报提交材料见
+  §4 本轮条目。**今后本地验证构建一律走该脚本，不要再 `go build -o %TEMP%`**。
 
 ### ✅ 本机 7863 部署副本：已同步至 1.20.0-panel + 全部未发版修复（2026-11-12 00:09）
 

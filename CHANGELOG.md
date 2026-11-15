@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **开发期构建规范脚本 `scripts/build-dev.sh`（杀软误报规避流程化收口）**：2026-11-12 晚
+  agent 临时验证构建（`go build -ldflags "-s -w" -o %TEMP%/wb2api_verify.exe ./cmd/server`）
+  被火绒实时防护判 `HEUR:VirTool/Obfuscator.a` 删除——部署目录虽已加白（见 1.21.0 事件
+  条目），但 %TEMP% 里的临时构建不受信任区保护。脚本固化三条规避规范：①输出到仓库
+  `build/` 目录（不进 %TEMP%，"临时目录新 exe"是杀软高危画像）；②不带 `-s -w`
+  （保留符号表——剥符号是恶意软件典型对抗手法、误报画像里权重最高的信号）；③构建前
+  无条件重新生成 PE 版本资源（syso 是生成物，曾发现构建 FileVersion `1.20.0-panel`
+  滞后于源码 `appVersion 1.21.0-panel`），并默认走 goproxy.cn（直连 proxy.golang.org
+  每次 `go run pkg@version` 查询会 TCP 超时等待 20~30s）。构建后输出大小与 SHA256
+  供误报提交直接取用。实测产物 `build/wb2api-dev.exe`（16 794 112 字节，SHA256
+  `C11A2F5A…8456`，FileVersion `1.21.0-panel`）落盘存活未被火绒拦截，`-h` 冒烟通过。
+
 ## [1.21.0-panel] - 2026-11-12
 
 ### 新增
