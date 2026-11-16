@@ -606,13 +606,33 @@ data/backups/          备份输出（同上）
   连续 4 条 200（348–590 tok，TTFB 2.4–4.1s）——continueReader 接线在真实生产流量下
   零报错。
 - **回滚**：`wb2api.exe.pre-1.22.0.bak` 覆盖回 `wb2api.exe` 后重启任务即可。
+- **补跑批次终态（23:04–23:05，日志在 `data\server.prev.log`）**：13 个 CN 号签到全部
+  幂等命中（今天 21 点旧版已签——幂等保护正确挡住重复）；旅行 12 号领奖/派出正常
+  （reward 5–10）；活跃上报 streak 自检 days=2–3。批次跑完 markRan 落盘
+  `runstamps.json` 五族标记。member-tier 404 为上游侧既有噪声（保留旧值）。
 
 ### 📌 1.22.0 发布后待办（2026-11-16）
 
-- **B 机（CHINAMI-DPNMO04）升级未执行**：仍为 1.19.2。异机会话够不到，需在 B 机本机执行
-  （目录 `F:\AI\wb2api`、任务名 `wb2api`；资产可复用 Release zip 同款流程：校验 sha256 →
-  备份 `wb2api.exe.pre-1.22.0.bak` → 换装 → `schtasks /End /TN wb2api + taskkill /F /IM
-  wb2api.exe + schtasks /Run /TN wb2api` → 核对 `overview.version = 1.22.0-panel`）。
+- **B 机（CHINAMI-DPNMO04）升级未执行**：仍为 1.19.2。异机会话够不到。**升级脚本已就绪**
+  （`scripts/upgrade-windows.cmd`，A 机 dry-run 正负双路径验证通过）：把脚本拷到 B 机
+  `F:\AI\wb2api\`，管理员运行 `upgrade-windows.cmd v1.22.0 wb2api`（先 `... 1` dry-run
+  一次确认任务名与网络通）。脚本内置 sha256 硬校验、任务存在性硬闸、失败自动回滚；
+  停机约 3–5 秒。完成后核对 `overview.version = 1.22.0-panel` 与 healthz。
+- **⚠️ 2026-11-16 23:11 事故：upgrade 脚本 DRYRUN 测试误杀生产（停机约 45 秒，已恢复）**
+  - **链路**：非提权 shell 测试 dry-run → 脚本自提权重启实例 → **RunAs 重建的进程不继承
+    shell 环境变量，DRYRUN 丢失** → 脚本以真模式执行，且任务名是测试用的假名
+    `wb2api-nonexist-test` → 停了不存在的任务（无害）、`taskkill /IM wb2api.exe` 杀掉
+    生产（23:11:28）、换装（同版本 1.22.0 覆盖，无害）、`/Run` 假任务名失败 → 服务停机。
+  - **处置**：提权 `schtasks /Run /TN "WorkBuddy2API"` 手动拉起（23:12），healthz 恢复
+    14/17，总停机约 45 秒。阻断尝试（预置坏 checksums + 提权杀脚本进程）晚于校验完成
+    约 30 秒，未生效——`-C -` 续传覆盖了预置文件；教训是**阻断要抢在下载完成前，或直接
+    杀脚本进程**。
+  - **脚本三处加固**（已入库并 dry-run 复验）：①DRYRUN 改第 3 参数随 ArgumentList 显式
+    传递；②任务存在性硬闸（`schtasks /Query` 不过即 FATAL，dry-run 也查）；③healthz
+    失败自动回滚（恢复备份 exe + 重启任务）。
+  - **事故的意外收获**：重启后 runstamps 去重实战生效——23:12:24 新实例只补跑了
+    blackcat（当时未到时点的族），已补过的五族零重复请求，「反复重启不重复打上游」
+    的设计目标经真实意外重启检验通过。
 - **✅ 续写触发型真机验证已完成（2026-11-16 22:51–22:52，A 机）**：两条新救援路径均在
   生产实例上触发并闭环。
   - **continue**：`cn:deepseek-v4.1-flash` + `max_tokens=1500` + `reasoning_effort=low` +
