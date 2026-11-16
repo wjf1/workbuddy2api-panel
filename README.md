@@ -5,6 +5,10 @@
 <h1 align="center">WorkBuddy2API Panel</h1>
 
 <p align="center">
+  <b>简体中文</b> | <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   <b>把腾讯 CodeBuddy 账号变成 OpenAI 兼容 API 的多账号网关 · 附 Web 管理面板</b><br>
   Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（17/18）</b> · 回收站 / 标签 / 余额预警 / 定时备份 · 流式 / 非流式 · <b>OpenAI + Anthropic 双协议</b>（`/v1/chat/completions` + `/v1/messages`，后者含网关自执行的服务端 `web_search`）
 </p>
@@ -19,8 +23,36 @@
 </p>
 
 <p align="center">
+  <img alt="License" src="https://img.shields.io/github/license/wjf1/workbuddy2api-panel?style=flat-square&color=94a3b8">
+  <a href="https://github.com/wjf1/workbuddy2api-panel/releases"><img alt="Release" src="https://img.shields.io/github/v/release/wjf1/workbuddy2api-panel?style=flat-square&color=6366f1&display_name=tag"></a>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/panel-accounts.png" alt="Web 管理面板 — 账号池总览（截图为全新实例的空态；账号池页提供统计卡、状态/标签/风险筛选与签到 / 保活 / 旅行等一键运维入口）" width="960">
 </p>
+
+---
+
+## 📑 目录
+
+- [使用声明（必读）](#使用声明必读)
+- [项目简介](#项目简介)
+- [核心能力](#核心能力)
+- [🎯 成长任务一键完成（17/18）](#-成长任务一键完成1718)
+- [🆚 与上游的差异](#-与上游的差异)
+- [架构总览](#架构总览)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [核心行为语义](#核心行为语义)
+- [🖥️ Web 管理面板](#️-web-管理面板)
+- [🔌 API 端点](#-api-端点)
+- [请求级日志](#请求级日志)
+- [部署运维](#部署运维)
+- [安全与合规](#安全与合规)
+- [常见问题](#常见问题)
+- [关键断言 ↔ 代码出处](#关键断言--代码出处)
+- [免责声明](#免责声明)
+- [License](#license)
 
 ---
 
@@ -72,9 +104,10 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 🛡️ **熔断与冷却** | 429 软冷却 600s 起指数退避（封顶 `soft_rate_max`）、404 固定 60s 短冷却、402 硬冷却至次日 04:00、连续失败熔断、在途租约限流 |
 | 🚦 **上游排队保护（1.15.5）** | 上游免费档排队（业务码 `6020 queue.waiting` / `6021 queue.full`）是**服务端队列水位**，与账号、模型都无关 → 归类为 `ErrUpstreamQueue`：**账号零惩罚、轮转 fail-fast**（命中处即终止轮转），门控激活期内后续请求**不发上游直接回 429 `upstream_queue_busy`**（不放大请求、不烧号），时长采信上游 `retry_after`（钳 15s–2m），任一请求成功即自动解除；面板与 `/status` 透出 `upstream_queue` 并显示「上游队列忙」横幅 |
 | 🧲 **会话粘性** | 同一会话（`conversation_id`）尽量绑定同一账号，TTL 滚动续期，失败自动解绑，可镜像 Redis 防重启丢失 |
-| ⏰ **定时任务** | 签到（09/21 点，末尾自动跑**连登管家**：兑换已解锁档位 + 抽完抽奖次数）+ 活跃上报（10 点，点亮连登 / 解锁领养 + streak 自检）+ 猫猫旅行（09/21 点，独立排程）+ token 保活（22 点），四类独立开关 |
+| ⏰ **定时任务** | 签到（09/21 点，末尾自动跑**连登管家**：兑换已解锁档位 + 抽完抽奖次数）+ 活跃上报（10 点，点亮连登 / 解锁领养 + streak 自检）+ 猫猫旅行（09/21 点，独立排程）+ token 保活（22 点），四类独立开关。**启动补跑（1.22.0）**：进程停机跨过当天时点后重启会补跑一轮，`runstamps.json` 去重保证反复重启不重复打上游 |
 | 🔁 **会话失效恢复（1.16.0）** | 会话失效（12153 / 网关裸 401）的禁用号自动分类为「待重登」（`dead_kind`），行内一键**重登**（复用设备授权流，覆盖同 uid 凭证并复活）；10 分钟窗口内 ≥3 个号被判死 → 面板横幅 + webhook 告警；亚健康号显示 `session n/3` 连续判死计数；`probe_dead_hours` 可选定时探测死号、上游误吊销解除即自动复活 |
 | 🕵️ **RT 轮换审计与双活防护（1.16.0）** | 每次令牌刷新按 sha256 指纹落 JSONL 审计（来源/主机/PID 自证，保留 7 天）；启动播种基准后，任何**进程外**的 RT 消费（另一台机器的部署副本 / 独立脚本）即触发「凭证双活」告警——这正是上游连坐吊销整条令牌链的最可疑成因；`auths/` 目录租约锁（异机新鲜租约默认拒绝启动）；定时保号任务按 `hash(uid+日期)` 抖动打散（默认 20 分钟窗口），消除整点齐射风控特征；`keepalive_mode=smart` 只刷临期账号（RT 恒 60 天滚动，全量日刷 ≈97% 冗余） |
+| 🧵 **截断自动续写（1.22.0）** | 上游 `finish=length` 截断时同账号同模型续发、多段拼成**一条连续 SSE**（`[DONE]` 仍只一次、usage 跨段合并）；另有**断流盲重试**（上游偶发断流补一次）、**预告句救援**（`stop` + 尾部停在「……：」+ 工具会话 → 补写剩余）、**安全续写**（末条是工具结果却只写一句 → 只采纳工具调用，正文丢弃）、**流式空截断救援**（思考吃光预算 → 关思考重发）；客户端显式小额度 / 工具参数截断 / 已断连一律不续 |
 | ⚡ **流式 + 非流式** | 出站强制 `stream:true`；SSE 帧按规范白名单重建（整流统一 chunk id，一条响应一个 id）；空闲 15s 自动发 SSE 注释帧 / Anthropic ping 事件保活（长思考推理不掉线）；非流式由本地聚合为单响应 |
 | 🧠 **推理模型兼容** | DeepSeek 思维链注入（`thinking.type=enabled` + 默认档）、`reasoning_content` 多轮回填、effort 档位自动降级 |
 | 💬 **系统提示词体系** | 网关自有提示词替换客户端 system（默认 `custom`），从源头消灭 system 来源的内容误报；`passthrough` 遇拦截自动降级重试 |
@@ -243,6 +276,25 @@ flowchart LR
 上游请求在出站前经历统一的改写管线（`internal/upstream/payload.go`）：强制 `stream:true`、`developer` 角色归一、tool_choice 归一、`image_url` 字符串兼容为 OpenAI 对象形态、DeepSeek 思维链注入、`reasoning_effort` 档位降级、`reasoning_content` 回填、指纹脱敏。
 
 ## 快速开始
+
+> **三步跑起来（完整说明见下方四种部署方式）**
+>
+> ```bash
+> # 1. 拉取并启动（镜像免克隆）
+> mkdir -p auths data && cp config.example.json config.json
+> docker run -d --name workbuddy2api -p 7863:7863 -e TZ=Asia/Shanghai \
+>   -v ./auths:/app/auths -v ./data:/app/data -v ./config.json:/app/config.json \
+>   ghcr.io/linguo2625469/workbuddy2api-panel:latest
+>
+> # 2. 健康检查（无可用账号时返回 503 属正常）
+> curl -s http://localhost:7863/healthz
+>
+> # 3. 打开面板，点「添加账号」完成浏览器 OAuth 登录
+> #    http://localhost:7863/panel/
+> ```
+>
+> 拉起账号后即可把任意 OpenAI 客户端指向 `http://localhost:7863/v1`（密钥 = 你的 `api_key`）。
+> 不想用 Docker？直接下载 [Release](https://github.com/wjf1/workbuddy2api-panel/releases) 的单文件二进制，同目录放 `config.json` 后运行即可。
 
 ### 环境要求
 
@@ -649,7 +701,7 @@ curl -sN http://localhost:7863/v1/messages \
 - 每自然日 1 次派出：按 CST（Asia/Shanghai）自然日重置，与容器 `TZ` 无关
 - 失败隔离：单账号失败只跳过该账号当趟；401 不强刷（token 刷新交保活时点）
 
-## API 端点
+#### 余额后台刷新
 
 **余额后台刷新**（`schedule.balance_refresh_enabled`，缺省开启）：每 `balance_refresh_minutes`（缺省 10）分钟并发查询全部账号余额并更新池内积分——两次签到时点之间 credits 保持新鲜，余额恢复的冷却账号也会自动解冻（语义同签到，但不做签到不刷 token）。面板「立即刷新」按钮也是全量刷余额；5 秒自动轮询只读内存，不打上游。
 
@@ -789,6 +841,20 @@ http://127.0.0.1:7863/panel/
 - 内置 `HEALTHCHECK`（`wget /healthz`，30s 间隔）
 
 账号 / 数据通过 `docker-compose.yml` 卷挂载持久化：`./auths`、`./data`、`./config.json`。
+
+### 自检（doctor，1.22.0）
+
+排障第一步先跑自检，它一次性给出配置 / 监听与鉴权组合 / 账号池 / token 有效期 / 数据目录 /
+状态文件 / 排程 的结论，末尾附单行 JSON：
+
+```bash
+# 只读到磁盘与内存，不刷 token、不触发任务——可对生产部署直接跑
+./wb2api-doctor -config ./config.json
+./wb2api-doctor -config ./config.json -json      # 只输出 JSON（脚本用）
+./wb2api-doctor -config ./config.json -offline   # 跳过上游连通性探测
+```
+
+退出码：`0` 全绿 / `1` 存在 error 级问题 / `2` 配置加载失败。
 
 ### 工具脚本
 

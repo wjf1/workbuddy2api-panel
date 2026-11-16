@@ -25,11 +25,14 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"net/http"
 	"strings"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
 // minStarvedBudget 低于此额度不救援：客户端常用 max_tokens=1 做 key 探活，
@@ -137,6 +140,81 @@ func starvedRetryBody(body []byte) ([]byte, bool) {
 // 的判断，不判断当前是否开着。
 func thinkingSwitchSupported(model string) bool {
 	return strings.Contains(strings.ToLower(model), "deepseek")
+}
+
+// starvedRetryBodyWithFloor 流式救援段用的重发体：在 starvedRetryBody 之上再保证
+// 输出预算下限（续写/救援段从原始 body 重建，拿不到首段被抬过的 max_tokens）。
+func starvedRetryBodyWithFloor(body []byte, floor int64) ([]byte, bool) {
+	out, ok := starvedRetryBody(body)
+	if !ok {
+		return nil, false
+	}
+	if floor > 0 {
+		var obj map[string]any
+		if json.Unmarshal(out, &obj) == nil {
+			upstream.EnsureMinBudget(obj, floor)
+			if raw, err := json.Marshal(obj); err == nil {
+				out = raw
+			}
+		}
+	}
+	return out, true
+}
+
+// emptiedByThinking 本段是否「思考完直接收尾」：stop + 正文 0B + 有思考 + 无工具分片。
+// 只认这一种组合：三者缺一就可能是合法形态（真·空回复、工具轮），不猜。
+func (r *continueReader) emptiedByThinking() bool {
+	return r.finish == "stop" && r.text.Len() == 0 && r.reason.Len() > 0 && !r.toolSeen
+}
+
+// tryStarvedRetry 流式路径的空截断救援：本段什么都没产出时，同额度关思考重发一次。
+//
+// 与非流式版（tryStarvedRescue）的分工：那个处理「整条聚合结果已是空回复」的终态；
+// 这个在流式读取器内部、于段边界上就地换段，客户端完全无感。
+//
+// 返回 true 表示已换到新段继续读，调用方直接 return。
+func (r *continueReader) tryStarvedRetry() bool {
+	switch {
+	case r.starvedTried, r.errSeen, r.toolSeen:
+		return false
+	case r.finish != "length" && !r.emptiedByThinking():
+		// length = 额度用尽；emptiedByThinking = 上游思考完直接 stop（正文 0B）。
+		// 两者都是「这一轮什么都没产出」，救援动作相同。
+		return false
+	case r.text.Len() > 0:
+		// 有正文的截断是额度语义的正常结果，不救。
+		return false
+	case r.seg >= maxContinueSegments-1:
+		return false
+	}
+	body, ok := starvedRetryBodyWithFloor(r.body, r.budgetFloor)
+	if !ok {
+		return false
+	}
+	r.starvedTried = true
+	rc, status, _, err := r.up.ChatStreamContext(r.ctx, r.acct, body, r.clientIP, r.meta)
+	if err != nil || status >= 400 || rc == nil {
+		if rc != nil {
+			rc.Close()
+		}
+		logx.Warnf("[starved] acct=%s seg=%d 关思考重发失败（status=%d err=%v）→ 降级为截断终态",
+			logfmt.Label(r.acct.UID, r.acct.Nickname), r.seg+1, status, err)
+		return false
+	}
+	// 成因要在重置 r.finish 之前抓：下面马上把它清空给新段用。
+	cause := "预算被思考吃光"
+	if r.finish != "length" {
+		cause = "思考完直接收尾"
+	}
+	r.seg++
+	r.cur, r.br = rc, bufio.NewReaderSize(rc, 64*1024)
+	r.finish, r.tail = "", nil
+	// 上一段外泄给客户端的思考（正文尚未开始）已经发出去、收不回来；救援段关思考，
+	// 把本地累积清掉，免得续写前缀里混进两轮思考。
+	r.reason.Reset()
+	logx.Infof("[starved] acct=%s model=%s seg=%d %s（正文 0B）→ 同额度关思考重发",
+		logfmt.Label(r.acct.UID, r.acct.Nickname), bareModelOf(r.body), r.seg, cause)
+	return true
 }
 
 // tryStarvedRescue 对一次非流式聚合结果做空截断救援。

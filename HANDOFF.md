@@ -5,7 +5,7 @@
 ## 1. 项目概况与当前状态
 
 - **定位**：把腾讯 CodeBuddy（WorkBuddy）账号变成 OpenAI 兼容 API 的**多账号网关**，附 Web 管理面板。本项目是 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 的增强 fork（上游已删库，本分支独立演进）。
-- **当前版本**：`1.20.0-panel`（2026-11-10 **上游对齐版**：确立 `misakano7545/workbuddy2api-panel` 为事实参照上游并新增 `docs/UPSTREAM-ALIGNMENT.md` 路线文档；完成 5 项——**11140 风控连坐保护**（命中即停手 + 窗内 2 号被限暂停全池）、**jsonscan 零分配扫描**（200KB body 34 倍提速）、**OpenAI Responses API**（`/v1/responses`，Codex CLI 可直连）、**思考吃光预算的空回复救援**（同额度关思考重发）、**手动补跑排程 + 管理操作审计**；2 项延后：`upstreamhealth` 劣化告警、`busy` 预检端点（本仓已有部分覆盖）。全量 27 包绿）。上一版 1.19.3（2026-11-10 **不安全绑定写保护版**：监听非回环 + `api_key` 为空时写方法一律 405（`cmd/server/insecure_write_guard.go`，15 例测试钉子）、go.mod go directive 1.22.5 → 1.27.0、新增 gitleaks CI、根级 AGENTS.md 入库；**设了 `api_key` 或监听回环时零行为变更**，详见 §4.0.0）；上一版 1.19.2（2026-11-04 **账号池界面重构版**：首屏 KPI 6→4 格、到期卡改 44px chip + 抽屉（首行 y 1672→245）、表格 9→8 列与 `table-layout:fixed`、行内按钮 7–8→2、行高锁 56、轮询焦点保持、容器查询替代视口断点、筛选六态 + 四档排序、批量并发 2 且带 `role=progressbar` 进度与「停止」、8 秒撤销、站内确认弹窗 `#confirmVeil`、caption/label/`role=menu`/indeterminate 无障碍补齐；顺带修 `#accTable` 表头吸附失效与浅色 `--warn` 对比度。**纯前端、零后端改动**，详见 §4。**本版同时抹平了版本号分叉**：`v1.19.1` 的 Release 二进制由 tag 前移生成、不含账号池改动，从 `1.19.2` 起版本号重新能唯一标识产物）；上一版 1.19.1（请求改写补丁：tools schema `$ref/$defs` 解引用，修上游 11133；该版 Release 为 tag 前移产物，与生产曾运行的 `1.19.1-panel` 同名不同物）；上一版 1.19.0（2026-10-26 **加固、可观测与测试基线版**，累计 59 个提交：P0 修 SSE 心跳与错误路径并发写 header map 的进程级 fatal + 三个 opt-in 运维开关（入站限流 `rate_limit_rps`、请求体上限 `max_body_mb`、诊断监听 `debug_addr`）+ 出站元数据剥除 `strip_tool_metadata` + 状态快照单调 `revision` + `internal/logx` 分级日志门面（全仓 255 处迁移）+ 面板字号令牌与表头吸附 + 上游错误码映射收敛为单表 + `client.go`/`handler.go` 按职责拆分 + gofmt/LF/CI 门禁 + panel 覆盖率 33.0%→49.4%；**全部新开关默认关闭或零行为变更，升级不改变现有部署语义**）；上一版 1.18.3（2026-10-24 账号池排版清理批：**操作列左对齐修复竖向错位**（右对齐时「签到」起始 x 逐行漂移 ~80px；现签到/余额/任务/标签/变体槽各占稳定竖列、移除 margin-left:auto 钉右）+ 账号池头部工具栏统一紧凑规格（input.xs 新增 + select.xs 补 1px 上下内边距，三控件实测同高 27.7px）+ inline margin 移除统一 gap 12px + 空 #accNote 不占位 + **窄屏（≤860px）卡片头部 flex-wrap 修复工具栏被 overflow:hidden 裁切 319px 的功能缺陷** + 回收站弹窗 footer 按钮同高 + 趋势 footer tabular-nums）；上一版 1.18.2（2026-10-24 审查收尾批：Esc 关弹窗 + 默认值对账快照测试 + 窄屏列降级 + 对比度；**其余审查留档项已评估搁置**（见 §4 决策））；上一版 1.18.1（2026-10-24 审查第二批：安全三件（/status 脱敏/dump 保留/头白名单）+ /status 可观测三组（guards/persist_health/keepalive）+ 噪声治理 + reqlog 早停 + 前端体验批）；上一版 1.18.0（2026-10-24 全面代码审查后第一批：P0 正确性 12 项 + P1 局部性能 3 项；SSE 竞态为首）；上一版 1.17.1（2026-10-24 出厂默认对齐生产验证值：smart 保活 / 余额刷新 10 分钟 / 积分保底 150——**默认值变更，未显式配置的部署升级即生效**；A 机生产无需升级；上一版 1.17.0（2026-10-24 对标 P1 四项：模型降级路由 / 每日限额护栏三件套 / 余额趋势视图 / 会员档位显示；上一版 1.16.1（2026-10-24 对标 hub/misakano 的流式稳定性加固：SSE 空闲心跳双路径 + chunk id 整流 + 签到误判回归钉子；上一版 1.16.0（2026-10-24 发布「会话失效恢复与防复发」：死号一键重登 / 批量判死告警 / RT 轮换审计与外部双花检测 / auths 租约锁 / 任务时点抖动 / smart 智能保活 / 死号探活，八模块全量落地并过沙箱+UI 真实点击走查；**生产两机仍为 1.15.7，升级待办见 §5**。上一版 `1.15.7-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。生产已于 **2026-10-23 16:43** 切到该版本并验收通过（面板 `overview.version` 实测 `1.15.7-panel`，healthz `17 total / 10 healthy / 7 disabled`，`/v1/chat/completions` 真实出 content）。**注意**：16:43 那次重启是直接拉起进程完成的（当时沙箱把 `schtasks.exe` 列入程序黑名单、WMI `Win32_Process.Create` 亦被拦截），进程一度属登录用户而非 SYSTEM；**2026-10-23 17:55 已切回计划任务托管**——停会话实例 → `Start-ScheduledTask -TaskName "wb2api"`（该 cmdlet 不走 `schtasks.exe`，是被黑名单时的可用替代路径），新实例 PID 5496、身份 `NT AUTHORITY\SYSTEM`、监听 `::7863`，`/panel/`、`/panel/api/overview`（17 账号 / 11 启用）、`/panel/api/login/regions` 均 200。本机任务的开机自启延迟以任务定义 `wb2api-task.xml` 为准是 **`PT30S`**（旧文写的 `PT20S` 系机器 A 的 `WorkBuddy2API` 任务口径）。**机器 A（`DESKTOP-DVFFB09`）已于 2026-10-24 00:01 同步切到 `1.15.7-panel` 并验收通过**（healthz 16/17、`overview.version` 实测一致，过程见 §5 首条）——至此两台机器生产均为 1.15.7。
+- **当前版本**：`1.22.0-panel`（2026-11-16 **截断续写与门面版**：R2-2 续写救援四件套全部落地——**截断自动续写**（多段拼一条连续 SSE，最多 8 段、累计上限=档位下限×4）、**断流盲重试**、**预告句救援**（narration）、**安全续写**（toolonly，只采纳工具调用）、**流式空截断救援**（starved 流式版，补齐 1.20.0 只做非流式的缺口）；配套新增 `upstream/output_budget.go`（输出预算下限，治「思考吃光共用额度」）、**签到启动补跑 + runstamps 去重**、**`cmd/doctor` 自检命令**、**`README.en.md` 英文版 + `CONTRIBUTING.md` + TOC + 三步快速开始**；修复 README 章节标题错位。门禁 28 包全绿 / 新增 36 例测试。详见 §4.1。上一版 `1.20.0-panel`（2026-11-10 **上游对齐版**：确立 `misakano7545/workbuddy2api-panel` 为事实参照上游并新增 `docs/UPSTREAM-ALIGNMENT.md` 路线文档；完成 5 项——**11140 风控连坐保护**（命中即停手 + 窗内 2 号被限暂停全池）、**jsonscan 零分配扫描**（200KB body 34 倍提速）、**OpenAI Responses API**（`/v1/responses`，Codex CLI 可直连）、**思考吃光预算的空回复救援**（同额度关思考重发）、**手动补跑排程 + 管理操作审计**；2 项延后：`upstreamhealth` 劣化告警、`busy` 预检端点（本仓已有部分覆盖）。全量 27 包绿）。上一版 1.19.3（2026-11-10 **不安全绑定写保护版**：监听非回环 + `api_key` 为空时写方法一律 405（`cmd/server/insecure_write_guard.go`，15 例测试钉子）、go.mod go directive 1.22.5 → 1.27.0、新增 gitleaks CI、根级 AGENTS.md 入库；**设了 `api_key` 或监听回环时零行为变更**，详见 §4.0.0）；上一版 1.19.2（2026-11-04 **账号池界面重构版**：首屏 KPI 6→4 格、到期卡改 44px chip + 抽屉（首行 y 1672→245）、表格 9→8 列与 `table-layout:fixed`、行内按钮 7–8→2、行高锁 56、轮询焦点保持、容器查询替代视口断点、筛选六态 + 四档排序、批量并发 2 且带 `role=progressbar` 进度与「停止」、8 秒撤销、站内确认弹窗 `#confirmVeil`、caption/label/`role=menu`/indeterminate 无障碍补齐；顺带修 `#accTable` 表头吸附失效与浅色 `--warn` 对比度。**纯前端、零后端改动**，详见 §4。**本版同时抹平了版本号分叉**：`v1.19.1` 的 Release 二进制由 tag 前移生成、不含账号池改动，从 `1.19.2` 起版本号重新能唯一标识产物）；上一版 1.19.1（请求改写补丁：tools schema `$ref/$defs` 解引用，修上游 11133；该版 Release 为 tag 前移产物，与生产曾运行的 `1.19.1-panel` 同名不同物）；上一版 1.19.0（2026-10-26 **加固、可观测与测试基线版**，累计 59 个提交：P0 修 SSE 心跳与错误路径并发写 header map 的进程级 fatal + 三个 opt-in 运维开关（入站限流 `rate_limit_rps`、请求体上限 `max_body_mb`、诊断监听 `debug_addr`）+ 出站元数据剥除 `strip_tool_metadata` + 状态快照单调 `revision` + `internal/logx` 分级日志门面（全仓 255 处迁移）+ 面板字号令牌与表头吸附 + 上游错误码映射收敛为单表 + `client.go`/`handler.go` 按职责拆分 + gofmt/LF/CI 门禁 + panel 覆盖率 33.0%→49.4%；**全部新开关默认关闭或零行为变更，升级不改变现有部署语义**）；上一版 1.18.3（2026-10-24 账号池排版清理批：**操作列左对齐修复竖向错位**（右对齐时「签到」起始 x 逐行漂移 ~80px；现签到/余额/任务/标签/变体槽各占稳定竖列、移除 margin-left:auto 钉右）+ 账号池头部工具栏统一紧凑规格（input.xs 新增 + select.xs 补 1px 上下内边距，三控件实测同高 27.7px）+ inline margin 移除统一 gap 12px + 空 #accNote 不占位 + **窄屏（≤860px）卡片头部 flex-wrap 修复工具栏被 overflow:hidden 裁切 319px 的功能缺陷** + 回收站弹窗 footer 按钮同高 + 趋势 footer tabular-nums）；上一版 1.18.2（2026-10-24 审查收尾批：Esc 关弹窗 + 默认值对账快照测试 + 窄屏列降级 + 对比度；**其余审查留档项已评估搁置**（见 §4 决策））；上一版 1.18.1（2026-10-24 审查第二批：安全三件（/status 脱敏/dump 保留/头白名单）+ /status 可观测三组（guards/persist_health/keepalive）+ 噪声治理 + reqlog 早停 + 前端体验批）；上一版 1.18.0（2026-10-24 全面代码审查后第一批：P0 正确性 12 项 + P1 局部性能 3 项；SSE 竞态为首）；上一版 1.17.1（2026-10-24 出厂默认对齐生产验证值：smart 保活 / 余额刷新 10 分钟 / 积分保底 150——**默认值变更，未显式配置的部署升级即生效**；A 机生产无需升级；上一版 1.17.0（2026-10-24 对标 P1 四项：模型降级路由 / 每日限额护栏三件套 / 余额趋势视图 / 会员档位显示；上一版 1.16.1（2026-10-24 对标 hub/misakano 的流式稳定性加固：SSE 空闲心跳双路径 + chunk id 整流 + 签到误判回归钉子；上一版 1.16.0（2026-10-24 发布「会话失效恢复与防复发」：死号一键重登 / 批量判死告警 / RT 轮换审计与外部双花检测 / auths 租约锁 / 任务时点抖动 / smart 智能保活 / 死号探活，八模块全量落地并过沙箱+UI 真实点击走查；**生产两机仍为 1.15.7，升级待办见 §5**。上一版 `1.15.7-panel`（`cmd/server/main.go` 的 `appVersion` 常量，透出到 `/panel/api/overview`）。生产已于 **2026-10-23 16:43** 切到该版本并验收通过（面板 `overview.version` 实测 `1.15.7-panel`，healthz `17 total / 10 healthy / 7 disabled`，`/v1/chat/completions` 真实出 content）。**注意**：16:43 那次重启是直接拉起进程完成的（当时沙箱把 `schtasks.exe` 列入程序黑名单、WMI `Win32_Process.Create` 亦被拦截），进程一度属登录用户而非 SYSTEM；**2026-10-23 17:55 已切回计划任务托管**——停会话实例 → `Start-ScheduledTask -TaskName "wb2api"`（该 cmdlet 不走 `schtasks.exe`，是被黑名单时的可用替代路径），新实例 PID 5496、身份 `NT AUTHORITY\SYSTEM`、监听 `::7863`，`/panel/`、`/panel/api/overview`（17 账号 / 11 启用）、`/panel/api/login/regions` 均 200。本机任务的开机自启延迟以任务定义 `wb2api-task.xml` 为准是 **`PT30S`**（旧文写的 `PT20S` 系机器 A 的 `WorkBuddy2API` 任务口径）。**机器 A（`DESKTOP-DVFFB09`）已于 2026-10-24 00:01 同步切到 `1.15.7-panel` 并验收通过**（healthz 16/17、`overview.version` 实测一致，过程见 §5 首条）——至此两台机器生产均为 1.15.7。
 - **生产状态（2026-11-10 晚）**：**A 机已到 `1.20.0-panel`**（官方 CI 产物 sha256 `b0d56d80…`，PID 42968，监听保持 `127.0.0.1:7863`，healthz 16/17，`/v1/responses` 非流式出 `text='正常'`、流式 45 事件、`/admin/tasks` 列 6 任务、无 key 401；空回复救援在 150/300 预算下均返回 `content='OK'`）。回滚点 `wb2api.exe.pre-1.20.0.bak`（= 1.19.3 / `1c2f0bc2…`）。**B 机仍为 `1.19.2-panel`**（监听 `:7863`）。
 - **生产状态（2026-11-10 白天存档）**：**A 机曾到 `1.19.3-panel` 且监听收紧为 `127.0.0.1:7863`**（官方 CI 产物 `1c2f0bc2…`，PID 2368，healthz 17/17，详见 §5「2026-11-10 1.19.3 发版与 A 机收紧监听」）；**B 机仍为 `1.19.2-panel`**（监听仍 `:7863`），如需同步可照同一流程（B 机任务名 `wb2api`、目录 `F:\AI\wb2api`）。
 - **生产状态（2026-11-08 存档）**：**两机当时均已到 `1.19.2-panel`**。B 机 `CHINAMI-DPNMO04`（2026-11-04，tag `v1.19.2` / 云端 commit `8c95b35`，PID 5332，healthz 13/17 与升级前一致，流式首帧 `: heartbeat` 正常，回滚备份 `wb2api.exe.pre-1.19.2.bak` = 1.19.1）；**A 机 `DESKTOP-DVFFB09`（2026-11-08 本会话完成，此前为旧 tag 产物 `1.19.1-panel`，9961472 字节）**：官方 Release zip 内 `wb2api.exe`（10017280 字节 / sha256 `07446922…`，与 B 机逐字节同源），PID 44976，healthz **12/17**（5 disabled 为既有账号状态），`/panel/` 200 / 117506 字节、`/v1/models` 19 个、流式首帧 `: heartbeat` 正常，回滚备份 `wb2api.exe.pre-1.19.2.bak`（9961472 字节 / sha256 `01c8c465…`）。详见 §4.0.2 / §4.0.3 / §4.0.4。
@@ -70,9 +70,51 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（杀软误报规避构建规范收口，2026-11-12）
+## 4. 最近一轮变更与交付成果（1.22.0-panel：续写三件套 + 双语门面 + 补跑 + doctor，2026-11-16）
 
-### 4.0 本轮：`scripts/build-dev.sh` 开发期构建规范（火绒误报第三案收口）
+### 4.1 本轮：R2-2 续写救援四件套全部落地 + 门面/运维修补（1.22.0-panel）
+
+- **背景**：两处并行推进。① 差距分析（vs `misakano7545/workbuddy2api-panel` 等三个
+  社区项目）的结论是「功能互有攻守、工程质量我方更优、真实短板在续写兼容与可见度」；
+  ② `docs/UPSTREAM-ALIGNMENT.md` 的 R2-2 一直只做了非流式 `starved`，
+  `continue` / `narration` / `toolonly` 三件因「挂在上游 `continueReader` 上」而顺延。
+- **续写主体（`internal/server/continue.go`，本仓架构重写，非 cherry-pick）**：
+  流式接线改为 `上游 body → continueReader → chatStatsReader → StreamHint`。
+  本仓原先**没有读取器抽象**（`StreamHint` 是 inline 循环），故新增完整读取器：
+  `Read/Close/step/frame/endSegment/canContinue/continuationBody/mergeUsage/
+  emitTruncationTerminal/outputCapped`。同时去掉了参照上游的 `MarkupRepair` /
+  `HeadVetoError` / `ChatTiming` 依赖（本仓无这些基础能力，不引入）。
+- **三条救援**：
+  - `narration.go`：`stop` + 尾部停在预告符 + 工具会话（声明 tools **且**有工具轮）
+    → 补写剩余；正文含 DSML/XML 工具标记时一律不救。
+  - `toolonly.go`：`stop` + 正文 < 2000B + 末条是工具结果 + `prompt_tokens ≥ 20000`
+    → 试续一次，**只采纳工具调用、正文整段丢弃**（`settleToolOnly` 裁决回滚）。
+  - `starved.go` 新增流式版 `tryStarvedRetry`：正文 0B + `length` 或「思考完直接
+    stop」→ 同额度关思考重发（1.20.0 只做了非流式版）。
+- **前置能力（`internal/upstream/output_budget.go`）**：`minBudgetByEffort` 表、
+  `MinOutputBudget` / `EnsureMinBudget` / `ApplyMinOutputBudget` / `explicitOutputBudget`；
+  `sse.go` 新增 `TruncationFinishReason`；`thinking.go` 导出 `ThinkingSwitchSupported`。
+- **签到启动补跑（`internal/scheduler/runstamps.go` + `missedToday`/`catchUpMissed`）**：
+  进程停机跨过当天时点后重启补跑一轮；标记落 `runstamps.json`（与 `state_file` 同目录、
+  只记日期、只留当天）。`Run` 进入主循环前先 `catchUpMissed`，补跑后才 `markRan`
+  （中途崩溃 = 标记未写 = 下次再补，方向安全）。
+- **`cmd/doctor` 自检**：只读，输出人类可读摘要 + 单行 JSON；覆盖配置/监听鉴权/账号池/
+  token 有效期/数据目录/state 与 runstamps 可解析性/六族排程；`-offline` 跳过网络；
+  退出码 0/1/2。**注意** `auth.LoadDir` 只匹配 `workbuddy*.json`，`auth.Parse` 的扁平形
+  用 camelCase（`accessToken`/`refreshToken`/`expiresAt`）——写测试造账号文件时踩过。
+- **门面**：新增 `README.en.md`（19 个 h2 与中文版逐一对应、1025 行对等）、
+  `CONTRIBUTING.md`、README 的 TOC + 三步快速开始 + License/Release 徽章；修复 1.21.0
+  遗留的「余额后台刷新」标题错位（原为二级 `## API 端点`，与真正的端点表重名）。
+- **门禁数据**：`go build ./...` 通过；`go test ./... -count=1` **28 包全绿**；
+  `gofmt -l ./cmd ./internal` 零输出。覆盖率：server 79.0% / upstream 59.9% /
+  scheduler 66.8% / doctor 50.4%。新增用例 **36 例**（续写 9 + narration/toolonly 7 +
+  output_budget 6 + runstamps 7 + doctor 7）。
+- **未做（明确排除）**：参照上游的 `upstreamhealth` / `busy`（R3 延后）、多模态与
+  `proxypool`（定位排除）；两台生产机的实际升级未执行（需另定停机窗口）。
+
+### 4.0 上一轮（`scripts/build-dev.sh` 开发期构建规范，2026-11-12）
+
+#### 4.0.0 `scripts/build-dev.sh` 开发期构建规范（火绒误报第三案收口）
 
 - **事件**：2026-11-12 23:05 火绒实时监控把 agent 临时验证构建
   `%TEMP%\wb2api_verify.exe`（`go build -ldflags "-s -w" -o … ./cmd/server`，父进程
@@ -542,6 +584,21 @@ data/backups/          备份输出（同上）
 - 账号回收站（软删除）/ 账号标签（tags）/ 余额预警横幅 / 定时备份四件套 + `trash.retention_days`、`backup.enabled/hour/keep` 四配置键（详见 CHANGELOG 1.14.0 条目）。
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
+
+### 📌 1.22.0 发布后待办（2026-11-16）
+
+- **生产两机升级未执行**：A 机 1.21.0（本轮升级前状态）、B 机 1.19.2。升级需另行确认停机
+  窗口（单机停机约 2–3 秒），流程照旧：备份 `wb2api.exe.pre-1.22.0.bak` → 换装 →
+  `Start-ScheduledTask` → 核对 `overview.version = 1.22.0-panel` 与 healthz。
+- **续写能力的真机验证**：单测与 handler 级端到端已覆盖拼接/降级/救援全路径，但**真实
+  上游的 `finish=length` 长文截断**只做过参照上游的实测记录。建议用
+  `scripts/probe_max_tokens.py` 或一次长文请求在 A 机观察 `data\server.log` 里的
+  `[continue] seg=N ... -> 续写` 与 `[narration]` / `[toolonly]` 命中日志，确认收益与
+  「是否误救正常短答」。日志里各救援都带 `acct=` 标识，可按 uid 统计命中率。
+- **R3 两项仍延后**：`upstreamhealth`（上游「劣化但不报错」滑窗告警）、`busy`（模型忙
+  预检端点）。本仓已有部分覆盖（活跃上报 streak 自检、健康探测），按契合度再决策。
+- **doctor 只覆盖读路径**：未覆盖「上游协议形状变化」这类需要真机对照的检查（可考虑后续
+  加 `-probe-model <name>`）。
 
 ### ✅ 本机 7863 已升级到 1.21.0-panel（2026-11-12 23:19，验收通过）
 

@@ -48,6 +48,16 @@ func isDeepSeekModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "deepseek")
 }
 
+// ThinkingSwitchSupported 报告该模型是否支持「显式开关思考」（thinking.type 字段）。
+//
+// 导出给续写救援层用：starved / continue 的救援段会关掉思考重发，但只有 DeepSeek 系
+// 走 thinkingFormat:"deepseek" 的显式开关；其他厂商（glm / kimi / qwen）开思考是默认
+// 行为或不支持该字段，硬塞 disabled 可能被上游当非法参数拒绝（11133）。判据与
+// injectThinking 的门控同源，故等价于 isDeepSeekModel。
+func ThinkingSwitchSupported(model string) bool {
+	return isDeepSeekModel(model)
+}
+
 // backfillReasoningContent DeepSeek 多轮一致性：保证每条 assistant 消息带
 // reasoning_content 字段且值为 string——即 requiresReasoningContentOnAssistantMessages
 // （官方客户端 matches 规则，issue #165 对齐官方 apply 门控）。

@@ -38,7 +38,7 @@ import (
 )
 
 // appVersion 网关版本（fork 版：面板 + 任务体系），透出到 /panel/api/overview。
-const appVersion = "1.21.0-panel"
+const appVersion = "1.22.0-panel"
 
 // usagePathFor 由 state 文件路径推出用量文件路径：同目录、文件名 usage.json。
 // 这样 config 里改 state_file 时用量数据跟着走，不需要额外配置项。
@@ -209,6 +209,9 @@ func main() {
 		GrowthDisabled:     !cfg.Schedule.GrowthEnabled,
 		// 保号类四任务是否覆盖禁用账号（缺省 false = 禁用即跳过，保持既有行为）。
 		IncludeDisabledInTasks: cfg.Schedule.IncludeDisabledInTasks,
+		// 启动补跑去重标记：与 state 文件同目录，随 state_file 配置一起搬移。
+		// 缺了也不致命（每次重启多补一轮），写失败只记 WARN。
+		RunStampFile: stateSibling(cfg.StateFile, "runstamps.json"),
 	})
 	switch {
 	case !cfg.Schedule.CheckinEnabled:

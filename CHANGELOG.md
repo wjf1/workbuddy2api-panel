@@ -4,9 +4,94 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
-## [Unreleased]
+## [1.22.0-panel] - 2026-11-16
 
 ### 新增
+
+- **截断自动续写（continue）——R2-2 主体**：上游 `finish_reason=length` 且本段为纯
+  文本/推理输出时，同账号同模型补发「已输出内容作 assistant 前缀 + 续写指令」的请求，
+  多段帧拼成**一条客户端可见的连续 SSE**（终端帧吞掉、usage 跨段合并、`[DONE]` 仍只
+  出现一次）。对 Codex / Claude Code 这类连续执行客户端是兼容性补齐：此前 32000 输出
+  token 处被截后客户端重发几乎不带前段输出，等于重新生成。单请求最多 8 段；累计输出
+  上限 = 本轮档位下限 × 4（无档位时兜底 32768）。新增 `internal/server/continue.go`。
+  - **不续写的形态**（宁可少续不可续错）：客户端显式带小额度（`max_tokens` < 32000 且
+    未经网关抬升）、本段含工具调用分片（残缺 JSON 拼接更糟）、有 error 帧 / 流内失败帧、
+    客户端已断开、累计输出到顶。
+  - **断流盲重试**：段在无 `finish_reason`、无 `[DONE]` 的情况下结束（上游偶发断流）
+    且已产出内容时，允许一次盲重试（每请求一次），并把「截断」如实落到客户端可见的
+    协议字段（`finish_reason: length`）——此前只记日志，客户端看到的是「被标 completed
+    的中途截断」。
+- **预告式收尾救援（narration）**：`finish_reason=stop`、正文非空但尾部停在预告符
+  （冒号 / 省略号 / 未闭合代码块 / 无句末标点）且请求是工具会话（声明了 tools **且**
+  历史里有工具轮）时，补发「你停在一句预告上」指令续写一次。正文含工具调用标记
+  （DSML / XML 形态）时一律不救——那本身就是一次调用，续写会造出第二次执行。
+  新增 `internal/server/narration.go`。
+- **安全续写（toolonly）**：`stop` + 短正文（< 2000B）+ 末条消息是工具结果 +
+  `prompt_tokens ≥ 20000` 时试续一次，**只采纳工具调用、正文整段丢弃**。用于「模型
+  刚看完工具输出却只写一句就收尾」这一类；因为句号收尾里也有大量正常短答，所以只认
+  工具调用这一个采用条件。新增 `internal/server/toolonly.go`。
+- **流式空截断救援（streaming starved）**：本段 `length` 或「思考完直接 stop」且正文
+  0B 时，同额度关思考重发一次（每请求一次），在段边界就地换段、客户端无感。补齐
+  1.20.0 只做非流式版的缺口。见 `internal/server/starved.go` 的 `tryStarvedRetry`。
+- **输出预算下限（`upstream/output_budget.go`）**：`MinOutputBudget(effort)` /
+  `EnsureMinBudget` / `ApplyMinOutputBudget`——思考与正文共用同一份 `max_tokens` 时，
+  客户端给的小额度会先被思考吃掉一半，正文断在句子中间。抬的是**上限**不是目标长度
+  （模型写完自然停，不额外计费）。续写/救援段从原始 body 重建、拿不到首段抬升，故
+  用 `EnsureMinBudget` 显式补回。
+- **签到启动补跑 + 补跑去重（runstamps）**：进程停机跨过当天时点后重启时，把「今天
+  时点已全过且还没补过」的任务族补跑一轮（此前只有「迟到唤醒」补跑，管不到进程本身
+  没在运行）。补跑标记落盘到 `runstamps.json`（与 `state_file` 同目录），只记日期不记
+  时刻、只保留当天条目，反复重启不会重复打上游。新增 `internal/scheduler/runstamps.go`
+  + `missedToday` / `catchUpMissed`。
+- **`doctor` 自检命令（`cmd/doctor`）**：一次性输出「人类可读摘要 + 单行 JSON」，检查
+  配置加载 / 监听与鉴权组合安全性 / 账号池与 token 有效期 / 数据目录可写性 /
+  `state.json` 与 `runstamps.json` 可解析性 / 六族排程与下次触发时刻 / 可选的上游
+  连通性探测（`-offline` 跳过）。**只读**，不改状态、不刷 token，可对生产部署直接跑。
+  退出码 0 全绿 / 1 有 error / 2 配置加载失败。
+- **README 英文版（`README.en.md`）**：与中文版 19 个 h2 章节逐一对应的完整英文镜像
+  （1025 行对等），代码块、命令、字段名、端点、错误码原样保留；顶部 `简体中文 | English`
+  双向语言切换。
+- **`CONTRIBUTING.md`**：开发环境 / 构建与测试门禁 / 代码规范（gofmt、safefile、cst、
+  logx、前端 id 唯一性与 DOM 祖先链断言）/ Conventional Commits 中文提交规范 / 文档
+  同步要求 / 参照上游协作规则 / PR 流程。
+- **README 目录（TOC）**：17 个二级章节的手写锚点清单，置于徽章与截图之后。
+- **README 快速开始三步 TL;DR**：GHCR 拉取 → 健康检查 → 面板加号，置于「快速开始」
+  顶部；下方原四种部署方式详解保持不变。
+- **README 徽章**：补 License 与 Release 两个动态徽章。
+
+### 变更
+
+- 版本号 `1.21.0-panel` → `1.22.0-panel`（`cmd/server/main.go`）。
+- **流式路径接线**：`handler_chat.go` 的流式分支改为
+  `上游 body → continueReader → chatStatsReader → StreamHint`（此前是
+  `body → chatStatsReader → StreamHint`）。`continueReader` 成为三条适配器
+  （chat / Responses / Messages）共用的唯一接缝，故截断终态、usage 合计与多段拼接
+  三处语义天然一致。资源关闭由 `continueReader.Close()` 统一承担（切段时关旧段）。
+- **`.gitignore`**：放行 `README.en.md` 与 `CONTRIBUTING.md` 入库。
+- `README.md` 的「余额后台刷新」由错位的二级标题降级为 `####` 子节（原位置在
+  `## API 端点` 下但内容是余额刷新，与真正的端点表重复同名）。
+
+### 修复
+
+- **README 章节标题错位**：原 `README.md` 第 652 行附近有一处 `## API 端点`，其内容实为
+  「余额后台刷新」（真正的端点表在同文件后面的 `## 🔌 API 端点`）。标题重名会让 TOC
+  与读者都定位到错误章节，已降级为该节说明。
+
+### 测试
+
+- 新增 `internal/server/continue_test.go`（9 例）：续写拼接与 `[DONE]` 唯一性、显式小额度
+  不续、工具分片不续、续写失败降级、断流盲重试、累计到顶停止、空截断关思考重发、
+  完整流零改动、**handler 级端到端续写**（验证接线生效）。
+- 新增 `internal/server/narration_test.go`（7 例）：尾部形态判定（6 种未完 / 5 种已完）、
+  工具标记豁免、预告句救援与指令文案、无工具轮不救、toolonly 采纳工具调用、
+  toolonly 丢弃纯正文、短 prompt 不救。
+- 新增 `internal/upstream/output_budget_test.go`（6 例）：档位表、抬升、四种「不猜」
+  情形、`EnsureMinBudget`、三别名读取、`ThinkingSwitchSupported`。
+- 新增 `internal/scheduler/runstamps_test.go`（7 例）：时点全过才补、已补不重复、
+  禁用不补、损坏当空表、只留当天、无路径零行为、`catchUpMissed` 落盘。
+- 新增 `cmd/doctor/main_test.go`（7 例）：全绿 / 过期 token 判 error / 配置损坏 /
+  配置缺失 / 非回环空 key / runstamps 损坏判 warning / 排程摘要。
+- 全量 `go test ./... -count=1` **28 包全绿**；`gofmt -l ./cmd ./internal` 零输出。
 
 - **README 补面板实拍截图**：`docs/screenshots/panel-accounts.png`（1280×860，全新实例空态，
   不含任何真实账号数据）——账号池页展示统计卡、状态 / 标签 / 风险筛选与签到 / 保活 / 旅行 /

@@ -65,6 +65,10 @@ type Config struct {
 	GrowthHook func()
 	// RecoveredHook 死号复活回调（M8 探活命中；main 注入 → alert webhook）。
 	RecoveredHook func(uid, nickname string)
+
+	// RunStampFile 启动补跑去重标记文件路径（空 = 不去重，每次重启都补一轮）。
+	// 只记「今天已补跑过哪几类任务」，见 runstamps.go。
+	RunStampFile string
 }
 
 // Scheduler 调度器。
@@ -111,6 +115,10 @@ type Scheduler struct {
 	// probeLastRun 死号探活去重（M8）：上次执行的小时键（CST 日|小时）。
 	// mu 保护（与 adoptTried 同锁）。
 	probeLastRun string
+
+	// stampMu 保护补跑标记文件的读改写（runstamps.go）。与 schedMu 分离：
+	// 标记读写会落盘，不能持排程锁做 IO（Reconfigure 会因此阻塞）。
+	stampMu sync.Mutex
 }
 
 // kaBack 保活失败退避项。
@@ -316,39 +324,8 @@ const (
 // nextWake 返回 now 之后最近的唤醒时刻，以及该时刻需要执行的全部任务。
 // 多类任务若配到同一小时（如签到与旅行都含 9），该时刻多类任务需一并执行。
 // 已显式禁用的任务不进候选（nextFire 对其零值返回零时间，nextWake 再跳过零时点）。
-// 排程参数在 schedMu 下快照，与 Reconfigure 的并发写隔离。
 func (s *Scheduler) nextWake(now time.Time) (time.Time, []taskKind) {
-	s.schedMu.Lock()
-	checkinHours, keepaliveHours, blackcatHours := s.cfg.CheckinHours, s.cfg.KeepaliveHours, s.cfg.BlackcatHours
-	travelHours, activityHours := s.cfg.TravelHours, s.cfg.ActivityHours
-	checkinOff, keepaliveOff, blackcatOff := s.cfg.CheckinDisabled, s.cfg.KeepaliveDisabled, s.cfg.BlackcatDisabled
-	growthHours, growthOff := s.cfg.GrowthHours, s.cfg.GrowthDisabled
-	travelOff, activityOff := s.cfg.TravelDisabled, s.cfg.ActivityDisabled
-	s.schedMu.Unlock()
-
-	type slot struct {
-		at   time.Time
-		kind taskKind
-	}
-	var slots []slot
-	if !checkinOff {
-		slots = append(slots, slot{nextFire(now, checkinHours), taskCheckin})
-	}
-	if !travelOff {
-		slots = append(slots, slot{nextFire(now, travelHours), taskTravel})
-	}
-	if !activityOff {
-		slots = append(slots, slot{nextFire(now, activityHours), taskActivity})
-	}
-	if !keepaliveOff {
-		slots = append(slots, slot{nextFire(now, keepaliveHours), taskKeepalive})
-	}
-	if !blackcatOff {
-		slots = append(slots, slot{nextFire(now, blackcatHours), taskBlackcat})
-	}
-	if !growthOff {
-		slots = append(slots, slot{nextFire(now, growthHours), taskGrowth})
-	}
+	slots := s.enabledSlots(now)
 	var earliest time.Time
 	for _, sl := range slots {
 		if sl.at.IsZero() {
@@ -368,6 +345,71 @@ func (s *Scheduler) nextWake(now time.Time) (time.Time, []taskKind) {
 		}
 	}
 	return earliest, kinds
+}
+
+// enabledSlots 返回启用任务的「下次触发时刻」快照（nextWake 与 missedToday 共用）。
+// 排程参数在 schedMu 下快照，与 Reconfigure 的并发写隔离。
+func (s *Scheduler) enabledSlots(now time.Time) []plannedSlot {
+	s.schedMu.Lock()
+	checkinHours, keepaliveHours, blackcatHours := s.cfg.CheckinHours, s.cfg.KeepaliveHours, s.cfg.BlackcatHours
+	travelHours, activityHours := s.cfg.TravelHours, s.cfg.ActivityHours
+	checkinOff, keepaliveOff, blackcatOff := s.cfg.CheckinDisabled, s.cfg.KeepaliveDisabled, s.cfg.BlackcatDisabled
+	growthHours, growthOff := s.cfg.GrowthHours, s.cfg.GrowthDisabled
+	travelOff, activityOff := s.cfg.TravelDisabled, s.cfg.ActivityDisabled
+	s.schedMu.Unlock()
+
+	out := make([]plannedSlot, 0, 6)
+	if !checkinOff {
+		out = append(out, plannedSlot{kind: taskCheckin, at: nextFire(now, checkinHours)})
+	}
+	if !travelOff {
+		out = append(out, plannedSlot{kind: taskTravel, at: nextFire(now, travelHours)})
+	}
+	if !activityOff {
+		out = append(out, plannedSlot{kind: taskActivity, at: nextFire(now, activityHours)})
+	}
+	if !keepaliveOff {
+		out = append(out, plannedSlot{kind: taskKeepalive, at: nextFire(now, keepaliveHours)})
+	}
+	if !blackcatOff {
+		out = append(out, plannedSlot{kind: taskBlackcat, at: nextFire(now, blackcatHours)})
+	}
+	if !growthOff {
+		out = append(out, plannedSlot{kind: taskGrowth, at: nextFire(now, growthHours)})
+	}
+	return out
+}
+
+// plannedSlot 一个任务族的下一次触发时刻。
+type plannedSlot struct {
+	kind taskKind
+	at   time.Time
+}
+
+// missedToday 返回「今天的时点已全部过去」的启用任务族（下一次触发已落到别的日子）。
+//
+// 进程停机跨过时点后重启时用它补跑——迟到唤醒补跑（waitSlot 的墙钟重判）只管
+// 「进程活着、timer 被睡眠冻结」，管不到进程本身没在跑。各任务按天幂等，补一轮
+// 无副作用；已补过的（runstamps 落盘记录）不再重复，避免反复重启把上游打成刷量。
+//
+// 判据只看「下一次触发是否落在今天」：跨零点重启时，昨夜那一轮不会被补——真有这种
+// 重启再升级判据。
+func (s *Scheduler) missedToday(now time.Time) []taskKind {
+	var out []taskKind
+	for _, sl := range s.enabledSlots(now) {
+		if sl.at.IsZero() {
+			continue // 未配小时数：本来就不跑
+		}
+		if sl.at.In(cst.Loc).Year() == now.In(cst.Loc).Year() &&
+			sl.at.In(cst.Loc).YearDay() == now.In(cst.Loc).YearDay() {
+			continue // 今天还有时点未到：交给正常排程
+		}
+		if s.ranToday(sl.kind, now) {
+			continue // 今天已补跑过一轮：重启不该再把同样的请求打一遍
+		}
+		out = append(out, sl.kind)
+	}
+	return out
 }
 
 // wakeupGraceDelay 迟到唤醒补跑的派发前网络宽限：Windows Modern Standby exit 后
@@ -446,7 +488,12 @@ func (s *Scheduler) waitSlot(ctx context.Context, next time.Time, step time.Dura
 
 // Run 主循环，阻塞直到 ctx 取消。
 // Reconfigure 触发 rearmSchedule 时提前唤醒重算（新时点/开关立即生效）。
+//
+// 进入主循环前先做一次「启动补跑」：进程停机跨过今天的时点后重启，迟到唤醒补跑
+// （waitSlot 的墙钟重判）管不到——那种机制只覆盖「进程活着、timer 被睡眠冻结」。
+// 各任务按天幂等，补一轮无副作用；runstamps 落盘记录保证反复重启不会重复打上游。
 func (s *Scheduler) Run(ctx context.Context) {
+	s.catchUpMissed(ctx)
 	for {
 		next, kinds := s.nextWake(time.Now())
 		if next.IsZero() {
@@ -478,6 +525,38 @@ func (s *Scheduler) Run(ctx context.Context) {
 			s.runBatch(ctx, kinds)
 		}
 	}
+}
+
+// catchUpMissed 启动补跑：把「今天的时点已全部过去、且今天还没补过」的任务族跑一轮。
+//
+// 放在 Run 的最前面而不是另起 goroutine：补跑与正式排程共用同一批任务函数，并行
+// 起步会让同一账号被并发签到两次（池侧有幂等保护，但白打一轮上游请求）。补跑结束后
+// 再进主循环，两条路径天然串行。
+//
+// 补跑不阻塞主循环过久（最多一轮全账号任务，与一次正常时点同量级）；ctx 取消时
+// runBatch 内部的任务会快速收尾。
+func (s *Scheduler) catchUpMissed(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	// 池或上游未装配时不做补跑：生产 main 恒会注入，但裸构造的 Scheduler
+	// （测试、或将来别的入口）不该因为补跑而空指针崩溃。排程本身照常运行。
+	if s.cfg.Pool == nil || s.cfg.Upstream == nil {
+		return
+	}
+	missed := s.missedToday(time.Now())
+	if len(missed) == 0 {
+		return
+	}
+	names := make([]string, 0, len(missed))
+	for _, k := range missed {
+		names = append(names, kindName[k])
+	}
+	logx.Infof("scheduler: 启动补跑 %d 类任务（今天的时点已过且未补跑）：%v", len(missed), names)
+	s.runBatch(ctx, missed)
+	// 落盘放在任务跑完之后：跑的过程中崩溃 = 标记未写 = 下次启动再补一轮，
+	// 方向安全（宁可多补不可漏补）；反过来先写标记再跑，中途崩溃就永久漏了。
+	s.markRan(missed, time.Now())
 }
 
 // runBatch 并行派发一批任务（同一唤醒时刻的多类任务），等全部完成返回。

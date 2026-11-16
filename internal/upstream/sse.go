@@ -28,6 +28,13 @@ var sseHeartbeatInterval = 15 * time.Second
 // 客户端已走，日志口径不同。Aggregate 与 StreamHint 共用同一哨兵（errors.Is 判定）。
 var errEmptyStream = errors.New("upstream stream contained no valid data events")
 
+// TruncationFinishReason 上游「被输出预算截断」的 finish_reason 取值。
+//
+// 读取器（continue.go 的 continueReader）用它判定「这一段是预算到顶收尾，不是自然
+// 说完」。约定：当上游既没给 finish_reason 也没发 [DONE] 就 EOF 时，读取器按
+// 「断流」处理（可盲重试一次），而不是伪造一个终态——伪造会把上游故障写成成功。
+const TruncationFinishReason = "length"
+
 // IsEmptyStreamError 报告错误是否为「上游空流」（无有效 SSE 帧）——供 handler
 // 在流式路径把空流记为失败观测（HTTP 头已发出只能 200，但日志/状态应收敛到
 // upstream_parse 同语义），与客户端断连类错误区分。
