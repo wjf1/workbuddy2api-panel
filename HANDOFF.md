@@ -458,7 +458,9 @@ data/backups/          备份输出（同上）
 > 完整细节见 `CHANGELOG.md` 的 `[1.17.0-panel]`；此处只留接力要点。
 
 - **四个功能提交**：①`d456089` model_fallback（两个触发点：6004 响应后同账号换等价模型 + 选不到号兜底；curModel/bareModel 分离——冷却记账必须用原模型）；②`081d770` 会员档位（summary 端点一天一次节流，失败保留旧值）；③`734bf7a` 余额趋势（小时桶采样独立文件；**锁内不做 IO**——持锁写盘与 flusher 撞锁死锁的教训在 credithistory.go 注释）；⑤护栏三件套（RecordDailyUsage 按 CST 日键跨日自动清零，pick/粘性/兜底三路径挂同一谓词 `dailyLimitBlockedForRealmModel`）。
-- **待办顺延**：④模型目录动态同步 /v3/config → v1.17.1（需实测上游响应形态，宣告字段与风控指纹关联不可盲并）。
+- ~~**待办顺延**：④模型目录动态同步 /v3/config → v1.17.1~~ ✅ **已实现**（后续版本落地
+  v3-config-merge，见 `internal/upstream/catalog.go` 的 `fetchV3Models` + 双路降级；
+  启动日志 `warm model rates: global ok (36 models)` 即它在跑）。
 - **验证**：`go test ./... -count=1` 全绿（25 包），新增 10 测试例。
 
 ## 4.0 上一轮（1.16.1-panel，2026-10-24）
@@ -611,6 +613,23 @@ data/backups/          备份输出（同上）
   （reward 5–10）；活跃上报 streak 自检 days=2–3。批次跑完 markRan 落盘
   `runstamps.json` 五族标记。member-tier 404 为上游侧既有噪声（保留旧值）。
 
+### 🔥 最高优先级：续写四件套加固（1.22.1，2026-11-16 情报扫描发现）
+
+**参照上游在 11-11~11-16 对本仓刚实现的同一批能力修了 10+ 个生产缺陷，本仓同样存在。**
+完整清单与严重度见 `docs/UPSTREAM-ALIGNMENT.md` §7.1。必跟四项（按严重度）：
+
+1. **`baf9155` toolonly 采纳率 100%** → agent 回合永不结束（线上投诉级）。需两道闸门：
+   正文 ≥120B 且句末标点 = 最终答复不救；续写段工具调用先缓存，与上一次调用同名同参则整段回滚。
+2. **`1f67b37` toolonly 段漏字节/采纳条件过宽**：工具分片后的正文仍下发、
+   `finish=length`/断流/半截 JSON 参数也被采纳 → 客户端收两个终态。
+3. **`084176e` 截断终态补在 error 帧与正常 `[DONE]` 之后**（破坏「恰好一个终态」契约）：
+   末段上游显式 `[DONE]` 必须交给下游。
+4. **`def074c` 分段记账缺失**：多段调用只按客户端可见合计记 → prompt 少记、中途断开漏记。
+   需另记一份 `billed`（每段逐项求和），与客户端可见 usage 分开。
+
+另 `ab67974` / `b4012ce` / `92dadae` / `79ba3d6` / `09189a5` / `bd59564` / `b60f1c0`
+同属必跟或中优先，见 §7.1 表。
+
 ### 📌 1.22.0 发布后待办（2026-11-16）
 
 - **B 机（CHINAMI-DPNMO04）升级未执行**：仍为 1.19.2。异机会话够不到。**升级脚本已就绪**
@@ -675,13 +694,15 @@ Release `v1.21.0` 官方资产换装完成：zip 与 `checksums.txt` 比对一�
 放好 `wb2api.exe.new` 提权跑即可）；新构建务必先跑
 `bash scripts/gen-versioninfo.sh` 注入 Windows 版本资源（治杀软误报）。
 
-### 🔜 下一步：上游对齐 R2-2 剩余与 R3 延后项
+### 🔜 下一步：上游对齐 R3 延后项与续写加固
 
-按 `docs/UPSTREAM-ALIGNMENT.md` §4 的路线，1.20.0 之后可选：
+按 `docs/UPSTREAM-ALIGNMENT.md` §4 的路线：
 
-1. **流式续写**（`continue` / `narration` / `toolonly`）：**前置条件**是先建
-   `continueReader` 等价物（多段上游流拼成单条客户端可见 SSE）。不要直接抄参照上游的
-   三个文件——它们没有脱离该读取器可用的形态。
+1. ~~**流式续写**（`continue` / `narration` / `toolonly`）~~ ✅ **已完成 1.22.0**（2026-11-16）：
+   `continueReader` 等价物 + 三件套 + 流式 starved 全部落地，A 机真机验证通过。
+   **⚠️ 但 2026-11-16 情报扫描发现参照上游在该能力上累计修了 10+ 个生产缺陷，本仓
+   同样存在**——见 §7.1 的必跟清单（toolonly 100% 采纳、截断终态重复、分段记账缺失等）。
+   下一轮 1.22.1 应专做「续写四件套加固」。
 2. **`upstreamhealth`**（上游劣化滑窗告警）：等出现真实「劣化但不报错」场景再做，
    避免凭想象设计阈值。
 3. **每两周一次上游情报扫描**：`cd F:/AI/_upstream-ref/misakano && git pull` 后
@@ -765,8 +786,9 @@ Release `v1.21.0` 官方资产换装完成：zip 与 `checksums.txt` 比对一�
    属文档口径问题；若要严格对齐需重新核定 `--acc-fold` 预算或压缩概览行。
 4. **回收站 / 任务中心仍有 4 处原生 `confirm()`**：本次只统一了账号池（在交接文档范围内）。
    若要全站统一，把这 4 处也换成 `askConfirm()` 即可，`#confirmVeil` 已就位。
-5. **`go.mod` 的 go 版本仍是 1.22.5**：gofmt 门禁已用「注释独立行化」绕开版本差异，
-   但根本解法是升 `go` 指令到 1.23+ 或 CI 锁 `GOTOOLCHAIN` 与本机一致（上轮遗留，仍未做）。
+5. ~~**`go.mod` 的 go 版本仍是 1.22.5**~~ ✅ **已解决**（1.19.3 起 `go.mod` 升至
+   `go 1.27.0`；CI 三个 workflow 均用 `go-version-file: go.mod` 自动跟随，无 GOTOOLCHAIN
+   漂移——`gofmt -l ./cmd ./internal` 恒零输出）。
 
 ### ✅ 2026-11-04：发版 1.19.2-panel 并部署 B 机生产
 
@@ -878,8 +900,11 @@ annotated tag 强推；v1.19.1 前移到 main 修复提交 `a5ae6f0` 强推。pu
 
 - **✅【机器 A（`DESKTOP-DVFFB09`，WLAN MAC `C8-CB-9E-DA-34-37`）】生产网关已升级到 1.15.7-panel（2026-10-24 00:01，经用户确认重启）**：`F:\AI\wb2api-panel-v1.13.0-windows-amd64\` 由 `1.15.4-panel` 直接升到 `1.15.7-panel`（跳过 1.15.5/1.15.6——A 机 exe 从未装过这两版）。**源码区同步**：`F:\AI\workbuddy2api-panel` 由 `50d31d8`（1.15.4）快进到 `2947308`（= 官方 v1.15.7 tag），工作区留有未提交的 `derefToolSchemas` 改动（构建前 stash、构建后恢复，见下方待办）。**产物获取走了弯路**：官方 Release zip 先 `gh release download` 超时、后 curl 直连 exit 56（release 大文件直连不稳）→ 改为**本机 `go build -ldflags "-s -w"` 自建**（sha256 `4a8634f1fac50807…`，构建前后 grep 验证版本串 `1.15.7-panel`、不含 deref 符号）。流程 = 静默提权 `Stop-ScheduledTask -TaskName 'WorkBuddy2API'`（注意：`Get-ScheduledTask` 非提权报「找不到」、`Stop-ScheduledTask` 报「拒绝访问」——SYSTEM 任务非提权不可见但操作被拒，**「拒绝访问」= 任务存在**，与 §1 避坑①口径一致）→ 轮询确认进程退出（旧 PID 19332 消失、curl healthz 连接拒绝 exit 7）→ 备份 `wb2api.exe.pre-1.15.7.bak`（旧 1.15.4，10884608 字节）→ `cp` 替换 exe（10955776 字节）→ 静默提权 `Start-ScheduledTask`。**停机约 8 秒**（未触发任务失败重启的 1 分钟窗口）。验收：新进程 **PID 4364**、healthz `{"total":17,"healthy":16}`（升级前后一致，`realm_servable.global=false` 为既有状态）、`overview.version = 1.15.7-panel`、`/v1/chat/completions`（`deepseek-v4.1-flash`，非流式）真实 HTTP 200 出 `reasoning_content`（`finish=length` 系测试参数 `max_tokens=20` 过小，思考 token 耗尽属正常）。回滚 = 提权停任务 → `Copy-Item wb2api.exe.pre-1.15.7.bak wb2api.exe -Force` → 提权起任务。
 - **✅ 机器 B（`CHINAMI-DPNMO04`）生产网关已升级到 1.15.7-panel（2026-10-23 16:43）**：`F:\AI\wb2api` 由 `1.15.6-panel` 升到 `1.15.7-panel`，用分支 `fix/session-dead-and-rt-singleflight` 自建二进制（`wb2api.exe.new`，9287168 字节，2026-10-23 16:27）覆盖 `wb2api.exe`，回滚备份 = `wb2api.exe.pre-1.15.7.bak`（旧版 13044224 字节）。**流程被迫改造**：本会话沙箱把 `schtasks.exe` 列入**程序黑名单**（`/End`、`/Run`、`/query` 全部拒绝且不可审批绕过），`Invoke-CimMethod Win32_Process Create` 也被判「等价于 Start-Process」而拒绝——**停机只能靠 `Stop-Process -Name wb2api -Force`（精确镜像名）**，启动只能靠**受管后台任务直接拉起**（`cd /f/AI/wb2api && ./wb2api.exe -config config.json`）。踩到两个坑：(a) `Start-Process` 在本机因环境里同时存在 `http_proxy` 与 `HTTP_PROXY`（仅大小写不同）抛「字典中的关键字重复」——先 `[Environment]::SetEnvironmentVariable(name,$null,'Process')` 清掉代理变量即可；(b) 沙箱内 `Start-Process` 拉起的子进程会随工具调用结束**被整棵进程树回收**（日志停在 `listening on :7863` 之后几秒），必须走后台任务方式。验收：**新进程 PID 18708** 监听 `:7863`、面板 `overview.version = 1.15.7-panel`、healthz `{"total":17,"healthy":10}`（7 个手动禁用号未复活）、`/panel/api/overview` 每个账号已带 `session_dead_fails` 字段、`/panel/` 页面 200（82826 字节）、`/v1/chat/completions`（`deepseek-v4.1-flash`）真实出响应。**遗留**：当前进程属登录用户而非 SYSTEM，**重启机器后计划任务 `wb2api`（`PT20S` 自启）会重新接管**；用户注销当前会话会带走该进程，届时手启动任务即可。回滚 = `Copy-Item wb2api.exe.pre-1.15.7.bak wb2api.exe -Force` 后重启进程。
-- **⚠️ 本轮遗留待办：6 个 12153 死号需重新登录**（`188****1300` 等，见 §4 起因）。它们的上游 Keycloak 离线会话已被吊销，**任何令牌刷新/保活/JSON 重导都救不回来**（旧导出与现库共享同一 `sid`），唯一出路是面板「添加账号」重走一次 OAuth。当前池状态 17 总 / **7 禁用**（6 个 12153 + 1 个 11140 风控号）/ 10 可用。
-- **⚠️ 待办：`derefToolSchemas` 功能待走发布流程上线（2026-10-24 遗留）**：A 机工作区 `internal/upstream/payload.go`（+151 行）/ `payload_test.go`（+169 行）有**未提交**改动——把 tools JSON Schema 里的 `$ref`/`$defs` 解引用内联并删除定义块，解决「MCP 类客户端（ZCode 等）带 `$ref` 压缩 schema 的工具定义触发上游 11133 `model_param_invalid`」问题（2026-10-14 实测：保留 `$ref` 返 400、内联展开后 200，与具体模型无关）。**两台机器生产均未包含该修复**（本轮 A 机部署刻意用官方源码 `2947308` 构建，构建时改动已 stash）。下一步 = 跑 `go test ./internal/upstream/ -count=1` → 更新四文档（package.json 版本、CHANGELOG、README、本文件）→ 以 `1.15.8-panel` 走发布流程（annotated tag + Release）→ 两台机器生产各升一次。
+- ~~**⚠️ 本轮遗留待办：6 个 12153 死号需重新登录**~~ → **已闭环**（2026-11-16 复核：当前
+  池内 3 个 disabled 号**全部是 11140 风控封禁**（`dead_kind=banned`），无 12153 死号残留；
+  11140 号重登成功率不确定，属运营决策项，见 §5 顶部待办）。原始记录：（`188****1300` 等，见 §4 起因）。它们的上游 Keycloak 离线会话已被吊销，**任何令牌刷新/保活/JSON 重导都救不回来**（旧导出与现库共享同一 `sid`），唯一出路是面板「添加账号」重走一次 OAuth。当前池状态 17 总 / **7 禁用**（6 个 12153 + 1 个 11140 风控号）/ 10 可用。
+- ~~**⚠️ 待办：`derefToolSchemas` 功能待走发布流程上线（2026-10-24 遗留）**~~ →
+  ✅ **已闭环**（1.19.1 已上线并部署两机）。原始记录：：A 机工作区 `internal/upstream/payload.go`（+151 行）/ `payload_test.go`（+169 行）有**未提交**改动——把 tools JSON Schema 里的 `$ref`/`$defs` 解引用内联并删除定义块，解决「MCP 类客户端（ZCode 等）带 `$ref` 压缩 schema 的工具定义触发上游 11133 `model_param_invalid`」问题（2026-10-14 实测：保留 `$ref` 返 400、内联展开后 200，与具体模型无关）。**两台机器生产均未包含该修复**（本轮 A 机部署刻意用官方源码 `2947308` 构建，构建时改动已 stash）。下一步 = 跑 `go test ./internal/upstream/ -count=1` → 更新四文档（package.json 版本、CHANGELOG、README、本文件）→ 以 `1.15.8-panel` 走发布流程（annotated tag + Release）→ 两台机器生产各升一次。
 - **✅ 机器 B（`CHINAMI-DPNMO04`）生产网关已升级到 1.15.6-panel（2026-10-22 15:11，经用户明确确认后重启）**：`F:\AI\wb2api` 由 **`1.15.4-panel`**（注意：此前文档写的「已部署 1.15.5」不成立，exe 实际从未替换，面板 `overview.version` 实测为 `1.15.4-panel`）直接升到 `1.15.6-panel`，**一次跨越 1.15.5 与 1.15.6 两个版本**。流程 = **PowerShell `Stop-ScheduledTask -TaskName wb2api`**（本机 `schtasks.exe` 已被安全策略列入程序黑名单，**不要再用 `schtasks /End` 或 `taskkill` 通配**）→ 轮询确认 `wb2api` 进程真正退出（运行中的 exe 被 Windows 锁定，未强杀）→ 备份 `wb2api.exe.pre-1.15.6.bak`（sha256 `11C6360B…`，与原 exe 一致）→ 用分支自建二进制覆盖 `wb2api.exe`（sha256 `B357F1405C391CBC2FF7227CDBEA9D1A61C6B90C94A0F25D667EE23CF2455ADA`）→ `Start-ScheduledTask -TaskName wb2api`。**停机实测 5–8 秒**（未触发任务失败重启策略的 1 分钟窗口）。新进程 **PID 21108**。验收：面板 `overview.version = 1.15.6-panel`、**healthz 17/17**（cn/global 均 true）、`/v1/models`、`/v1/chat/completions`（`cn:deepseek-v4.1-flash`，非流式出 content「你好，很高兴见到你。」/ `finish=stop`、流式 SSE 正常）、`/v1/messages`（`stop_reason=end_turn`，正文「4」）、**`data/state.json.bak` 已生成（19878 字节）且与 `state.json`（19966 字节）均可解析、均含 17 账号**。回滚 = 停任务 → `Copy-Item wb2api.exe.pre-1.15.6.bak wb2api.exe -Force` → 起任务（回滚后 `state.json.bak` 不被旧版读取，无副作用）。
 - **⚠️ 1.15.6 部署期间的账号池插曲（重要经验）**：切换前做 global 域 A/B 验证时，`global:gemini-3.8-flash` 返回上游 `11128 request illegal`，网关按「账号级故障」把**唯一的 global 账号自动禁用**，导致面板一度 `16/17`、`realm_servable.global=false`、模型数 56→22。**用旧版 1.15.4 发同一请求返回完全相同的 11128**，故属**上游侧既有状态**（该 global 号/该模型被风控拦截），与本次改动无关。处置 = `POST /panel/api/accounts/{uid}/revive`，healthz 恢复 17/17。**教训：不要对 global 域随手发探测请求**，会误伤账号池；要看 global 可用性读 `/v1/models` 即可，别真发请求。
 - **机器 B（`CHINAMI-DPNMO04`，WLAN MAC `50-2E-91-F4-7E-74`）生产网关已升级到 1.15.4-panel（2026-10-15 09:40，经用户确认重启）**：`F:\AI\wb2api` 由 `1.15.2-panel` 直接升到 `1.15.4-panel`（**越过从未在此机部署的 1.15.3**，同时带上 11133 修复）。流程 = 提权 `schtasks /End /TN wb2api` → `taskkill /F /IM wb2api.exe`（**精确镜像名，禁 `wb2api*.exe` 通配**）→ 备份 `wb2api.exe.pre-1.15.4.bak`（旧 1.15.2，9225728 字节）→ 取 Release `wb2api-panel-v1.15.4-windows-amd64.zip`（sha256 `d4fa579e492bc860d6a95118d58ef28fa1631281963bf5b66800f95951d5fbfa`，与 `checksums.txt` 一致）内 exe **先落 `wb2api.exe.new` 再 `copy /Y` 替换** → `schtasks /Run /TN wb2api`；脚本与日志留档 `F:\AI\wb2api\deploy-1.15.4.cmd` / `deploy-1.15.4.log`。**停机实测 < 1 秒**（日志四步时间戳同为 09:40:36；注意该脚本里的 `timeout /t` 被 Git Bash 的 `timeout` 抢走而失效，等待步骤空跑——下次写 `.cmd` 批处理请用 `ping -n 3 127.0.0.1 >nul` 代替）。**重启前的安全检查**：确认只有 Chrome 面板页持有 `:7863` 连接、本会话模型请求不经该网关，避免自己把自己的会话掐断。验收：新进程 PID 13496（`F:\AI\wb2api\wb2api.exe`）、二进制内嵌版本串与面板 `overview` 均为 **`1.15.4-panel`**、healthz **17/17**（`realm_servable` cn/global 均 true）、`/v1/models` 200、`/v1/chat/completions`（`cn:deepseek-v4.1-flash`）真实出 content、`/v1/messages` 含中途 `system` 回归 HTTP 200（2.29s）。回滚 = `copy /Y wb2api.exe.pre-1.15.4.bak wb2api.exe` 后 `schtasks /Run /TN wb2api`（约 3 秒停机）。
