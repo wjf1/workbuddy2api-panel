@@ -613,11 +613,19 @@ data/backups/          备份输出（同上）
   （目录 `F:\AI\wb2api`、任务名 `wb2api`；资产可复用 Release zip 同款流程：校验 sha256 →
   备份 `wb2api.exe.pre-1.22.0.bak` → 换装 → `schtasks /End /TN wb2api + taskkill /F /IM
   wb2api.exe + schtasks /Run /TN wb2api` → 核对 `overview.version = 1.22.0-panel`）。
-- **续写能力的真机专项验证**：升级后真实流量已过新读取器零报错，但**触发型验证**
-  （真实 `finish=length` 长文截断 → `[continue] seg=N` 命中、预告句 → `[narration]`）
-  尚未发生。日常使用中观察 `data\server.log` 的 `[continue]` / `[narration]` /
-  `[toolonly]` / `[starved]` 命中日志即可（各救援带 `acct=` 标识，可按 uid 统计命中率）；
-  若要主动触发，发一次「写一篇长文」+ 显式小 `max_tokens` 的请求即会命中续写路径。
+- **✅ 续写触发型真机验证已完成（2026-11-16 22:51–22:52，A 机）**：两条新救援路径均在
+  生产实例上触发并闭环。
+  - **continue**：`cn:deepseek-v4.1-flash` + `max_tokens=1500` + `reasoning_effort=low` +
+    4000 字长文请求 → 服务端日志 `[continue] seg=1 text=2265B reason=2891B (额度已被网关
+    抬到下限 4096，续接被该上限切断的正文) -> 续写`（`budgetWasRaised` 例外路径命中）；
+    客户端侧 4061 帧、`[DONE]` 恰 1 次、终态仅 `stop`、content 6,569 字符（整篇写完）、
+    末帧 usage `completion_tokens=4059`（**跨段合并值** > 任何单段预算，计费口径正确）。
+  - **streaming starved**：`max_tokens=150` + `reasoning_effort=high` → 思考吃光正文 0B →
+    服务端日志 `[starved] seg=1 预算被思考吃光（正文 0B）→ 同额度关思考重发`；客户端侧
+    终态 `stop`、`completion_tokens=535`（重发段 `EnsureMinBudget` 抬升生效），客户端无感。
+  - **narration / toolonly** 未主动触发（判据依赖工具会话 + 预告句收尾的真实分布，难可靠
+    构造）；已有 7 例单测 + handler 级端到端覆盖，日常流量中观察 `[narration]` /
+    `[toolonly]` 命中日志即可（各救援带 `acct=` 标识，可按 uid 统计命中率）。
 - **R3 两项仍延后**：`upstreamhealth`（上游「劣化但不报错」滑窗告警）、`busy`（模型忙
   预检端点）。本仓已有部分覆盖（活跃上报 streak 自检、健康探测），按契合度再决策。
 - **doctor 只覆盖读路径**：未覆盖「上游协议形状变化」这类需要真机对照的检查（可考虑后续
