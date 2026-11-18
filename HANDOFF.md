@@ -71,7 +71,51 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（1.22.0-panel：续写三件套 + 双语门面 + 补跑 + doctor，2026-11-16）
+## 4. 最近一轮变更与交付成果（1.22.1-panel：账号表操作列 + 模型表表头吸附修复，2026-11-17）
+
+### 4.1.1 本轮：两处排版缺陷修复（账号池操作列被裁 / 模型表表头压首行）
+
+- **背景**：用户实拍截图报两处「排版不清楚 / 重叠」——①账号池每行右侧的「⋯」
+  只剩半个点；②模型与档位表第一行内容跑到列标题**上方**。均为纯前端、零后端改动。
+- **根因一（操作列裁切）**：`#accTable` 是 `table-layout: fixed` + `colgroup` 定宽，
+  `#accTable .c-acts { width: 88px }`。固定布局下这一列不会自己长：扣掉
+  `#accTable td` 的左右 padding 20 只剩 68，而最宽的状态按钮组是
+  「查看详情」68 + 间距 5 + 「⋯」26 = 99（含 padding 需 119）。右侧按钮被
+  `overflow:hidden` 裁掉 16px。**量法**：`td.scrollWidth vs clientWidth` +
+  `button.getBoundingClientRect().right - td.getBoundingClientRect().right`。
+- **根因二（表头压首行）**：`sticky` 的 `top` 相对**最近滚动容器的 scrollport**，
+  而 `.tbl-wrap` 的 `overflow-x:auto`（overflow-y 随之 computed 成 auto）已使它成为
+  滚动容器。`.acc thead th { top: var(--topbar-h) }` 因此把表头永久钉在容器顶下方
+  67px 处 —— 实测 `thOffsetFromWrap = 62`、首行 `row0Top = 236` 而表头 `thTop = 259`，
+  行在表头**之上**，且容器顶留 62px 空白。账号表当时靠 `#accTable thead th { top: 0 }`
+  单独豁免，模型表没有。
+- **修复**（`internal/panel/index.html`）：
+  - `#accTable .c-acts` 88 → **120px**（内容 99 + padding 20 + 1px 取整余量）。
+  - 新增 `.tbl-wrap thead th { top: 0 }` 通用覆盖，写在 `.acc thead th` 基础规则**之后**
+    （同权重，靠顺序生效）；基础规则保留 `var(--topbar-h)`，供不包 `.tbl-wrap`、
+    跟页面滚的表使用。
+  - 模型表容器加 `scroll-y`（`<div class="tbl-wrap scroll-y">`）——该表 54 行约
+    4400px，此前只跟页面滚，吸附过渡期无容器裁剪（正是 HANDOFF §4.0 记录的
+    「行悬到表头上方」形态，当时写「行数少，本轮未动」，实际 54 行并不少）。
+  - `--topbar-h` 62 → **67px**：实测顶栏 66.7（`button.xs` 在 14px 正文下高 37.7，
+    旧注释按 33 算，少 4.7）。
+- **测试**（`internal/panel/frontend_test.go` 新增三条，均已反向验证）：
+  `TestIndexHTMLAccountActsColumnFits`（列宽 ≥ 119 且 ≤ 132）、
+  `TestIndexHTMLStickyHeaderInsideScroller`（覆盖规则存在且顺序在后）、
+  `TestIndexHTMLModelTableScrollContained`（模型表容器含 `scroll-y`）。
+  用 `git stash` 回到原始 `index.html` 跑：**三条全部 FAIL**，修复后全部 PASS。
+- **验证**：`go test ./internal/panel/` 全绿；`go build ./...` 通过；全仓
+  `go test ./...` 27 包 ok，**`internal/scheduler` 的
+  `TestRunAllDisabledNoSpinNoCalls` 失败为既有问题**（在未改动的原始代码上同样失败，
+  与本次前端改动无关，待单独排查：`blackcat` 在四类全禁用时仍打了一次上游）。
+  浏览器验收：因运行中的 1.22.0 二进制内嵌旧资源，验收用 Playwright 把页面资源
+  替换为磁盘上改后的 `index.html`/`app.js`/`logic.js`、API 回源真实实例（
+  `127.0.0.1:7863`，密钥取 `F:/AI/_deploytest/config.json`）；**真实鼠标坐标点击**
+  走查 11 项全 PASS：⋯ 按钮完整落在列内（`btnRight 1786 ≤ tdRight 1802`）、点击弹出
+  菜单（`查看详情 / 移入回收站`，菜单在视口内）、模型表 `thBottom 236 ≤ row0Top 236`
+  且 `thTop == wrapTop 197`、滚轮滚动 400px 后表头仍吸顶且表头内取点 0 命中数据行。
+- **未部署**：本次仅改源码，未构建 exe、未动运行中的 1.22.0 实例（按「服务启停
+  须书面确认」规则）。上线需重新构建并换装。
 
 ### 4.1 本轮：R2-2 续写救援四件套全部落地 + 门面/运维修补（1.22.0-panel）
 
@@ -587,6 +631,22 @@ data/backups/          备份输出（同上）
 - 账号回收站（软删除）/ 账号标签（tags）/ 余额预警横幅 / 定时备份四件套 + `trash.retention_days`、`backup.enabled/hour/keep` 四配置键（详见 CHANGELOG 1.14.0 条目）。
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
+
+### 待办：前端排版修复尚未构建部署（2026-11-17）
+
+- `internal/panel/index.html` 的三处修复（操作列 120px、`.tbl-wrap thead th{top:0}`、
+  模型表 `scroll-y`、`--topbar-h:67px`）**只在源码里**。运行中的 `127.0.0.1:7863`
+  仍是 1.22.0 二进制（`go:embed` 的旧资源）。
+- **上线步骤**：`go build` 带版本资源 → 按 `scripts/upgrade-windows.cmd` 或既有
+  swap-deploy 脚本换装 → 重启任务（**属服务重启，须先取得用户书面确认**）。
+- 验收要点：账号池每行「⋯」完整可见且可点；模型与档位表首行在列标题**下方**，
+  容器内滚轮滚动时表头吸容器顶、无 62px 空白。
+
+### 既有失败测试（与本次前端改动无关，待单独排查）
+
+- `internal/scheduler/TestRunAllDisabledNoSpinNoCalls`：断言「四类任务全禁用时上游
+  零调用」，实际 `blackcat` 仍打了一次（`upstream calls=1 want 0`）。已在**未改动的
+  原始代码**上复现，属既有问题。
 
 ### ✅ A 机已升级到 1.22.0-panel（2026-11-16 22:45，验收通过）
 

@@ -29,9 +29,11 @@
      base 正文与控件 / md 强调正文 / lg 栏目标题 / num KPI 大数字。改版式先动这里，别再写字面量。 */
   --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px;
   --fs-md: 14px; --fs-lg: 16px; --fs-num: 24px;
-  /* 顶栏高度：padding 14×2 + 控件高 33 + 底边 1。账号表表头吸附要用它让位
-     （.topbar 是 sticky top:0 z-index:20）。改顶栏内边距/控件尺寸时同步此值。 */
-  --topbar-h: 62px;
+  /* 顶栏高度：padding 14×2 + 控件高 37.7 + 底边 1 ≈ 66.7。**控件高不是 33**——
+     实测 button.xs 在 14px 正文下有 37.7（padding 3.5×2 + line-height 1.55×13
+     + 边框 2），旧值 62 少算 4.7px，会让账号表滚动容器高度多算出一条行的零头。
+     改顶栏内边距/控件尺寸时同步此值（量法：getBoundingClientRect().height）。 */
+  --topbar-h: 67px;
   /* 账号视图的纵向预算（桌面）：顶栏以下到表容器上沿 = view 上边距 12 + KPI 65
      + 间距 12 + 工具栏 48。滚动容器高度 = 100dvh − 顶栏 − 本值 − 底部留白。
      390 那套（12/104/8/32/88 = 244）只在 --acc-fold 里作预算记录，**永不进 calc**，
@@ -379,13 +381,15 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
   text-align: left; font-weight: 500; font-size: var(--fs-sm); color: var(--ink-3);
   padding: 9px 11px; border-bottom: 1px solid var(--line); white-space: nowrap;
 }
-/* 表头吸附：账号表动辄几十行，滚下去就丢列名。基础规则让出顶栏高度（那些表
-   跟页面一起滚，不让位会滑到 .topbar 底下看不见）；**账号表例外**：它的滚动
-   容器是 .tbl-wrap 自身（见下面 max-height），sticky 的 top 相对的是滚动容器
-   顶边而不是视口，再让出 62px 会让表头停在容器内 62px 处、上方留一条空白让
-   滚动的行透上来。故 #accTable 单独覆盖为 0。
+/* 表头吸附。sticky 的 top 相对的是**最近滚动容器的 scrollport**，不是视口：
+   .tbl-wrap 的 overflow-x:auto 会让它成为滚动容器（overflow-y 随之 computed
+   成 auto），所以凡是包在 .tbl-wrap 里的表一律 top:0——写成 var(--topbar-h)
+   会让表头永久浮在容器顶下方 67px，压住首行并在容器顶部留一条空白
+   （2026-11-17 模型表的实案：首行 cn:glm-5.3 被表头盖住 39px）。
+   只有直接挂在 .box 下、不经过 .tbl-wrap 的表才跟页面一起滚，需要让出顶栏。
    背景必须显式给（否则行内容从表头下方透出），z-index 低于顶栏的 20。 */
 .acc thead th { position: sticky; top: var(--topbar-h); background: var(--surface); z-index: 10; }
+.tbl-wrap thead th { top: 0; }
 #accTable thead th { top: 0; }
 
 /* 纵向限高滚动容器（.scroll-y）：行滚出容器顶即被裁剪，表头吸容器顶（top:0）
@@ -435,7 +439,10 @@ label.fld > .hint { display: block; font-size: var(--fs-sm); color: var(--ink-3)
 #accTable .c-sf { width: 76px; }
 #accTable .c-last { width: 84px; }
 #accTable .c-usage { width: 150px; }
-#accTable .c-acts { width: 88px; }
+/* 操作列宽 = 最宽状态的内容 + 左右 padding（实测：查看详情 68 + 间距 5 + ⋯ 26
+   = 99，加 padding 20 → 119）。固定布局下这一列不会自己长，给窄了右侧「⋯」
+   会被 overflow:hidden 裁掉一半（1.22.1 实测 88px 裁掉 16px，截图里只剩半个点）。 */
+#accTable .c-acts { width: 120px; }
 /* 覆盖基础 .who 的 200px 上限：1024 容器下账号列要能吃到 282。 */
 #accTable .who { min-width: 0; max-width: none; overflow: hidden; }
 #accTable .who .nm, #accTable .who .id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1191,7 +1198,7 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
           <span class="note" id="mdCount"></span>
           <button class="xs ghost" id="mdReset" title="清空全部筛选条件">重置</button>
         </div>
-        <div class="tbl-wrap">
+        <div class="tbl-wrap scroll-y">
         <table class="acc md">
           <thead><tr><th class="mark" aria-hidden="true"></th><th scope="col">模型</th><th scope="col">积分倍率</th><th scope="col">默认档</th><th scope="col">支持的思考档位</th><th scope="col">上下文长度</th><th scope="col">最大输出</th></tr></thead>
           <tbody id="mdBody"></tbody>

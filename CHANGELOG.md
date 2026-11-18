@@ -6,8 +6,30 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **账号池操作列按钮被裁切**：`#accTable` 是 `table-layout: fixed`，操作列定宽
+  `88px`，扣掉左右 padding 20 只剩 68，而最宽的状态按钮组是「查看详情」68 +
+  间距 5 + 「⋯」26 = 99（需 119），右侧「⋯」被 `overflow:hidden` 裁掉一半，界面
+  看着像少了按钮。列宽改为 120px（`internal/panel/index.html`）。
+- **模型与档位表头压住首行**：`sticky` 的 `top` 相对**最近滚动容器的 scrollport**，
+  而 `.tbl-wrap` 的 `overflow-x:auto` 已使它成为滚动容器。`top: var(--topbar-h)`
+  因此把表头永久钉在容器顶下方 67px 处，首行（`cn:glm-5.3` 等）反而显示在列标题
+  **上方**并留一条 62px 空白。新增 `.tbl-wrap thead th { top: 0 }` 覆盖规则。
+- **模型表容器化**：该表 54 行约 4400px 高，此前只跟页面滚，吸附表头在滚动过渡期
+  没有容器裁剪兜着（HANDOFF §4.0 记录的「行悬到表头上方」形态）。改用既有的
+  `.tbl-wrap scroll-y` 容器（HANDOFF 已写明该方案）。
+- **`--topbar-h` 与实际不符**：变量写 62px，实测顶栏 66.7px（`button.xs` 在 14px
+  正文下有 37.7 高，旧注释按 33 算），账号表滚动容器高度因此多算一条行的零头。
+  改为 67px。
+
 ### 新增
 
+- **三条前端布局回归测试**（`internal/panel/frontend_test.go`）：
+  `TestIndexHTMLAccountActsColumnFits`（操作列宽必须 ≥ 内容 99 + padding 20，且不得
+  无脑给宽）、`TestIndexHTMLStickyHeaderInsideScroller`（`.tbl-wrap` 内表头吸附必须
+  为 0 且覆盖规则在基础规则之后）、`TestIndexHTMLModelTableScrollContained`（模型表
+  必须挂在 `scroll-y` 容器内）。三条均已用原始代码反向验证——未修复时全部失败。
 - **Windows 一键升级脚本 `scripts/upgrade-windows.cmd`**：把「下载资产 → sha256 校验 →
   停任务 → 备份 → 换装 → 拉起 → 健康检查」固化为单脚本（用法：在部署目录管理员运行
   `upgrade-windows.cmd v1.22.0 wb2api`，第 3 参 `1` 为 dry-run）。安全设计三件（每件都有

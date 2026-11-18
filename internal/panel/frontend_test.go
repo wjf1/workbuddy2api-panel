@@ -1097,3 +1097,101 @@ process.stdout.write(JSON.stringify({ a, b, c, d }));`
 		t.Fatalf("D anchor=%s ty=%v x=%v want start ty=116 x=63", got.D.Anchor, got.D.TY, got.D.X)
 	}
 }
+
+// TestIndexHTMLAccountActsColumnFits 账号表操作列宽度必须装得下最宽的状态按钮组。
+//
+// 为什么需要：#accTable 是 table-layout:fixed + colgroup 定宽，操作列不会自己长。
+// 1.22.0 把该列写成 88px，而「查看详情」(68) + 间距 5 + 「⋯」(26) = 99，加左右
+// padding 20 共需 119 —— 右侧按钮被 overflow:hidden 裁掉一半，页面看着像少了按钮，
+// 但所有 Go 测试（含 id 唯一性、JS 语法）全绿。此测试把「列宽 ≥ 内容宽」钉死。
+func TestIndexHTMLAccountActsColumnFits(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	// 取 #accTable .c-acts 的 width（第一条匹配即为生效规则）。
+	re := regexp.MustCompile(`#accTable \.c-acts \{ width: (\d+)px; \}`)
+	m := re.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("index.html missing `#accTable .c-acts { width: <n>px; }`")
+	}
+	width, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("parse c-acts width: %v", err)
+	}
+	// 内容下限：最宽的「查看详情」68 + 按钮间距 5 + 「⋯」26 = 99，再加 td 左右
+	// padding 20（#accTable td 的 padding: 0 10px）= 119。留 1px 取整余量 → 120。
+	const needContent, needWithPadding = 99, 119
+	if width < needWithPadding {
+		t.Fatalf("c-acts width=%dpx < %dpx needed (content %d + padding 20): "+
+			"the trailing ⋯ button will be clipped by overflow:hidden",
+			width, needWithPadding, needContent)
+	}
+	// 反向钉住：也不该无脑给到很大，否则账号列会被白吃掉一截（列宽预算固定合计）。
+	if width > 132 {
+		t.Fatalf("c-acts width=%dpx is wider than necessary (≤132 expected); "+
+			"the account column pays for it", width)
+	}
+}
+
+// TestIndexHTMLStickyHeaderInsideScroller 包在 .tbl-wrap 里的表，表头 sticky 的 top
+// 必须是 0，不能是顶栏高度。
+//
+// 为什么需要：sticky 的 top 相对**最近滚动容器的 scrollport**。.tbl-wrap 的
+// overflow-x:auto 会让它成为滚动容器，于是 top:var(--topbar-h) 把表头永久钉在
+// 容器顶下方 67px 处——表头压住首行、上方留一条空白，用户看到的是「第一行跑到
+// 列标题上面去了」（2026-11-17 模型表实案）。这条规则一旦被删，问题立刻回来，
+// 而视觉上只有滚动时才看得出。
+func TestIndexHTMLStickyHeaderInsideScroller(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	// 基础规则仍按顶栏让位（不包 .tbl-wrap、跟页面滚的表要用它）。
+	if !strings.Contains(body, ".acc thead th { position: sticky; top: var(--topbar-h);") {
+		t.Fatal("lost .acc thead th sticky top:var(--topbar-h) — page-scrolling tables would slide under the topbar")
+	}
+	// 但滚动容器内的表必须被覆盖回 0。
+	if !strings.Contains(body, ".tbl-wrap thead th { top: 0; }") {
+		t.Fatal("missing `.tbl-wrap thead th { top: 0; }` — sticky header inside the scroller " +
+			"would float 67px below the container top and cover the first row")
+	}
+	// 覆盖规则必须写在基础规则之后，否则同权重情况下被基础规则盖掉。
+	base := strings.Index(body, ".acc thead th { position: sticky;")
+	over := strings.Index(body, ".tbl-wrap thead th { top: 0; }")
+	if base < 0 || over < 0 || over < base {
+		t.Fatalf("`.tbl-wrap thead th` override must come after `.acc thead th` (base@%d override@%d)", base, over)
+	}
+}
+
+// TestIndexHTMLModelTableScrollContained 模型表必须挂在限高滚动容器里。
+//
+// 为什么需要：模型表 54 行、约 4400px 高，不做容器化就只能跟页面滚，吸附表头在
+// 页面滚动的过渡期没有容器裁剪兜着（HANDOFF §4.0 记录的「行悬到表头上方」形态）。
+func TestIndexHTMLModelTableScrollContained(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	// 定位模型表所在块：`<table class="acc md">` 前面最近的容器 div 必须是 tbl-wrap scroll-y。
+	idx := strings.Index(body, `<table class="acc md">`)
+	if idx < 0 {
+		t.Fatal("index.html missing the model table (`<table class=\"acc md\">`)")
+	}
+	head := body[:idx]
+	open := strings.LastIndex(head, `<div class="tbl-wrap`)
+	if open < 0 {
+		t.Fatal("model table is not wrapped in a .tbl-wrap container")
+	}
+	tag := head[open:]
+	if end := strings.Index(tag, ">"); end > 0 {
+		tag = tag[:end]
+	}
+	if !strings.Contains(tag, "scroll-y") {
+		t.Fatalf("model table container is %q, want it to include scroll-y "+
+			"(54 rows without a scroller means the sticky header has no clipping container)", tag)
+	}
+}
