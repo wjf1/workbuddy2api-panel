@@ -137,8 +137,12 @@ func TestNextWakeBothDisabledNothingScheduled(t *testing.T) {
 	}
 }
 
-// TestRunAllDisabledNoSpinNoCalls 四类任务全禁用：Run 不空转（只等退出信号），
+// TestRunAllDisabledNoSpinNoCalls 五类任务全禁用：Run 不空转（只等退出信号），
 // 且不能触发任何上游请求。
+//
+// 1.22.0 新增夜猫子（blackcat）后本用例漏禁它——测试仍按「四类全禁用」构造配置，
+// 于是 blackcat 的启动补跑真的打了一次上游，CI 从此常红（build/publish 被跳过）。
+// 新增任务族时必须在此处一并加上对应 *Disabled 开关。
 func TestRunAllDisabledNoSpinNoCalls(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +165,7 @@ func TestRunAllDisabledNoSpinNoCalls(t *testing.T) {
 		TravelDisabled:    true,
 		ActivityDisabled:  true,
 		KeepaliveDisabled: true,
+		BlackcatDisabled:  true,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)

@@ -105,15 +105,19 @@ data/backups/          备份输出（同上）
   `TestIndexHTMLModelTableScrollContained`（模型表容器含 `scroll-y`）。
   用 `git stash` 回到原始 `index.html` 跑：**三条全部 FAIL**，修复后全部 PASS。
 - **验证**：`go test ./internal/panel/` 全绿；`go build ./...` 通过；全仓
-  `go test ./...` 27 包 ok，**`internal/scheduler` 的
-  `TestRunAllDisabledNoSpinNoCalls` 失败为既有问题**（在未改动的原始代码上同样失败，
-  与本次前端改动无关，待单独排查：`blackcat` 在四类全禁用时仍打了一次上游）。
+  `go test ./...` **28 包全 ok**（详见下条：CI 常红的根因已顺手修掉）。
   浏览器验收：因运行中的 1.22.0 二进制内嵌旧资源，验收用 Playwright 把页面资源
   替换为磁盘上改后的 `index.html`/`app.js`/`logic.js`、API 回源真实实例（
   `127.0.0.1:7863`，密钥取 `F:/AI/_deploytest/config.json`）；**真实鼠标坐标点击**
   走查 11 项全 PASS：⋯ 按钮完整落在列内（`btnRight 1786 ≤ tdRight 1802`）、点击弹出
   菜单（`查看详情 / 移入回收站`，菜单在视口内）、模型表 `thBottom 236 ≤ row0Top 236`
   且 `thTop == wrapTop 197`、滚轮滚动 400px 后表头仍吸顶且表头内取点 0 命中数据行。
+- **顺带修掉 CI 常红（本次推送才暴露）**：推送后发现 `go-binaries` 的 `test` / `race`
+  两个 job 失败、`build` / `publish` 一直 skipped。根因是
+  `internal/scheduler/TestRunAllDisabledNoSpinNoCalls`：1.22.0 新增夜猫子
+  （blackcat）任务时没同步更新该用例，配置仍按「四类全禁用」构造，blackcat 的启动
+  补跑真的打了一次上游（`upstream calls=1 want 0`）。补 `BlackcatDisabled: true`，
+  并在用例注释里钉住「新增任务族必须一并加开关」。修复后 `go test ./...` 28 包全 ok。
 - **未部署**：本次仅改源码，未构建 exe、未动运行中的 1.22.0 实例（按「服务启停
   须书面确认」规则）。上线需重新构建并换装。
 
@@ -642,11 +646,14 @@ data/backups/          备份输出（同上）
 - 验收要点：账号池每行「⋯」完整可见且可点；模型与档位表首行在列标题**下方**，
   容器内滚轮滚动时表头吸容器顶、无 62px 空白。
 
-### 既有失败测试（与本次前端改动无关，待单独排查）
+### ✅ 既有失败测试已修（2026-11-18）
 
 - `internal/scheduler/TestRunAllDisabledNoSpinNoCalls`：断言「四类任务全禁用时上游
-  零调用」，实际 `blackcat` 仍打了一次（`upstream calls=1 want 0`）。已在**未改动的
-  原始代码**上复现，属既有问题。
+  零调用」，实际 `blackcat` 仍打了一次（`upstream calls=1 want 0`）。根因是 1.22.0
+  新增夜猫子任务时漏更新该用例的配置。已补 `BlackcatDisabled: true`，
+  `go test ./...` 28 包全 ok，CI 的 `test` / `race` 恢复。
+- **后续约束**：新增任务族（签到 / 旅行 / 活跃 / 保活 / 夜猫子 / 成长）时，必须同步
+  检查 `scheduler_test.go` 里所有「全禁用」语义的用例是否加上了新开关。
 
 ### ✅ A 机已升级到 1.22.0-panel（2026-11-16 22:45，验收通过）
 

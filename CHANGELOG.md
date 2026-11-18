@@ -8,6 +8,11 @@
 
 ### 修复
 
+- **`TestRunAllDisabledNoSpinNoCalls` 长期失败导致 CI build/publish 被跳过**：1.22.0
+  引入夜猫子任务（blackcat）时没同步更新该用例——测试仍按「四类任务全禁用」构造配置，
+  blackcat 没被禁用，启动补跑真的打了一次上游（`upstream calls=1 want 0`）。`test` 与
+  `race` 两个 job 因此常红，`build` / `publish` 一直 skipped。补上
+  `BlackcatDisabled: true`，并在注释里钉住「新增任务族必须在此处一并加开关」。
 - **账号池操作列按钮被裁切**：`#accTable` 是 `table-layout: fixed`，操作列定宽
   `88px`，扣掉左右 padding 20 只剩 68，而最宽的状态按钮组是「查看详情」68 +
   间距 5 + 「⋯」26 = 99（需 119），右侧「⋯」被 `overflow:hidden` 裁掉一半，界面
