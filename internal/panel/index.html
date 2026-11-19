@@ -746,10 +746,11 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
      卡片用左侧色轨区分语义，数字用等宽体对齐，分隔靠留白而不是更多边框。 */
   /* KPI 卡：左侧 3px 色轨是唯一的重色，数值大、标签小，扫一眼就能读出量级。 */
   .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 10px; padding: 14px 17px 2px; }
+    gap: 10px; padding: 12px 16px 0; }
   .kpis.k4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  @media (max-width: 1180px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @media (max-width: 700px) { .kpis, .kpis.k4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .kpis.k5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  @media (max-width: 1180px) { .kpis, .kpis.k5 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 700px) { .kpis, .kpis.k4, .kpis.k5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .kpi {
     position: relative; min-width: 0; overflow: hidden;
     background: var(--surface-2); border: 1px solid var(--line-soft);
@@ -842,20 +843,36 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
   .pk-expiry-chart { max-height: 260px; overflow-y: auto; overflow-x: hidden;
     scrollbar-gutter: stable; scrollbar-width: thin; padding-right: 10px;
     overscroll-behavior: contain; }
-  .pk-expiry-hdr { display: grid; grid-template-columns: 64px minmax(80px, 1fr) 72px;
+  .pk-expiry-hdr { display: grid; grid-template-columns: 78px minmax(80px, 1fr) 84px;
     align-items: center; gap: 9px; margin-bottom: 4px; color: var(--ink-3);
     font-size: var(--fs-xs); }
   .pk-expiry-hdr > b { text-align: right; font-weight: 600; }
-  .pk-expiry-row { display: grid; grid-template-columns: 64px minmax(80px, 1fr) 72px;
-    align-items: center; gap: 9px; min-height: 30px; padding-right: 2px; }
+  .pk-expiry-row { display: grid; grid-template-columns: 78px minmax(80px, 1fr) 84px;
+    align-items: center; gap: 9px; min-height: 26px; padding-right: 2px; }
   .pk-expiry-row > span { color: var(--ink-3); font-size: var(--fs-sm); }
   .pk-expiry-row > b { text-align: right; font: 600 var(--fs-sm) var(--mono);
     font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  .pk-expiry-track { display: flex; align-items: stretch; gap: 2px; height: 9px;
+  /* 合计列分级：默认 ink；>=800 提醒；>=1500 加重 + 高位色 */
+  .pk-expiry-row > b.pk-credit-warn { color: var(--warn); }
+  .pk-expiry-row > b.pk-credit-bad { color: var(--bad); font-weight: 700; }
+  /* Y 轴双行标签：上行 MM/DD（突出日历日），下行「剩 N 天」（弱化） */
+  .pk-expiry-day { display: flex; flex-direction: column; gap: 1px; line-height: 1.2; }
+  .pk-expiry-day > b { font: 600 var(--fs-sm)/1.2 var(--mono);
+    font-variant-numeric: tabular-nums; color: var(--ink); }
+  .pk-expiry-day > i { font-style: normal; font-size: var(--fs-xs); color: var(--ink-3); }
+  .pk-expiry-day.pk-day-urgent > b { color: var(--bad); }
+  .pk-expiry-day.pk-day-urgent > i { color: var(--bad); }
+  .pk-expiry-track { display: flex; align-items: stretch; gap: 2px; height: 13px;
     border-radius: 5px; background: var(--surface-2); overflow: hidden; }
   .pk-expiry-seg { display: block; min-width: 3px; height: 100%; cursor: default;
     background: var(--seg-color, var(--accent)); transition: filter .15s, transform .15s; }
   .pk-expiry-seg:hover { filter: brightness(1.12); transform: scaleY(1.35); }
+  .pk-expiry-updated { font-size: var(--fs-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .pk-expiry-updated:empty { display: none; }
+  /* KPI 卡用于本视图时的微调：让数值更醒目 */
+  #pkKpi { padding: 12px 16px 0; }
+  #pkKpi .kpi .v { font-size: var(--fs-num); }
+  #pkKpi .kpi .s { white-space: normal; }
   .pk-expiry-legend { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 8px;
     color: var(--ink-3); font-size: var(--fs-xs); }
   .pk-expiry-legend span { display: inline-flex; align-items: center; gap: 5px; }
@@ -1214,7 +1231,9 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
           <h3>积分到期分布</h3>
           <span class="grow"></span>
           <span class="note">按批次到期日聚合，颜色区分账号</span>
+          <span class="note pk-expiry-updated" id="pkExpiryUpdated" aria-live="polite"></span>
         </header>
+        <div class="kpis k5" id="pkKpi" hidden></div>
         <div class="pad"><div id="pkExpiry"></div></div>
       </div>
 

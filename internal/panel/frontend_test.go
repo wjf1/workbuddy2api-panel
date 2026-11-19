@@ -1195,3 +1195,46 @@ func TestIndexHTMLModelTableScrollContained(t *testing.T) {
 			"(54 rows without a scroller means the sticky header has no clipping container)", tag)
 	}
 }
+
+// TestIndexHTMLPackagesKPI 「积分到期分布」视图必须挂载 KPI 容器与更新时间戳。
+//
+// 为什么需要：1.23.0 把 5 张 KPI 卡（7/14/30 天到期、未用总量、7 天高危账号）放在
+// 分布图上方，让用户一眼看到「7 天内要浪费多少」。容器由 app.js 渲染时填充并去掉
+// hidden——一旦 index.html 这边的 id 被改/被删，前端会静默什么都不显示而界面只
+// 剩一张图。同样，pkExpiryUpdated 是右侧的「数据更新于 HH:MM:SS」时间戳容器。
+// 祖先链断言：两者都必须落在 view-packages 之内，不能漂到其它视图（1.13.4 教训）。
+func TestIndexHTMLPackagesKPI(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	// 锚点：积分到期分布所在 view
+	vidx := strings.Index(body, `id="view-packages"`)
+	if vidx < 0 {
+		t.Fatal("index.html missing view-packages section")
+	}
+	// 视图结束于下一个 <section class="view"
+	rest := body[vidx:]
+	end := strings.Index(rest, `<section class="view"`)
+	if end < 0 {
+		end = len(rest)
+	}
+	section := rest[:end]
+
+	if !strings.Contains(section, `id="pkKpi"`) {
+		t.Fatal("view-packages missing #pkKpi container — 5 KPI cards would have nowhere to render")
+	}
+	if !strings.Contains(section, `class="kpis k5"`) {
+		t.Fatal("view-packages #pkKpi must use `.kpis.k5` (5-column variant) — otherwise cards wrap awkwardly")
+	}
+	if !strings.Contains(section, `id="pkExpiryUpdated"`) {
+		t.Fatal("view-packages missing #pkExpiryUpdated — data-freshness timestamp would not render")
+	}
+	// KPI 容器必须出现在 pkExpiry 之前（先 KPI 再图表）。
+	kpiIdx := strings.Index(section, `id="pkKpi"`)
+	expIdx := strings.Index(section, `id="pkExpiry"`)
+	if kpiIdx < 0 || expIdx < 0 || kpiIdx > expIdx {
+		t.Fatalf("KPI container must come before the chart (kpi@%d chart@%d)", kpiIdx, expIdx)
+	}
+}

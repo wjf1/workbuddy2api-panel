@@ -196,11 +196,25 @@
     return { relogin: 1, banned: 2, disabled: 3, paused: 4, cooling: 5, ok: 6 }[k] || 9;
   }
 
+  /* pkCreditLevel 按「某一天将到期的积分合计」返回风险档位。
+     积分构成页右侧「剩余积分」数字用它决定染色：
+       - 'bad' → 红色加粗（≥1500，主力包批次量级，值得立即关注）
+       - 'warn' → 黄色（≥800）
+       - '' → 默认灰（<800，安静展示）
+     阈值取自实测分布：当前常见行 500~3000，少数账号单日 5~50。 */
+  function pkCreditLevel(credits) {
+    const n = Number(credits) || 0;
+    if (n >= 1500) return 'bad';
+    if (n >= 800) return 'warn';
+    return '';
+  }
+
   const api = {
     esc, ago, dur, parseAPITime, fmtLocalDateTime,
     fmtK, fmtBytes, fmtTok, fmtMs, fmtRate, trimFixed,
     fmtCredit, fmtCreditRatio, fmtModelRate,
     fmtCreditWan, accState, accNeed, accRank,
+    pkCreditLevel,
   };
 
   root.WBLogic = api;

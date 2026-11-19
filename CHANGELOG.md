@@ -4,6 +4,52 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [Unreleased]
+
+### 新增
+
+- **积分构成视图顶部新增 KPI 摘要区**（`#pkKpi`，5 张卡）：7 天内到期 / 14 天内到期 /
+  30 天内到期 / 未用总量 / 7 天高危账号 TOP3。7 天占比 >10% 染红、>3% 染黄、其余绿；
+  高危账号列出按「7 天内将到期积分」排序的前 3 个昵称。复用既有 `.kpis` / `.kpi` /
+  `c-bad|c-warn|c-ok|c-accent` 调色板，浅色 / 深色主题均已通过 WCAG AA 对比度。
+- **「更新于 HH:MM:SS」数据新鲜度时间戳**：积分到期分布卡片右上角新增
+  `#pkExpiryUpdated`，每次 `renderExpiryDistribution` 重渲染时同步刷新；加载中与
+  失败分支会同步清空，避免陈旧时间误导（`aria-live="polite"` 供屏幕阅读器自动播报）。
+- **前端 DOM 守卫 `TestIndexHTMLPackagesKPI`**：钉死 `#pkKpi`（必须用 `.kpis.k5`
+  五列变体）与 `#pkExpiryUpdated` 必须存在于 `#view-packages` 之内、且 KPI 容器
+  在 `#pkExpiry` 之前；改丢 id 或调整顺序都会立刻红。
+
+### 变更
+
+- **积分到期分布 Y 轴标签双行化**：单行「N 天」改为「MM/DD（粗体等宽）」+「剩 N 天
+  （灰色弱化）」两行，消除「1 天」与「11/19」之间的心算；剩余 ≤3 天的行追加
+  `.pk-day-urgent`，日历日与「剩 N 天」同步染红，无需读合计即可定位急迫行。
+- **右侧「剩余积分」合计列分级染色**：复用 `logic.js` 新增的 `pkCreditLevel`
+  纯函数——合计 ≥1500 染 `--bad` 加粗（`.pk-credit-bad`），≥800 染 `--warn`
+  （`.pk-credit-warn`），<800 保持原色。阈值取自实测分布（多数行 500~3000），
+  只突出真正的大头。
+- **行高与条形尺寸微调**：`.pk-expiry-track` 高度 9px → 13px（hover 命中区扩大
+  44%），行 min-height 30px → 26px（Y 轴双行更紧凑）；网格列宽 64/1fr/72 调整为
+  78/1fr/84，匹配双行 Y 轴与等宽合计数字。
+- **KPI 调色板新增 `.kpis.k5` 五列变体**（原仅 6/4 两档）：≤1180px 退化为 3 列、
+  ≤700px 退化为 2 列，与既有 `.kpis` 行为一致。
+
+### 测试
+
+- `internal/panel/logic.js` 新增 `pkCreditLevel(credits)` 纯函数；
+  `internal/panel/logic_test.js` 追加 10 条边界断言（0/799/800/1499/1500/大值
+  /null/undefined/非数字/负数），覆盖率仍 100%（115 例全绿）。
+- `internal/panel/frontend_test.go` 新增 `TestIndexHTMLPackagesKPI`：祖先链断言
+  `#pkKpi` 与 `#pkExpiryUpdated` 必须挂在 `#view-packages` 内、KPI 必须先于图表；
+  反向验证（删除 id 后立刻失败）。
+- **真实点击走查**（chrome-devtools MCP，dark + light 双主题截图比对）：
+  打开 `#packages` → KPI 5 卡渲染（实测 2 bad / 1 warn / 2 accent，匹配阈值规则）
+  → 36 行双行 Y 轴 + 3 行 `.pk-day-urgent` + 14 行 `.pk-credit-bad` + 15 行
+  `.pk-credit-warn` → 点「刷新」按钮 → 时间戳更新（22:28:49 → 22:31:33）、KPI 数值
+  实时刷新（10.3k→10.4k、51.9k→52.3k）、高危账号列表随数据变化重排。`dupIds` 为空，
+  `pkKpi.closest('#view-packages')` 与 `pkExpiryUpdated.closest('#view-packages')`
+  均为 true。
+
 ## [1.22.1-panel] - 2026-11-19
 
 ### 修复

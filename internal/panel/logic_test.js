@@ -194,4 +194,17 @@ eq(L.accRank({ paused: true }, FLOOR), 4, 'accRank 已暂停（不需处理，�
 eq(L.accRank({ cool_remaining_sec: 60 }, FLOOR), 5, 'accRank 冷却');
 eq(L.accRank({ credits: 99999 }, FLOOR), 6, 'accRank 可用垫后');
 
+/* ── pkCreditLevel：行合计金额 → 风险档位 ─────────────────────────── */
+/* 阈值含义见 logic.js 函数注释。此处钉边界：799/800、1499/1500、非法输入。 */
+eq(L.pkCreditLevel(0), '', 'pkCreditLevel 0 → 默认');
+eq(L.pkCreditLevel(799), '', 'pkCreditLevel 799 → 默认（800 阈值以下）');
+eq(L.pkCreditLevel(800), 'warn', 'pkCreditLevel 800 → warn（含等号）');
+eq(L.pkCreditLevel(1499), 'warn', 'pkCreditLevel 1499 → warn');
+eq(L.pkCreditLevel(1500), 'bad', 'pkCreditLevel 1500 → bad（含等号）');
+eq(L.pkCreditLevel(99999), 'bad', 'pkCreditLevel 大值 → bad');
+eq(L.pkCreditLevel(null), '', 'pkCreditLevel null → 默认（Number(null)=0）');
+eq(L.pkCreditLevel(undefined), '', 'pkCreditLevel undefined → 默认');
+eq(L.pkCreditLevel('abc'), '', 'pkCreditLevel 非数字字符串 → 默认（Number → NaN → ||0）');
+eq(L.pkCreditLevel(-5), '', 'pkCreditLevel 负数 → 默认（不可能但兜底）');
+
 console.log('logic_test.js: ' + n + ' assertions passed');

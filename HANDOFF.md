@@ -73,7 +73,37 @@ data/backups/          备份输出（同上）
 
 ## 4. 最近一轮变更与交付成果（1.22.1-panel：账号表操作列 + 模型表表头吸附修复，2026-11-17）
 
-### 4.1.1 本轮：两处排版缺陷修复（账号池操作列被裁 / 模型表表头压首行）
+### 4.1.2 本轮：积分构成视图 KPI 摘要区（→ 待随下一版发版，分支 `feat/pk-expiry-kpi`）
+
+- **背景**：用户反馈 `panel/#packages` 页面「36 行才能看全、找不到哪天危险、
+  哪个账号最紧急」。规划了完整三 PR 路线图（KPI/Tooltip/视图切换），本轮落地
+  **PR-1「KPI 与高危可视化」**，纯前端、零后端改动。
+- **改动**（详见 `CHANGELOG.md` [Unreleased]）：
+  - `internal/panel/index.html`：`#view-packages` 顶部新增 `#pkKpi`（`.kpis.k5` 五列变体，
+    首次新增）+ `#pkExpiryUpdated` 时间戳；`.pk-expiry-track` 高度 9→13px、行
+    min-height 30→26px、grid 列宽 64/1fr/72→78/1fr/84；新增 `.pk-expiry-day`、
+    `.pk-day-urgent`、`.pk-credit-warn|.pk-credit-bad`、`.pk-expiry-updated` 样式。
+  - `internal/panel/logic.js`：新增 `pkCreditLevel(credits)` 纯函数（≥1500 bad、
+    ≥800 warn），导出到 `WBLogic`。
+  - `internal/panel/app.js`：解构追加 `pkCreditLevel`；`renderExpiryDistribution` 重写
+    ——KPI 五卡（7/14/30 天 / 总量 / 高危 TOP3，颜色规则 `c-bad|c-warn|c-ok|c-accent`），
+    Y 轴双行（MM/DD 粗体 + 「剩 N 天」灰），合计列按 `pkCreditLevel` 染色，渲染结束
+    写入 `#pkExpiryUpdated`；`loadPackages` 加载中 / 失败两个分支同步清空 KPI 与
+    时间戳，避免陈旧数据残留。
+  - `internal/panel/logic_test.js`：+10 条 `pkCreditLevel` 边界断言（合计 115 例全绿）。
+  - `internal/panel/frontend_test.go`：新增 `TestIndexHTMLPackagesKPI`（祖先链 + 顺序
+    + 类名钉死），通过反向验证。
+- **测试与走查**：`go test ./internal/panel/ -count=1` 全绿；`node --check app.js`
+  通过；chrome-devtools MCP 在 7864 临时实例（不动 7863 生产）真实点击走查——
+  打开页面 KPI 5 卡渲染（实测 2 bad / 1 warn / 2 accent），36 行双行 Y 轴 +
+  3 行 `.pk-day-urgent`、14 行 `.pk-credit-bad`、15 行 `.pk-credit-warn`；点击
+  「刷新」→ 时间戳 22:28:49→22:31:33、KPI 数值实时变化、高危账号列表随数据重排；
+  `dupIds` 为空；dark/light 主题截图均通过目检。
+- **未做（留给 PR-2 / PR-3）**：自定义 tooltip（目前仍用原生 `title`）、图例
+  点击过滤 / solo、堆叠维度切换（按账号 ⇄ 按包类型）、百分比模式、今日参考线、
+  「仅看 ≤7 天」开关、键盘导航。Epic 分解与 ROI 评估见会话记录。
+
+### 4.1.1 上一轮：两处排版缺陷修复（账号池操作列被裁 / 模型表表头压首行）
 
 - **背景**：用户实拍截图报两处「排版不清楚 / 重叠」——①账号池每行右侧的「⋯」
   只剩半个点；②模型与档位表第一行内容跑到列标题**上方**。均为纯前端、零后端改动。

@@ -8,7 +8,7 @@ const LS_KEY = 'wb2api.key', LS_THEME = 'wb2api.theme';
 const {
   esc, ago, dur, parseAPITime, fmtLocalDateTime, fmtK, fmtBytes,
   fmtTok, fmtMs, fmtRate, trimFixed, fmtCredit, fmtCreditRatio, fmtModelRate,
-  fmtCreditWan, accState, accNeed, accRank,
+  fmtCreditWan, accState, accNeed, accRank, pkCreditLevel,
 } = window.WBLogic;
 
 /* lsGet/lsSet：localStorage 安全包装——隐私模式/禁用存储的浏览器直接访问会抛
@@ -3826,9 +3826,76 @@ function summarizeCreditDays(list, now) {
   return { rows, accountCount: (list || []).length, unavailable };
 }
 
+// summarizeExpiryKpi 汇总积分到期 KPI：7/14/30 天与总量；并按账号聚合列出
+// 「7 天内到期积分」最多的 TOP3 账号（即高危账号——再不花就浪费了）。
+// 返回字段均为纯数字，调用方负责格式化与染色。空列表/全失败时返回全零。
+function summarizeExpiryKpi(list, now) {
+  const summary = summarizeCreditDays(list, now);
+  let sum7 = 0, sum14 = 0, sum30 = 0, total = 0;
+  const riskByAccount = new Map(); // uid → { name, credits }
+  for (const row of summary.rows) {
+    total += row.credits;
+    if (row.days <= 7) sum7 += row.credits;
+    if (row.days <= 14) sum14 += row.credits;
+    if (row.days <= 30) sum30 += row.credits;
+    if (row.days <= 7) {
+      for (const seg of row.segments) {
+        const key = String(seg.uid || '');
+        let ent = riskByAccount.get(key);
+        if (!ent) { ent = { uid: key, name: seg.accountName, credits: 0 }; riskByAccount.set(key, ent); }
+        ent.credits += seg.amount;
+      }
+    }
+  }
+  const topRisk = [...riskByAccount.values()]
+    .sort((a, b) => b.credits - a.credits)
+    .slice(0, 3);
+  return { sum7, sum14, sum30, total, topRisk,
+    accountCount: summary.accountCount, unavailable: summary.unavailable };
+}
+
 function renderExpiryDistribution(list, now) {
   const summary = summarizeCreditDays(list, now);
+  const kpi = summarizeExpiryKpi(list, now);
   const colors = pkAccountColorMap(list);
+
+  // ── KPI 卡 ────────────────────────────────────────────────────────
+  // 五张卡：7/14/30 天到期、总未用、高危账号 TOP3。颜色含义对齐既有语义：
+  // c-bad = 高危急迫；c-warn = 接近窗口；c-accent = 中性汇总；c-ok = 无压力。
+  const kpiEl = $('pkKpi');
+  if (kpiEl) {
+    const total = Math.max(0, kpi.total);
+    const pct = v => total > 0 ? (v / total * 100).toFixed(1) + '%' : '—';
+    // 7 天档位：>10% 总量视为「再不花就浪费」红线；>3% 黄；其余绿
+    const ratio7 = total > 0 ? kpi.sum7 / total : 0;
+    const cls7 = ratio7 > 0.10 ? 'c-bad' : (ratio7 > 0.03 ? 'c-warn' : 'c-ok');
+    // 14 / 30 天给中性提醒色，由用户自行判断节奏
+    const cls14 = kpi.sum14 > 0 ? 'c-warn' : 'c-ok';
+    const cls30 = kpi.sum30 > 0 ? 'c-accent' : 'c-ok';
+    const top = kpi.topRisk;
+    const topNames = top.length
+      ? top.map(r => esc(r.name)).join(' · ')
+      : '—';
+    kpiEl.innerHTML =
+      '<div class="kpi ' + cls7 + '"><div class="k">7 天内到期</div>' +
+        '<div class="v">' + esc(fmtTok(kpi.sum7)) + '</div>' +
+        '<div class="s">占未用 ' + pct(kpi.sum7) + '</div></div>' +
+      '<div class="kpi ' + cls14 + '"><div class="k">14 天内到期</div>' +
+        '<div class="v">' + esc(fmtTok(kpi.sum14)) + '</div>' +
+        '<div class="s">占未用 ' + pct(kpi.sum14) + '</div></div>' +
+      '<div class="kpi ' + cls30 + '"><div class="k">30 天内到期</div>' +
+        '<div class="v">' + esc(fmtTok(kpi.sum30)) + '</div>' +
+        '<div class="s">占未用 ' + pct(kpi.sum30) + '</div></div>' +
+      '<div class="kpi c-accent"><div class="k">未用总量</div>' +
+        '<div class="v">' + esc(fmtTok(kpi.total)) + '</div>' +
+        '<div class="s">' + esc(String(kpi.accountCount)) + ' 个账号</div></div>' +
+      '<div class="kpi ' + (top.length ? 'c-bad' : 'c-ok') + '"><div class="k">7 天高危账号</div>' +
+        '<div class="v">' + esc(String(top.length)) + '</div>' +
+        '<div class="s" title="' + topNames + '">' + (topNames === '—' ? '无' : topNames) + '</div></div>';
+    kpiEl.hidden = false;
+  }
+
+  // ── 到期分布行 ────────────────────────────────────────────────────
   const rows = summary.rows.map(row => {
     const total = row.credits || 1;
     const nodes = row.segments.map(segment => {
@@ -3841,9 +3908,21 @@ function renderExpiryDistribution(list, now) {
         ';flex:' + Math.max(0.008, segment.amount / total).toFixed(4) +
         ' 1 0" title="' + esc(title) + '" aria-label="' + esc(title) + '"></span>';
     }).join('');
-    return '<div class="pk-expiry-row"><span>' + esc(row.days === 0 ? '已到期' : row.days + ' 天') +
-      '</span><div class="pk-expiry-track">' + nodes + '</div><b>' + esc(fmtTok(row.credits)) +
-      '</b></div>';
+    // Y 轴双行：上行日历日（MM/DD），下行「剩 N 天」。剩余 <=3 天染红色（pk-day-urgent）。
+    const expiryMs = now + row.days * PK_DAY_MS;
+    const dateLabel = new Date(expiryMs).toLocaleDateString('zh-CN', {
+      timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit',
+    }).replace('/', '/');
+    const dayLabel = row.days === 0 ? '已到期' : '剩 ' + row.days + ' 天';
+    const urgentCls = row.days <= 3 ? ' pk-day-urgent' : '';
+    const dayHtml = '<span class="pk-expiry-day' + urgentCls + '">' +
+      '<b>' + esc(dateLabel) + '</b><i>' + esc(dayLabel) + '</i></span>';
+    // 合计列按金额分级染色
+    const creditCls = pkCreditLevel(row.credits);
+    const creditHtml = '<b' + (creditCls ? ' class="pk-credit-' + creditCls + '"' : '') + '>' +
+      esc(fmtTok(row.credits)) + '</b>';
+    return '<div class="pk-expiry-row">' + dayHtml +
+      '<div class="pk-expiry-track">' + nodes + '</div>' + creditHtml + '</div>';
   }).join('');
   const foot = summary.accountCount + ' 个账号' +
     (summary.unavailable ? ' · ' + summary.unavailable + ' 个未获取余额' : '');
@@ -3851,12 +3930,20 @@ function renderExpiryDistribution(list, now) {
     a && !a.error && a.uid && pkAccountSegments(a, now).some(s => s.days != null)
   ).map(a => '<span><i style="background:' + (colors.get(String(a.uid)) || 'var(--accent)') +
     '"></i>' + esc(a.nickname || String(a.uid).slice(0, 8)) + '</span>').join('');
-  const hdr = '<div class="pk-expiry-hdr"><span>剩余天数</span><span style="text-align:center">各账号该批剩余</span><b>剩余积分</b></div>';
+  const hdr = '<div class="pk-expiry-hdr"><span>到期日 / 剩余</span><span style="text-align:center">各账号该批剩余</span><b>剩余积分</b></div>';
   $('pkExpiry').innerHTML = (rows
     ? hdr + '<div class="pk-expiry-chart">' + rows + '</div>'
     : '<div class="pk-expiry-empty">暂无可汇总积分</div>') +
     (legend ? '<div class="pk-expiry-legend">' + legend + '</div>' : '') +
     '<div class="pk-expiry-foot">' + esc(foot) + '</div>';
+
+  // ── 数据更新时间戳 ────────────────────────────────────────────────
+  const updatedEl = $('pkExpiryUpdated');
+  if (updatedEl) {
+    updatedEl.textContent = '更新于 ' + new Date(now).toLocaleTimeString('zh-CN', {
+      timeZone: 'Asia/Shanghai', hour12: false,
+    });
+  }
 }
 
 function renderPackages(d, detailLimit) {
@@ -4042,6 +4129,8 @@ async function loadPackages() {
   $('pkSummary').innerHTML = '<div class="empty">查询中…（逐账号向上游实时查询）</div>';
   $('pkDetail').innerHTML = '';
   $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">查询中…</div>';
+  if ($('pkKpi')) { $('pkKpi').innerHTML = ''; $('pkKpi').hidden = true; }
+  if ($('pkExpiryUpdated')) $('pkExpiryUpdated').textContent = '';
   try {
     const [d, c] = await Promise.all([
       api('packages'),
@@ -4054,6 +4143,8 @@ async function loadPackages() {
   } catch (e) {
     $('pkSummary').innerHTML = '<div class="empty">读取失败：' + esc(e.message) + '</div>';
     $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">读取失败：' + esc(e.message) + '</div>';
+    if ($('pkKpi')) { $('pkKpi').innerHTML = ''; $('pkKpi').hidden = true; }
+    if ($('pkExpiryUpdated')) $('pkExpiryUpdated').textContent = '';
   }
 }
 
