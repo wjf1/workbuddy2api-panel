@@ -4,7 +4,7 @@
 
 CodeBuddy 账号池转 OpenAI 兼容 API 网关 + Web 管理面板（fork 增强分支，版本带 `-panel` 后缀）：
 多账号调度、签到、积分、模型限流分类、用量统计，面板嵌入 Go 二进制（`internal/panel` 前端 + `app.js`）。
-当前版本 **v1.19.2-panel**（2026-11-04；版本常量 `appVersion` 在 `cmd/server/main.go`，CI 由它提取）。
+当前版本 **v1.23.0-panel**（2026-11-19；版本常量 `appVersion` 在 `cmd/server/main.go`，CI 由它提取）。
 
 ## 构建与测试命令
 
