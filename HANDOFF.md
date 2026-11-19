@@ -119,7 +119,31 @@ data/backups/          备份输出（同上）
   补跑真的打了一次上游（`upstream calls=1 want 0`）。补 `BlackcatDisabled: true`，
   并在用例注释里钉住「新增任务族必须一并加开关」。修复后 `go test ./...` 28 包全 ok。
 - **未部署**：本次仅改源码，未构建 exe、未动运行中的 1.22.0 实例（按「服务启停
-  须书面确认」规则）。上线需重新构建并换装。
+  须书面确认」规则）。上线需重新构建并换装。→ **已于 2026-11-19 上线，见 §4.1.2。**
+
+### 4.1.2 1.22.1-panel 上线（2026-11-19，A 机本会话完成）
+
+- **定版**：`appVersion` 1.22.0-panel → **1.22.1-panel**（`cmd/server/main.go`），
+  CHANGELOG `[Unreleased]` 定版为 `[1.22.1-panel] - 2026-11-19`（提交 `4e52635`）。
+  **未打 tag**（日常部署不触发四文档门禁；tag/Release 视后续需要单独补——若补，
+  tag 取 `v1.22.1`，标题规范 `v1.22.1: 面板排版修复与 CI 常红修复`）。
+- **构建**：`bash scripts/gen-versioninfo.sh`（FileVersion 1.22.1）+
+  `go build -ldflags "-s -w" -o <部署目录>\wb2api.exe.new ./cmd/server`
+  （11963904 字节；PE 版本资源实测 `1.22.1-panel`）。
+- **换装**：部署目录 `F:\AI\wb2api-panel-v1.13.0-windows-amd64`（历史目录名），
+  计划任务 **`WorkBuddy2API`**。新增 `swap-deploy-20261119.cmd`（仿 20261112 版）。
+  **两次执行教训**：非提权 shell 直接跑——`schtasks /End` / `/Run` 与替换 exe 全部
+  「拒绝访问 / 文件被占用」（SYSTEM 任务，与 1.22.0 升级时一致），备份虽成功但换装
+  未发生；改 PowerShell `Start-Process cmd -Verb RunAs -ArgumentList '/c',<脚本>` 自提权
+  重跑同脚本（脚本路径写死、无参数传递，规避 RunAs 不继承环境变量的既有坑）后全部成功。
+  时间线 21:44:15.97 停止 → 21:44:16.23 进程退出 → 16.25 换装 → 16.26 拉起，
+  **停机约 1–3 秒**。回滚点 `wb2api.exe.pre-1.22.1.bak`（= 1.22.0）。
+- **验收**：`overview.version = 1.22.1-panel`；healthz 17 total / 14 healthy
+  （与换装前基线一致）；监听保持 `127.0.0.1:7863`；PID 15292、exe 字节数与新构建一致。
+  浏览器真实走查 10 项全 PASS：操作列 120px / 17 行 ⋯ 按钮完整 / 点击弹菜单；
+  模型表挂 520px 限高容器（上游本次返回 59 个模型）/ 表头吸容器顶 gap=0 /
+  滚轮 400px 后仍吸顶且 0 行压表头；无 JS 运行时错误。面板左下角显示 `v1.22.1-panel`。
+- **遗留**：B 机（`CHINAMI-DPNMO04`）仍为 1.19.2-panel，未同步（与本版无关的历史差距）。
 
 ### 4.1 本轮：R2-2 续写救援四件套全部落地 + 门面/运维修补（1.22.0-panel）
 
@@ -636,15 +660,14 @@ data/backups/          备份输出（同上）
 
 ## 5. 接力开发指引与待办（Next Steps / Backlog）
 
-### 待办：前端排版修复尚未构建部署（2026-11-17）
+### ✅ 前端排版修复已上线（2026-11-19，A 机 1.22.1-panel）
 
-- `internal/panel/index.html` 的三处修复（操作列 120px、`.tbl-wrap thead th{top:0}`、
-  模型表 `scroll-y`、`--topbar-h:67px`）**只在源码里**。运行中的 `127.0.0.1:7863`
-  仍是 1.22.0 二进制（`go:embed` 的旧资源）。
-- **上线步骤**：`go build` 带版本资源 → 按 `scripts/upgrade-windows.cmd` 或既有
-  swap-deploy 脚本换装 → 重启任务（**属服务重启，须先取得用户书面确认**）。
-- 验收要点：账号池每行「⋯」完整可见且可点；模型与档位表首行在列标题**下方**，
-  容器内滚轮滚动时表头吸容器顶、无 62px 空白。
+- 操作列 120px、`.tbl-wrap thead th{top:0}`、模型表 `scroll-y`、`--topbar-h:67px`
+  已随 `wb2api.exe`（1.22.1-panel，11963904 字节）换装到 `127.0.0.1:7863`，
+  停机约 1–3 秒，验收 10 项全 PASS（过程见 §4.1.2）。回滚点
+  `wb2api.exe.pre-1.22.1.bak`（= 1.22.0）。
+- **未打 tag**：若需发版，tag `v1.22.1`，标题 `v1.22.1: 面板排版修复与 CI 常红修复`，
+  Release 正文对齐 CHANGELOG `[1.22.1-panel]` 段。
 
 ### ✅ 既有失败测试已修（2026-11-18）
 
