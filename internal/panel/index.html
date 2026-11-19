@@ -869,6 +869,22 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
   .pk-expiry-seg:hover { filter: brightness(1.12); transform: scaleY(1.35); }
   .pk-expiry-updated { font-size: var(--fs-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
   .pk-expiry-updated:empty { display: none; }
+  /* 图例可交互态：solo/多选用。off = 未选中（被过滤隐藏的账号），on = 集合内选中。 */
+  .pk-expiry-legend span[role="button"] { cursor: pointer; padding: 1px 6px; margin: -1px -6px;
+    border-radius: 4px; transition: background .12s, opacity .12s; }
+  .pk-expiry-legend span[role="button"]:hover { background: var(--accent-soft); }
+  .pk-expiry-legend span[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pk-expiry-legend span[role="button"].on { background: var(--accent-soft);
+    color: var(--accent-on-soft); }
+  .pk-expiry-legend span[role="button"].off { opacity: .38; }
+  /* 自定义 tooltip：fixed 单例，内容与位置由 app.js 写入 */
+  #pkTooltip { position: fixed; z-index: 90; max-width: 300px; padding: 8px 10px;
+    background: var(--raise); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: var(--shadow); font-size: var(--fs-sm); line-height: 1.5;
+    color: var(--ink); white-space: pre-line; pointer-events: none; }
+  #pkTooltip .pk-tip-hd { font-weight: 600; margin-bottom: 2px; }
+  #pkTooltip .pk-tip-num { font: 600 var(--fs-sm) var(--mono); font-variant-numeric: tabular-nums; }
+  #pkTooltip .pk-tip-sub { color: var(--ink-3); font-size: var(--fs-xs); }
   /* KPI 卡用于本视图时的微调：让数值更醒目 */
   #pkKpi { padding: 12px 16px 0; }
   #pkKpi .kpi .v { font-size: var(--fs-num); }
@@ -1941,6 +1957,10 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
 </div>
 
 <div id="toasts" role="status" aria-live="polite"></div>
+
+<!-- 积分到期分布的自定义 tooltip：单例，pointer-events 关闭以免遮挡鼠标；
+     位置由 app.js 按 segment 矩形计算（fixed 定位、视口夹紧）。 -->
+<div id="pkTooltip" role="tooltip" hidden></div>
 
 <script src="logic.js"></script>
 <script src="app.js"></script>

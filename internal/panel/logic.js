@@ -209,12 +209,57 @@
     return '';
   }
 
+  /* pkToggleFilter 积分到期分布的图例过滤状态切换（纯函数，不碰 DOM）。
+     current: null = 无过滤（全部显示）；Set<uid> = 只显示集合内的账号。
+     普通点击（shift=false）：solo 语义——只看该账号；再次点击同一账号取消回全部。
+     Shift+点击：多选语义——在现有集合（null 视为空集）上增删该账号；删空后回全部。
+     始终返回新 Set 或 null，不修改入参。 */
+  function pkToggleFilter(current, uid, shift) {
+    const u = String(uid == null ? '' : uid);
+    if (!u) return current === undefined ? null : current;
+    if (!shift) {
+      const only = current instanceof Set && current.size === 1 && current.has(u);
+      return only ? null : new Set([u]);
+    }
+    const next = new Set(current instanceof Set ? current : []);
+    if (next.has(u)) {
+      next.delete(u);
+      return next.size ? next : null;
+    }
+    next.add(u);
+    return next;
+  }
+
+  /* pkParseSegLabel 解析积分到期分布 segment 的 aria-label（tooltip 数据源）。
+     aria-label 由 renderExpiryDistribution 用 '\n' 拼四段：
+       <包名>\n<amount> 积分\n到期时间 <时刻>（<相对>）\n<账号名>
+     解析失败时各字段返回空串/原文，不抛异常——tooltip 降级为只显示能拿到的段。 */
+  function pkParseSegLabel(label) {
+    const parts = String(label == null ? '' : label).split('\n');
+    const source = parts[0] || '';
+    const amount = parts.length > 1 ? parts[1] : '';
+    let expiry = '', relative = '';
+    if (parts.length > 2) {
+      const seg = parts[2];
+      const open = seg.lastIndexOf('（');
+      const close = seg.lastIndexOf('）');
+      if (open > 0 && close > open) {
+        expiry = seg.slice(0, open).replace(/^到期时间\s*/, '');
+        relative = seg.slice(open + 1, close);
+      } else {
+        expiry = seg.replace(/^到期时间\s*/, '');
+      }
+    }
+    const account = parts.length > 3 ? parts.slice(3).join('\n') : '';
+    return { source, amount, expiry, relative, account };
+  }
+
   const api = {
     esc, ago, dur, parseAPITime, fmtLocalDateTime,
     fmtK, fmtBytes, fmtTok, fmtMs, fmtRate, trimFixed,
     fmtCredit, fmtCreditRatio, fmtModelRate,
     fmtCreditWan, accState, accNeed, accRank,
-    pkCreditLevel,
+    pkCreditLevel, pkToggleFilter, pkParseSegLabel,
   };
 
   root.WBLogic = api;

@@ -8,6 +8,25 @@
 
 ### 新增
 
+- **积分到期分布自定义 tooltip（PR-2A）**：替代原生 `title`（弹出 ~1.5s 且样式
+  不可控）。`#pkTooltip` 单例（`role=tooltip`，`pointer-events:none` 不遮挡鼠标），
+  事件委托绑在 `#pkExpiry` 上（621 个 segment 逐个挂监听不可取）。显示 80ms 内出现，
+  内容 = 账号（粗体头）+ 包名 + 积分 + **占本行百分比**（`data-pct` 渲染时算好）+
+  到期时刻与相对时间；定位 segment 上方居中，越上界翻下方、左右夹紧视口 8px。
+  segment 数据源复用 aria-label（`pkParseSegLabel` 纯函数解析，解析失败降级为
+  只显示可得字段），不新增膨胀 dataset。
+- **图例点击过滤（PR-2B）**：图例项升级为 `role=button` + `tabindex=0` +
+  `aria-pressed`。单击 **solo**（只看该账号，再点恢复）、**Shift+点击/Shift+Enter**
+  多选增删、**Esc** 一键恢复全部。过滤只切换 segment `display` 与图例
+  `on/off` class——不重渲染、不丢滚动位置；选中态语义切换由 `pkToggleFilter`
+  纯函数承载（logic.js，含不修改入参的 Set 约束）。原生 `title` 从 segment
+  模板移除（信息并入 aria-label），避免系统 tooltip 与自定义 tooltip 双弹层。
+- **前端守卫 `TestIndexHTMLPackagesTooltip`**：钉住 `#pkTooltip` 必须存在且初始
+  hidden、app.js 必须包含 tooltip/filter 接线函数、segment 模板不得重新出现
+  原生 `title`、图例模板必须保留 `role=button + tabindex + data-uid` 锚点。
+
+### 变更
+
 - **积分构成视图顶部新增 KPI 摘要区**（`#pkKpi`，5 张卡）：7 天内到期 / 14 天内到期 /
   30 天内到期 / 未用总量 / 7 天高危账号 TOP3。7 天占比 >10% 染红、>3% 染黄、其余绿；
   高危账号列出按「7 天内将到期积分」排序的前 3 个昵称。复用既有 `.kpis` / `.kpi` /

@@ -9,6 +9,7 @@ const {
   esc, ago, dur, parseAPITime, fmtLocalDateTime, fmtK, fmtBytes,
   fmtTok, fmtMs, fmtRate, trimFixed, fmtCredit, fmtCreditRatio, fmtModelRate,
   fmtCreditWan, accState, accNeed, accRank, pkCreditLevel,
+  pkToggleFilter, pkParseSegLabel,
 } = window.WBLogic;
 
 /* lsGet/lsSet：localStorage 安全包装——隐私模式/禁用存储的浏览器直接访问会抛
@@ -3854,6 +3855,111 @@ function summarizeExpiryKpi(list, now) {
     accountCount: summary.accountCount, unavailable: summary.unavailable };
 }
 
+/* ── 积分到期分布：自定义 tooltip 与图例过滤 ────────────────────────── */
+/* pkFilterUids: null = 全部显示；Set<uid> = 只显示集合内账号（solo/多选）。
+   过滤只切换 segment 的 display，不重渲染——滚动位置与 hover 状态都保留。 */
+let pkFilterUids = null;
+let pkTipTimer = 0;
+
+// bindPkExpiryEvents 一次性把事件委托绑到 #pkExpiry 上（dataset 幂等标记）。
+// tooltip 用 mouseover/out 委托（621 个 segment 逐个 addEventListener 不可取）；
+// Escape 绑在 document 上，过滤态存在时恢复全部。
+function bindPkExpiryEvents() {
+  const root = $('pkExpiry');
+  if (!root || root.dataset.pkBound) return;
+  root.dataset.pkBound = '1';
+  root.addEventListener('mouseover', e => {
+    const seg = e.target.closest('.pk-expiry-seg');
+    if (seg) pkTipShow(seg);
+  });
+  root.addEventListener('mouseout', e => {
+    if (e.target.closest('.pk-expiry-seg')) pkTipHide();
+  });
+  const toggle = (uid, shift) => {
+    pkFilterUids = pkToggleFilter(pkFilterUids, uid, shift);
+    applyPkFilter();
+  };
+  root.addEventListener('click', e => {
+    const item = e.target.closest('.pk-expiry-legend [role="button"][data-uid]');
+    if (item) toggle(item.dataset.uid, e.shiftKey);
+  });
+  root.addEventListener('keydown', e => {
+    const item = e.target.closest('.pk-expiry-legend [role="button"][data-uid]');
+    if (!item) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggle(item.dataset.uid, e.shiftKey);
+    }
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && pkFilterUids) {
+      pkFilterUids = null;
+      applyPkFilter();
+    }
+  });
+}
+
+// pkTipShow 填充并延时 80ms 显示 tooltip（原生 title 弹出 ~1.5s 且无法控制样式，
+// 这是 PR-2A 的核心痛点）；数据源 = aria-label（pkParseSegLabel 解析）+ data-pct。
+function pkTipShow(seg) {
+  clearTimeout(pkTipTimer);
+  const tip = $('pkTooltip');
+  if (!tip) return;
+  const parsed = pkParseSegLabel(seg.getAttribute('aria-label') || '');
+  const parts = [];
+  if (parsed.account) parts.push('<div class="pk-tip-hd">' + esc(parsed.account) + '</div>');
+  if (parsed.source) parts.push('<div>' + esc(parsed.source) + '</div>');
+  const amountLine = [];
+  if (parsed.amount) amountLine.push('<span class="pk-tip-num">' + esc(parsed.amount) + '</span>');
+  if (seg.dataset.pct) amountLine.push('占本行 ' + esc(seg.dataset.pct) + '%');
+  if (amountLine.length) parts.push('<div>' + amountLine.join(' · ') + '</div>');
+  if (parsed.expiry) {
+    parts.push('<div class="pk-tip-sub">到期 ' + esc(parsed.expiry) +
+      (parsed.relative ? '（' + esc(parsed.relative) + '）' : '') + '</div>');
+  }
+  if (!parts.length) return;
+  tip.innerHTML = parts.join('');
+  tip.hidden = false;
+  pkTipTimer = setTimeout(() => pkTipPlace(seg), 80);
+}
+
+// pkTipPlace 定位：segment 上方居中，越上界翻到下方，左右夹紧到视口 8px。
+function pkTipPlace(seg) {
+  const tip = $('pkTooltip');
+  if (!tip || tip.hidden) return;
+  const r = seg.getBoundingClientRect();
+  if (!r.width && !r.height) return;          // 过滤隐藏后不再定位
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = r.left + r.width / 2 - tw / 2;
+  x = Math.max(8, Math.min(x, innerWidth - tw - 8));
+  let y = r.top - th - 8;
+  if (y < 8) y = r.bottom + 8;
+  tip.style.left = Math.round(x) + 'px';
+  tip.style.top = Math.round(y) + 'px';
+}
+
+function pkTipHide() {
+  clearTimeout(pkTipTimer);
+  const tip = $('pkTooltip');
+  if (tip) tip.hidden = true;
+}
+
+// applyPkFilter 同步过滤态到 DOM：segment display + 图例 on/off/aria-pressed。
+// KPI 卡不受过滤影响（反映全池），与图例语义解耦。
+function applyPkFilter() {
+  const root = $('pkExpiry');
+  if (!root) return;
+  root.querySelectorAll('.pk-expiry-legend [data-uid]').forEach(item => {
+    const on = !!pkFilterUids && pkFilterUids.has(item.dataset.uid);
+    item.classList.toggle('on', on);
+    item.classList.toggle('off', !!pkFilterUids && !on);
+    item.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  root.querySelectorAll('.pk-expiry-seg').forEach(seg => {
+    seg.style.display = (!pkFilterUids || pkFilterUids.has(seg.dataset.uid || '')) ? '' : 'none';
+  });
+}
+
 function renderExpiryDistribution(list, now) {
   const summary = summarizeCreditDays(list, now);
   const kpi = summarizeExpiryKpi(list, now);
@@ -3896,17 +4002,21 @@ function renderExpiryDistribution(list, now) {
   }
 
   // ── 到期分布行 ────────────────────────────────────────────────────
+  // segment 不再挂原生 title（弹出慢且样式不可控），信息保留在 aria-label
+  //（屏幕阅读器可用），hover 走 #pkTooltip 自定义提示；data-uid 供图例过滤，
+  // data-pct 供 tooltip 显示「占本行百分比」。
   const rows = summary.rows.map(row => {
     const total = row.credits || 1;
     const nodes = row.segments.map(segment => {
       const color = colors.get(segment.uid) || 'var(--accent)';
-      const title = segment.source + '\n' + fmtTok(segment.amount) + ' 积分\n到期时间 ' +
+      const label = segment.source + '\n' + fmtTok(segment.amount) + ' 积分\n到期时间 ' +
         pkExpiryDateTime(segment.expiresAt) + '（' + pkExpiryText(segment.expiresAt) + '）\n' +
         segment.accountName;
       return '<span class="pk-expiry-seg" style="--seg-color:' + color +
         ';opacity:' + pkCreditOpacity(segment.days).toFixed(5) +
         ';flex:' + Math.max(0.008, segment.amount / total).toFixed(4) +
-        ' 1 0" title="' + esc(title) + '" aria-label="' + esc(title) + '"></span>';
+        ' 1 0" aria-label="' + esc(label) + '" data-uid="' + esc(segment.uid) +
+        '" data-pct="' + (segment.amount / total * 100).toFixed(1) + '"></span>';
     }).join('');
     // Y 轴双行：上行日历日（MM/DD），下行「剩 N 天」。剩余 <=3 天染红色（pk-day-urgent）。
     const expiryMs = now + row.days * PK_DAY_MS;
@@ -3926,16 +4036,29 @@ function renderExpiryDistribution(list, now) {
   }).join('');
   const foot = summary.accountCount + ' 个账号' +
     (summary.unavailable ? ' · ' + summary.unavailable + ' 个未获取余额' : '');
+  // 图例可交互（role=button + 键盘）：单击 solo 该账号、Shift+点击多选、Esc 重置。
+  // 过滤态经 applyPkFilter 只切换 display，不重渲染、不丢滚动位置。
   const legend = (list || []).filter(a =>
     a && !a.error && a.uid && pkAccountSegments(a, now).some(s => s.days != null)
-  ).map(a => '<span><i style="background:' + (colors.get(String(a.uid)) || 'var(--accent)') +
-    '"></i>' + esc(a.nickname || String(a.uid).slice(0, 8)) + '</span>').join('');
+  ).map(a => {
+    const uid = String(a.uid);
+    const on = !!pkFilterUids && pkFilterUids.has(uid);
+    const off = !!pkFilterUids && !on;
+    return '<span role="button" tabindex="0" data-uid="' + esc(uid) +
+      '" aria-pressed="' + (on ? 'true' : 'false') +
+      '" title="点击只看该账号，Shift+点击多选，Esc 恢复全部"' +
+      (on ? ' class="on"' : (off ? ' class="off"' : '')) +
+      '><i style="background:' + (colors.get(uid) || 'var(--accent)') +
+      '"></i>' + esc(a.nickname || uid.slice(0, 8)) + '</span>';
+  }).join('');
   const hdr = '<div class="pk-expiry-hdr"><span>到期日 / 剩余</span><span style="text-align:center">各账号该批剩余</span><b>剩余积分</b></div>';
   $('pkExpiry').innerHTML = (rows
     ? hdr + '<div class="pk-expiry-chart">' + rows + '</div>'
     : '<div class="pk-expiry-empty">暂无可汇总积分</div>') +
     (legend ? '<div class="pk-expiry-legend">' + legend + '</div>' : '') +
     '<div class="pk-expiry-foot">' + esc(foot) + '</div>';
+  bindPkExpiryEvents();
+  applyPkFilter();
 
   // ── 数据更新时间戳 ────────────────────────────────────────────────
   const updatedEl = $('pkExpiryUpdated');

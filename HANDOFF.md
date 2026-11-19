@@ -73,7 +73,33 @@ data/backups/          备份输出（同上）
 
 ## 4. 最近一轮变更与交付成果（1.22.1-panel：账号表操作列 + 模型表表头吸附修复，2026-11-17）
 
-### 4.1.2 本轮：积分构成视图 KPI 摘要区（→ 待随下一版发版，分支 `feat/pk-expiry-kpi`）
+### 4.1.3 本轮：PR-2 自定义 tooltip + 图例过滤（分支 `feat/pk-expiry-tooltip`，未发版）
+
+- **PR-1 已部署生产**：main @ `113882d` 本地构建（`wb2api-1.22.1-kpi.exe`）于
+  2026-11-19 23:14 换装 A 机 7863，panel 200、KPI 5 卡 + 时间戳 + 双行 Y 轴
+  实测可见，回滚备份 `wb2api.exe.pre-1.22.1-kpi.bak`。
+- **PR-2 改动**（详见 `CHANGELOG.md` [Unreleased]）：
+  - `internal/panel/index.html`：body 末尾新增 `#pkTooltip`（role=tooltip，
+    初始 hidden）；新增图例交互态（`.on/.off/:hover/:focus-visible`）与 tooltip
+    样式（fixed、`pointer-events:none`、`white-space:pre-line`）。
+  - `internal/panel/logic.js`：新增 `pkToggleFilter`（solo/多选状态机，纯函数）
+    与 `pkParseSegLabel`（aria-label 四段解析，降级容错）。
+  - `internal/panel/app.js`：segment 移除原生 `title`（保留 aria-label）新增
+    `data-uid`/`data-pct`；图例升级 `role=button tabindex=0 aria-pressed`；
+    新增 `bindPkExpiryEvents`（事件委托 + 幂等标记）/ `pkTipShow|Place|Hide`
+    （80ms 延迟、上翻下、视口夹紧）/ `applyPkFilter`（只切 display，不重渲染）；
+    渲染尾部依次调用 bind + apply。
+  - 测试：logic_test.js 139 断言（+13：pkToggleFilter 9 组边界 + pkParseSegLabel
+    5 组含非法输入）；frontend_test.go 新增 `TestIndexHTMLPackagesTooltip`。
+- **走查**（7864 临时实例，真实交互）：hover segment → tooltip 显示且内容
+  含账号/包名/积分/占比 22.4%/到期时刻；真实点击图例第一项 → 592 段只剩 49
+  且全属该账号、`aria-pressed=true`；再点恢复 592；**Shift+Enter** 在第二项上
+  加入多选（98 段 / 2 账号 / 2 项 on）；**Esc** 恢复全部且图例态清空；solo 复用
+  正常；无重复 id。截图 `pkg_solo.jpg`。
+- **未做（PR-3）**：排序选择器、堆叠维度切换（按账号⇄按包类型）、百分比模式、
+  「仅看 ≤7 天」开关。
+
+### 4.1.2 上一轮：积分构成视图 KPI 摘要区（已随 main 推送并部署生产）
 
 - **背景**：用户反馈 `panel/#packages` 页面「36 行才能看全、找不到哪天危险、
   哪个账号最紧急」。规划了完整三 PR 路线图（KPI/Tooltip/视图切换），本轮落地

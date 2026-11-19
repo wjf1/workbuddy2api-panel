@@ -207,4 +207,77 @@ eq(L.pkCreditLevel(undefined), '', 'pkCreditLevel undefined → 默认');
 eq(L.pkCreditLevel('abc'), '', 'pkCreditLevel 非数字字符串 → 默认（Number → NaN → ||0）');
 eq(L.pkCreditLevel(-5), '', 'pkCreditLevel 负数 → 默认（不可能但兜底）');
 
+/* ── pkToggleFilter：图例过滤状态切换 ─────────────────────────────── */
+/* solo 语义（普通点击）与多选语义（Shift+点击）见 logic.js 注释。 */
+{
+  const u1 = 'uid-1', u2 = 'uid-2';
+  const solo = new Set([u1]);
+
+  // 普通点击：solo
+  eq(L.pkToggleFilter(null, u1, false) instanceof Set, true, '无过滤时普通点击 → solo Set');
+  {
+    const s = L.pkToggleFilter(null, u1, false);
+    eq(s.size, 1, 'solo 集合只含 1 个');
+    eq(s.has(u1), true, 'solo 集合含被点账号');
+  }
+  eq(L.pkToggleFilter(solo, u1, false), null, 'solo 中再点同一账号 → null（回全部）');
+  {
+    const s = L.pkToggleFilter(solo, u2, false);
+    eq(s.size === 1 && s.has(u2), true, 'solo A 时普通点击 B → 切换 solo 到 B');
+  }
+
+  // Shift+点击：多选
+  {
+    const s = L.pkToggleFilter(null, u1, true);
+    eq(s.size === 1 && s.has(u1), true, '无过滤时 Shift 点击 → 单元素集合');
+  }
+  {
+    const s = L.pkToggleFilter(new Set([u1]), u2, true);
+    eq(s.size === 2 && s.has(u1) && s.has(u2), true, 'Shift 点击新账号 → 加入集合');
+  }
+  {
+    const s = L.pkToggleFilter(new Set([u1, u2]), u2, true);
+    eq(s.size === 1 && s.has(u1), true, 'Shift 点击已在集合的账号 → 移出');
+  }
+  eq(L.pkToggleFilter(new Set([u1]), u1, true), null, 'Shift 移出最后一个 → null（回全部）');
+
+  // 纯函数约束：不修改入参
+  {
+    const input = new Set([u1]);
+    L.pkToggleFilter(input, u2, true);
+    eq(input.size, 1, '入参 Set 不被修改');
+  }
+
+  // 边界：空 uid 不产生新过滤
+  eq(L.pkToggleFilter(null, '', false), null, '空 uid 普通点击 → 维持 null');
+}
+
+/* ── pkParseSegLabel：segment aria-label → tooltip 结构 ───────────── */
+{
+  const std = 'Bonus Pack\n30 积分\n到期时间 2026/11/20 06:04:08（剩余 7 小时）\njianfengwang914@gmail.com';
+  const r = L.pkParseSegLabel(std);
+  eq(r.source, 'Bonus Pack', '标准四段：source');
+  eq(r.amount, '30 积分', '标准四段：amount（保留原文含单位）');
+  eq(r.expiry, '2026/11/20 06:04:08', '标准四段：expiry（去前缀、去括号）');
+  eq(r.relative, '剩余 7 小时', '标准四段：relative（括号内）');
+  eq(r.account, 'jianfengwang914@gmail.com', '标准四段：account');
+
+  // 到期时刻含中文冒号/括号包裹正常拆分；relative 内不含 '）'
+  const r2 = L.pkParseSegLabel('CodeBuddy个人版国内运营裂变包\n100 积分\n到期时间 2026/11/22 19:22:12（剩余 3 天）\n546****2');
+  eq(r2.expiry, '2026/11/22 19:22:12', '裂变包标签：expiry');
+  eq(r2.relative, '剩余 3 天', '裂变包标签：relative');
+  eq(r2.account, '546****2', '裂变包标签：account（掩码昵称）');
+
+  // 无相对时间的降级（两段缺括号）
+  const r3 = L.pkParseSegLabel('积分\n5 积分\n到期时间 2026/12/01 00:00:00\n账号A');
+  eq(r3.expiry, '2026/12/01 00:00:00', '缺括号降级：expiry 取原文去前缀');
+  eq(r3.relative, '', '缺括号降级：relative 为空');
+
+  // 非法输入不抛异常
+  const r4 = L.pkParseSegLabel(null);
+  eq(r4.source, '', 'null 输入：source 空');
+  eq(L.pkParseSegLabel('单段').source, '单段', '单段输入：source 原文');
+  eq(L.pkParseSegLabel('单段').account, '', '单段输入：account 空');
+}
+
 console.log('logic_test.js: ' + n + ' assertions passed');

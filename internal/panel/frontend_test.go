@@ -1238,3 +1238,53 @@ func TestIndexHTMLPackagesKPI(t *testing.T) {
 		t.Fatalf("KPI container must come before the chart (kpi@%d chart@%d)", kpiIdx, expIdx)
 	}
 }
+
+// TestIndexHTMLPackagesTooltip PR-2 的接线守卫：自定义 tooltip 单例 + 图例过滤。
+//
+// 为什么需要：①#pkTooltip 是 app.js 定位/填充的目标，id 一旦漂移 tooltip 静默
+// 失效；②segment 的原生 title 在 PR-2 已移除（信息进 aria-label），若有人把
+// title 加回去会出现「系统 tooltip 与自定义 tooltip 同屏」的双弹层；③图例交互
+// （role=button + data-uid）是 solo/多选过滤的锚点，丢了过滤就失效。
+func TestIndexHTMLPackagesTooltip(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	if !strings.Contains(body, `id="pkTooltip"`) {
+		t.Fatal("index.html missing #pkTooltip singleton — custom tooltip has nowhere to render")
+	}
+	if !strings.Contains(body, `<div id="pkTooltip" role="tooltip" hidden>`) {
+		t.Fatal("#pkTooltip must start hidden (app.js toggles the hidden attribute)")
+	}
+
+	appJS, err := os.ReadFile(filepath.Join("app.js"))
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	js := string(appJS)
+	for _, needle := range []string{
+		"pkTipShow", "pkTipPlace", "pkTipHide", "applyPkFilter", "bindPkExpiryEvents",
+		"pkToggleFilter", "pkParseSegLabel",
+	} {
+		if !strings.Contains(js, needle) {
+			t.Fatalf("app.js missing %s — tooltip/filter wiring broken", needle)
+		}
+	}
+	// 原生 title 已从 segment 移除：segment 模板里不允许再出现 title=
+	if segIdx := strings.Index(js, `'pk-expiry-seg'`); segIdx >= 0 {
+		segEnd := strings.Index(js[segIdx:], "</span>'")
+		if segEnd < 0 {
+			segEnd = len(js) - segIdx
+		}
+		segTpl := js[segIdx : segIdx+segEnd]
+		if strings.Contains(segTpl, " title=") {
+			t.Fatal("pk-expiry-seg template must not carry a native title attribute " +
+				"(it would double up with the custom tooltip)")
+		}
+	}
+	// 图例项必须是可交互 button 角色
+	if !strings.Contains(js, `role="button" tabindex="0" data-uid="`) {
+		t.Fatal("app.js legend template lost role=button/tabindex/data-uid — filter anchor gone")
+	}
+}
