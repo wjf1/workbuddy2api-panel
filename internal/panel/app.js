@@ -3861,6 +3861,19 @@ function summarizeExpiryKpi(list, now) {
 let pkFilterUids = null;
 let pkTipTimer = 0;
 
+/* 行排序与 ≤7 天视图（PR-3）。排序偏好进 localStorage（与 pkSort 同模式），
+   ≤7 天开关只影响本次会话——它对应「今天要不要处理」，不构成持久偏好。
+   pkExpSort 惰性初始化（pkExpirySortPref）：顶层直接调 lsGet 会让
+   TestAppJSDetailGroups / TestAppJSExpirySummary 的 vm 切片抛 ReferenceError。 */
+const LS_PK_EXP_SORT = 'pkExpirySort';
+let pkExpSort = null;   // 'days' 天数升序 | 'credits' 金额降序
+let pkExpWeek = false;
+
+function pkExpirySortPref() {
+  if (pkExpSort == null) pkExpSort = lsGet(LS_PK_EXP_SORT) || 'days';
+  return pkExpSort;
+}
+
 // bindPkExpiryEvents 一次性把事件委托绑到 #pkExpiry 上（dataset 幂等标记）。
 // tooltip 用 mouseover/out 委托（621 个 segment 逐个 addEventListener 不可取）；
 // Escape 绑在 document 上，过滤态存在时恢复全部。
@@ -3897,6 +3910,25 @@ function bindPkExpiryEvents() {
       applyPkFilter();
     }
   });
+  // PR-3：排序选择器 + ≤7 天开关（header 控件，同一幂等标记）
+  const sortSel = $('pkExpSort');
+  if (sortSel && !sortSel.dataset.pkBound) {
+    sortSel.dataset.pkBound = '1';
+    sortSel.value = pkExpirySortPref();
+    sortSel.onchange = () => {
+      pkExpSort = sortSel.value;
+      lsSet(LS_PK_EXP_SORT, pkExpSort);
+      if (lastPackages) renderPackages(lastPackages, lastDetailLimit);
+    };
+  }
+  const weekChk = $('pkExpWeek');
+  if (weekChk && !weekChk.dataset.pkBound) {
+    weekChk.dataset.pkBound = '1';
+    weekChk.onchange = () => {
+      pkExpWeek = weekChk.checked;
+      if (lastPackages) renderPackages(lastPackages, lastDetailLimit);
+    };
+  }
 }
 
 // pkTipShow 填充并延时 80ms 显示 tooltip（原生 title 弹出 ~1.5s 且无法控制样式，
@@ -3965,6 +3997,14 @@ function renderExpiryDistribution(list, now) {
   const kpi = summarizeExpiryKpi(list, now);
   const colors = pkAccountColorMap(list);
 
+  // 视图行集：≤7 天开关过滤 + 排序（PR-3）。days 升序是 summarizeCreditDays
+  // 的既定顺序；credits 模式金额降序、同额按天数升序兜底。过滤后的空态单独给文案。
+  let viewRows = summary.rows;
+  if (pkExpWeek) viewRows = viewRows.filter(row => row.days <= 7);
+  if (pkExpirySortPref() === 'credits') {
+    viewRows = [...viewRows].sort((a, b) => b.credits - a.credits || a.days - b.days);
+  }
+
   // ── KPI 卡 ────────────────────────────────────────────────────────
   // 五张卡：7/14/30 天到期、总未用、高危账号 TOP3。颜色含义对齐既有语义：
   // c-bad = 高危急迫；c-warn = 接近窗口；c-accent = 中性汇总；c-ok = 无压力。
@@ -4004,8 +4044,8 @@ function renderExpiryDistribution(list, now) {
   // ── 到期分布行 ────────────────────────────────────────────────────
   // segment 不再挂原生 title（弹出慢且样式不可控），信息保留在 aria-label
   //（屏幕阅读器可用），hover 走 #pkTooltip 自定义提示；data-uid 供图例过滤，
-  // data-pct 供 tooltip 显示「占本行百分比」。
-  const rows = summary.rows.map(row => {
+  // data-pct 供 tooltip 显示「占本行百分比」。行集 = viewRows（≤7 天过滤 + 排序）。
+  const rows = viewRows.map(row => {
     const total = row.credits || 1;
     const nodes = row.segments.map(segment => {
       const color = colors.get(segment.uid) || 'var(--accent)';
@@ -4052,13 +4092,21 @@ function renderExpiryDistribution(list, now) {
       '"></i>' + esc(a.nickname || uid.slice(0, 8)) + '</span>';
   }).join('');
   const hdr = '<div class="pk-expiry-hdr"><span>到期日 / 剩余</span><span style="text-align:center">各账号该批剩余</span><b>剩余积分</b></div>';
+  // 重渲染前记住图表滚动位置（排序/≤7 天切换会重写 innerHTML），渲染后恢复
+  const prevChart = document.querySelector('.pk-expiry-chart');
+  const prevScroll = prevChart ? prevChart.scrollTop : 0;
+  const emptyText = pkExpWeek && summary.rows.length
+    ? '≤7 天内无到期积分（切换「仅看 ≤7 天」可恢复全量）'
+    : '暂无可汇总积分';
   $('pkExpiry').innerHTML = (rows
     ? hdr + '<div class="pk-expiry-chart">' + rows + '</div>'
-    : '<div class="pk-expiry-empty">暂无可汇总积分</div>') +
+    : '<div class="pk-expiry-empty">' + esc(emptyText) + '</div>') +
     (legend ? '<div class="pk-expiry-legend">' + legend + '</div>' : '') +
     '<div class="pk-expiry-foot">' + esc(foot) + '</div>';
   bindPkExpiryEvents();
   applyPkFilter();
+  const newChart = document.querySelector('.pk-expiry-chart');
+  if (newChart && prevScroll > 0) newChart.scrollTop = prevScroll;
 
   // ── 数据更新时间戳 ────────────────────────────────────────────────
   const updatedEl = $('pkExpiryUpdated');

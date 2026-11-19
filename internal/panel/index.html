@@ -1247,6 +1247,13 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
           <h3>积分到期分布</h3>
           <span class="grow"></span>
           <span class="note">按批次到期日聚合，颜色区分账号</span>
+          <label class="sel-note" for="pkExpSort">排序
+            <select id="pkExpSort" class="xs">
+              <option value="days" selected>按剩余天数</option>
+              <option value="credits">按金额</option>
+            </select>
+          </label>
+          <label class="sel-note"><input type="checkbox" id="pkExpWeek"> 仅看 ≤7 天</label>
           <span class="note pk-expiry-updated" id="pkExpiryUpdated" aria-live="polite"></span>
         </header>
         <div class="kpis k5" id="pkKpi" hidden></div>

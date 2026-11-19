@@ -8,6 +8,17 @@
 
 ### 新增
 
+- **到期分布视图控件（PR-3）**：「积分到期分布」header 新增**排序选择器**
+  （按剩余天数 ⇄ 按金额，金额降序同额按天数兜底；偏好写 `localStorage
+  pkExpirySort`，与 pkSort 同模式）与**「仅看 ≤7 天」开关**（会话级，对应
+  「今天要不要处理」）。过滤后为空时给专属空态「≤7 天内无到期积分」。重渲染
+  （排序/开关/刷新）前后保持图表 `scrollTop`；图例 solo/多选过滤态跨重渲染
+  保持（`pkFilterUids` 为模块级 state，渲染尾部 `applyPkFilter` 恢复）。
+  **刻意不做**：百分比模式（track 的 flex 布局本身即按占比分配，两种模式视觉
+  差异趋近于零）；按包类型堆叠（会与图例的按账号过滤语义冲突）。
+- **前端守卫 `TestIndexHTMLPackagesControls`**：钉住 `#pkExpSort` / `#pkExpWeek`
+  必须存在于 `#view-packages`、app.js 必须包含 `pkExpSort`/`pkExpWeek`/
+  `LS_PK_EXP_SORT`/`viewRows` 接线。
 - **积分到期分布自定义 tooltip（PR-2A）**：替代原生 `title`（弹出 ~1.5s 且样式
   不可控）。`#pkTooltip` 单例（`role=tooltip`，`pointer-events:none` 不遮挡鼠标），
   事件委托绑在 `#pkExpiry` 上（621 个 segment 逐个挂监听不可取）。显示 80ms 内出现，

@@ -1288,3 +1288,42 @@ func TestIndexHTMLPackagesTooltip(t *testing.T) {
 		t.Fatal("app.js legend template lost role=button/tabindex/data-uid — filter anchor gone")
 	}
 }
+
+// TestIndexHTMLPackagesControls PR-3 的视图控件守卫：排序选择器与 ≤7 天开关。
+//
+// 为什么需要：两个控件是 PR-3 的状态入口（pkExpSort 进 localStorage、pkExpWeek
+// 控制视图过滤），id 漂移后 onchange 静默失效——界面看似正常但排序/开关无响应。
+func TestIndexHTMLPackagesControls(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	vidx := strings.Index(body, `id="view-packages"`)
+	if vidx < 0 {
+		t.Fatal("index.html missing view-packages section")
+	}
+	rest := body[vidx:]
+	end := strings.Index(rest, `<section class="view"`)
+	if end < 0 {
+		end = len(rest)
+	}
+	section := rest[:end]
+
+	if !strings.Contains(section, `id="pkExpSort"`) {
+		t.Fatal("view-packages missing #pkExpSort — expiry sort selector would never bind")
+	}
+	if !strings.Contains(section, `id="pkExpWeek"`) {
+		t.Fatal("view-packages missing #pkExpWeek — ≤7-day toggle would never bind")
+	}
+	appJS, err := os.ReadFile(filepath.Join("app.js"))
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	js := string(appJS)
+	for _, needle := range []string{"pkExpSort", "pkExpWeek", "LS_PK_EXP_SORT", "viewRows"} {
+		if !strings.Contains(js, needle) {
+			t.Fatalf("app.js missing %s — view controls wiring broken", needle)
+		}
+	}
+}

@@ -73,7 +73,26 @@ data/backups/          备份输出（同上）
 
 ## 4. 最近一轮变更与交付成果（1.22.1-panel：账号表操作列 + 模型表表头吸附修复，2026-11-17）
 
-### 4.1.3 本轮：PR-2 自定义 tooltip + 图例过滤（分支 `feat/pk-expiry-tooltip`，未发版）
+### 4.1.4 本轮：PR-3 视图控件（分支 `feat/pk-expiry-controls`→main，未发版）
+
+- **PR-2 已合并 main**（commit `82a1e91`）：tooltip + 图例过滤，见 §4.1.3。
+- **PR-3 改动**（详见 `CHANGELOG.md` [Unreleased]）：
+  - `index.html`：header 新增 `#pkExpSort`（排序 select）与 `#pkExpWeek`（≤7 天 checkbox）。
+  - `app.js`：新增 `LS_PK_EXP_SORT` / `pkExpWeek` state 与 `pkExpirySortPref()`
+    惰性初始化（**坑**：顶层直接 `lsGet` 会让 TestAppJSDetailGroups /
+    TestAppJSExpirySummary 的 vm 切片抛 ReferenceError——这两个测试从 app.js
+    切片到 renderPackages/renderExpiryDistribution 前执行顶层语句）；render
+    里 `viewRows`（≤7 天过滤 + credits 降序排序）+ 专属空态 + `scrollTop` 保持；
+    `bindPkExpiryEvents` 里幂等绑定两控件（onchange → renderPackages 重渲染）。
+  - 测试：`TestIndexHTMLPackagesControls` 新增。
+- **走查**（7864 可编程断言）：≤7 天 → 恰剩 7 行（剩 1~7 天）；切「按金额」→
+  2.9k→2.4k→1.4k→661→536 降序；取消开关恢复 36 行且排序保持（3.2k→3.0k→…）；
+  `localStorage pkExpirySort='credits'` 落盘；solo 过滤态跨重渲染保持（49 段
+  全同 uid、aria-pressed=true）；Esc 恢复 592；无重复 id。28 包全绿。
+- **刻意不做**：百分比模式（flex 布局即占比，视觉差异趋零）、按包类型堆叠
+  （与图例按账号过滤语义冲突）——理由记 CHANGELOG。
+
+### 4.1.3 上一轮：PR-2 自定义 tooltip + 图例过滤（已合并 main 推送）
 
 - **PR-1 已部署生产**：main @ `113882d` 本地构建（`wb2api-1.22.1-kpi.exe`）于
   2026-11-19 23:14 换装 A 机 7863，panel 200、KPI 5 卡 + 时间戳 + 双行 Y 轴
