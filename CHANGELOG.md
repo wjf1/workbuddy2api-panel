@@ -35,9 +35,6 @@
 - **前端守卫 `TestIndexHTMLPackagesTooltip`**：钉住 `#pkTooltip` 必须存在且初始
   hidden、app.js 必须包含 tooltip/filter 接线函数、segment 模板不得重新出现
   原生 `title`、图例模板必须保留 `role=button + tabindex + data-uid` 锚点。
-
-### 变更
-
 - **积分构成视图顶部新增 KPI 摘要区**（`#pkKpi`，5 张卡）：7 天内到期 / 14 天内到期 /
   30 天内到期 / 未用总量 / 7 天高危账号 TOP3。7 天占比 >10% 染红、>3% 染黄、其余绿；
   高危账号列出按「7 天内将到期积分」排序的前 3 个昵称。复用既有 `.kpis` / `.kpi` /
