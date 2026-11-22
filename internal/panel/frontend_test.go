@@ -1348,7 +1348,7 @@ func TestIndexHTMLPackagesControls(t *testing.T) {
 }
 
 // TestIndexHTMLNoInlineEventHandlers index.html 不得含内联事件处理器
-//（on*="..." 形式的 HTML 属性）：严格 CSP（script-src 'self'，无 unsafe-inline）
+// （on*="..." 形式的 HTML 属性）：严格 CSP（script-src 'self'，无 unsafe-inline）
 // 会静默拦截它们。历史上 #keyVeil 的 <form onsubmit="return false"> 被拦——
 // 拦截只产生一条 console warning，界面零报错——密钥输入框按 Enter 时单字段
 // 表单的隐式提交照常发生，整页重载、密钥白输。事件绑定一律走 app.js 的

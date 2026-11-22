@@ -34,7 +34,7 @@ import (
 const hourlyKeep = 90 * 24 * time.Hour
 
 // flushInterval 防抖落盘间隔。10s 而非 30s：kill -9 / 断电时最多丢这个窗口内的用量
-//（SIGTERM 路径已由 Stop 的 final flush 覆盖、落盘本身是 safefile 原子写 + .bak 回退），
+// （SIGTERM 路径已由 Stop 的 final flush 覆盖、落盘本身是 safefile 原子写 + .bak 回退），
 // 代价是有变更时写盘频率 ×3——用量文件体量小且无变更时 dirty 检查直接跳过，可接受。
 const flushInterval = 10 * time.Second
 
