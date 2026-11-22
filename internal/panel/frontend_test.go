@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -1325,5 +1326,91 @@ func TestIndexHTMLPackagesControls(t *testing.T) {
 		if !strings.Contains(js, needle) {
 			t.Fatalf("app.js missing %s — view controls wiring broken", needle)
 		}
+	}
+}
+
+// TestIndexHTMLNoInlineEventHandlers index.html 不得含内联事件处理器
+//（on*="..." 形式的 HTML 属性）：严格 CSP（script-src 'self'，无 unsafe-inline）
+// 会静默拦截它们。历史上 #keyVeil 的 <form onsubmit="return false"> 被拦——
+// 拦截只产生一条 console warning，界面零报错——密钥输入框按 Enter 时单字段
+// 表单的隐式提交照常发生，整页重载、密钥白输。事件绑定一律走 app.js 的
+// DOM API（element.onclick = fn），不受 CSP 限制，与既有
+// TestIndexHTMLNoInlineScript（禁内联 <script> 块）同族。
+//
+// 正则以属性边界空白起始，避免误报词中含 on 的合法属性（content=、
+// data-tone=、aria-controls= 等）。
+func TestIndexHTMLNoInlineEventHandlers(t *testing.T) {
+	p := newTestPanel()
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
+	body := rec.Body.String()
+
+	inlineRe := regexp.MustCompile(`\son[a-z]+\s*=\s*`)
+	for _, m := range inlineRe.FindAllStringSubmatchIndex(body, -1) {
+		line := 1 + strings.Count(body[:m[0]], "\n")
+		t.Errorf("index.html line %d contains inline event handler %q (blocked by CSP, never fires)",
+			line, strings.TrimSpace(body[m[0]:m[1]]))
+	}
+}
+
+// TestCSSVarReferencesResolve 面板内全部 var(--x) 引用必须有定义出处。
+//
+// 为什么需要：CSS 引用未定义变量时整条属性**静默失效**（border 回退
+// currentColor、字号回退继承值），无报错、测试不红，界面慢慢劣化——
+// 历史上 app.js 两处 --line-1（令牌表只有 --line / --line-soft）让回收站 /
+// 备份列表的分隔线渲染成近黑色实线。
+//
+// 定义的两处合法来源：
+//  1. index.html CSS 令牌表（--x: 形式，设计令牌 SSOT）；
+//  2. app.js 运行时动态赋值：内联 style 拼接（style="--seg-color:..."）与
+//     setProperty('--x', ...)，如积分到期分布的按账号配色。
+func TestCSSVarReferencesResolve(t *testing.T) {
+	htmlBytes, err := os.ReadFile(filepath.Join("index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	jsBytes, err := os.ReadFile(filepath.Join("app.js"))
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	html, js := string(htmlBytes), string(jsBytes)
+
+	defRe := regexp.MustCompile(`(--[a-z][a-z0-9-]*)\s*:`)
+	setPropRe := regexp.MustCompile(`setProperty\(\s*['"](--[a-z][a-z0-9-]*)`)
+	refRe := regexp.MustCompile(`var\(\s*(--[a-z][a-z0-9-]*)`)
+
+	defined := map[string]bool{}
+	for _, m := range defRe.FindAllStringSubmatch(html, -1) {
+		defined[m[1]] = true
+	}
+	for _, m := range defRe.FindAllStringSubmatch(js, -1) { // 内联 style 拼接赋值
+		defined[m[1]] = true
+	}
+	for _, m := range setPropRe.FindAllStringSubmatch(js, -1) {
+		defined[m[1]] = true
+	}
+
+	missing := map[string]bool{}
+	for _, m := range refRe.FindAllStringSubmatch(html, -1) {
+		if !defined[m[1]] {
+			missing[m[1]] = true
+		}
+	}
+	for _, m := range refRe.FindAllStringSubmatch(js, -1) {
+		if !defined[m[1]] {
+			missing[m[1]] = true
+		}
+	}
+	if len(missing) > 0 {
+		names := make([]string, 0, len(missing))
+		for n := range missing {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		t.Fatalf("var(--x) references without a definition (declaration silently dropped): %s",
+			strings.Join(names, ", "))
+	}
+	if len(defined) == 0 {
+		t.Fatal("no --x: definitions found — regex out of sync with index.html?")
 	}
 }

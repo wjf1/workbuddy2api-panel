@@ -1892,7 +1892,7 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
       <div class="hint">该网关已启用 api_key 鉴权，请输入 config.json 中的密钥。</div>
     </header>
     <div class="body">
-      <form style="display:contents" onsubmit="return false"><input type="password" id="keyInput" placeholder="api_key" autocomplete="off"></form>
+      <div style="display:contents"><input type="password" id="keyInput" placeholder="api_key" autocomplete="off"></div>
       <div class="state err" id="keyErr" hidden style="margin-top:10px">密钥不正确，请重试。</div>
     </div>
     <footer>

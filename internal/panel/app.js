@@ -2261,7 +2261,7 @@ async function loadTrash() {
     $('btnTrashPurgeAll').disabled = items.length === 0;
     wrap.innerHTML = items.map(it => {
       const days = it.purge_at ? Math.max(0, Math.ceil((it.purge_at * 1000 - Date.now()) / 86400000)) : null;
-      return '<div class="exp-row" style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line-1)">' +
+      return '<div class="exp-row" style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line-soft)">' +
         '<div style="min-width:0;flex:1">' +
           '<div style="font-size:var(--fs-base)">' + esc(it.nickname || '未命名') + ' <span class="hint">uid ' + esc(it.uid || '?') + '</span></div>' +
           '<div class="hint" style="font-size:var(--fs-xs)">' + esc(it.name) + ' · 删除于 ' + (it.deleted_at ? new Date(it.deleted_at * 1000).toLocaleString() : '?') +
@@ -2319,7 +2319,7 @@ async function loadBackups() {
     const items = d.items || [];
     $('backupEmpty').hidden = items.length > 0;
     wrap.innerHTML = items.map(it =>
-      '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line-1);font-size:var(--fs-sm)">' +
+      '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line-soft);font-size:var(--fs-sm)">' +
         '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(it.name) + '</span>' +
         '<span class="hint" style="white-space:nowrap">' + (it.size / 1024).toFixed(1) + ' KB · ' + new Date(it.mtime * 1000).toLocaleString() + '</span>' +
         '<button class="xs" data-ba="' + esc(it.name) + '">下载</button>' +
