@@ -40,6 +40,24 @@ func TestAppJSSyntax(t *testing.T) {
 	}
 }
 
+// TestAppJSNoNativeConfirm app.js 不得出现裸的原生 confirm(...) 调用：站内确认
+// 统一走 askConfirm（role=dialog + 焦点陷阱 + Esc=取消；原生 confirm 同步阻塞、
+// 样式不可控、读屏读不出按钮语义）。tripwire：匹配「标识符边界处出现的
+// confirm(」——askConfirm / settleConfirm 中的 Confirm 前紧邻标识符字符，不会
+// 被误报。
+func TestAppJSNoNativeConfirm(t *testing.T) {
+	src, err := os.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_$])confirm\s*\(`)
+	for _, m := range re.FindAllStringSubmatchIndex(string(src), -1) {
+		line := 1 + strings.Count(string(src)[:m[0]], "\n")
+		t.Errorf("app.js:%d 出现裸 confirm( 调用（应迁移 askConfirm）: %q",
+			line, string(src)[m[0]:m[1]])
+	}
+}
+
 // TestIndexHTMLNoInlineScript index.html 不得含内联 <script> 块：
 // 严格 CSP（script-src 'self'）会拦截内联脚本，页面将完全不可用。
 // 外链形式 <script src="..."> 允许。

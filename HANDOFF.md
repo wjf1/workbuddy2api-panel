@@ -71,16 +71,42 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（前端审计 P1 修复 + 两条 CI 门禁，2026-11-22）
+## 4. 最近一轮变更与交付成果（前端审计 P2 三项：confirm 迁移 / 轮询门控 / 离线指示，2026-11-22）
 
-### 本轮：前端设计审计发现的 P1 修复（未发版）
+### 本轮：前端审计 P2 修复（未发版）
+
+- **4 处原生 `confirm()` 迁站内 `askConfirm`**：彻底删除账号（回收站行
+  `app.js:2288`）、清空回收站（`app.js:2310`）、一键完成可自动任务
+  （`app.js:2499`）、执行全部待办（`app.js:2873`）统一走 `askConfirm`
+  （role=dialog + 焦点陷阱 + Esc=取消），危险操作传语义化 `okText`：彻底删除 /
+  清空回收站 / 开始执行 / 启动队列；确认文案里冗余的「确认继续？」随按钮语义
+  收敛删除。
+- **5s 轮询 `document.hidden` 门控**：`refreshVisible` 开头加
+  `if (document.hidden) return;`（`app.js:2398`）——浏览器隐藏态只把定时器节流
+  到 ≥1s，5s 周期照触发，后台标签页不再持续打 `/panel/api/overview`。
+- **离线指示接入运行日志 / 任务中心视图**：`markPoll` 原本只接在 `loadOverview`
+  成败路径，停在这两个视图时后端挂掉左下角「连接断开」不更新。补齐三处入口：
+  `loadLogs`（成功 `app.js:1571` / 失败 catch `app.js:1593`）、
+  `reattachQueueView`（成功 `app.js:2986` / 失败 `app.js:2989`）、任务队列轮询
+  interval（`startQueuePolling` 的 3s tick，`app.js:2960`——队列运行中它是任务
+  中心真正的持续出口，只接 reattach 不够）。
+- **新增门禁 `TestAppJSNoNativeConfirm`**（`frontend_test.go`）：tripwire 断言
+  app.js 不得出现标识符边界处的裸 `confirm(`（`askConfirm` / `settleConfirm`
+  不误报）。红绿双向验证：迁移后文件 0 命中；含 `!confirm(` 样本命中。
+- **验证**：`go test ./internal/panel/ -count=1` ok（tripwire 显式 -run PASS）；
+  `node internal/panel/logic_test.js` 139 断言通过；grep 复核裸 `confirm(` 零
+  残留、`document.hidden` 门控在位、`markPoll` 覆盖 5 处调用点。
+- **遗留（本轮未做）**：无——P1 轮遗留的三项 P2 已全部闭环；后端侧遗留（内部
+  错误原文回传、用量落盘 30s 防抖崩溃窗口、三个千行文件拆分）见 §4.0。
+
+### 上一轮：前端设计审计发现的 P1 修复 + 两条 CI 门禁（未发版）
 
 - **密钥弹窗 Enter 整页重载**：`index.html:1895` 的 `<form onsubmit="return false">` 内联处理器被页面自身 CSP（`script-src 'self'`）静默拦截，按 Enter 时单字段表单隐式提交照常发生 → 整页重载、密钥白输。改为 `<div style="display:contents">`（form 无表单语义依赖，CSS/JS 均未以标签选择器引用）。
 - **回收站/备份列表分隔线近黑实线**：`app.js:2264/2322` 引用未定义变量 `var(--line-1)`，整条属性静默失效回退 `currentColor`。改 `var(--line-soft)`；全仓 `var(--x)` 与令牌定义求差集，仅此一处异常。
 - **新增门禁**：`TestIndexHTMLNoInlineEventHandlers`（断言 index.html 无 `\son[a-z]+\s*=` 内联处理器，正则以属性边界空白起始避免误报 `content=` 等）；`TestCSSVarReferencesResolve`（断言全部 `var(--x)` 引用均有定义出处：令牌表 / 内联 style 动态赋值 / `setProperty`）。两测试均做红绿验证。
 - **README 纠偏**：「左侧导航分四个视图」→ 七个视图，功能表补「积分构成」「任务中心」行。
 - **验证**：`go test ./internal/panel/ -count=1 -v` 106 PASS（两条新测试确执行）；`go test ./... -count=1` 全仓 ok；`node internal/panel/logic_test.js` 139 断言通过。
-- **遗留（本轮未做，P2）**：4 处原生 `confirm()` 迁站内 `askConfirm`（app.js:2286/2307/2492/2865）；5s 轮询加 `document.hidden` 门控；`markPoll` 接入运行日志/任务中心视图（离线指示在非账号视图失真）。
+- **遗留（本轮未做，P2）**：4 处原生 `confirm()` 迁站内 `askConfirm`（app.js:2286/2307/2492/2865）；5s 轮询加 `document.hidden` 门控；`markPoll` 接入运行日志/任务中心视图（离线指示在非账号视图失真）。——**三项均已在本轮闭环，见「本轮」**。
 
 ## 4.0 上一轮（弱密钥启动校验，2026-11-22）
 

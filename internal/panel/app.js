@@ -1567,6 +1567,8 @@ async function loadLogs() {
       api('request_metrics').catch(() => ({})),
       api('request_logs?' + rq.toString()).catch(() => ({ entries: [] })),
     ]);
+    // 停在本视图时 loadOverview 不跑，连通性只能由这里回报（与 loadOverview 对齐）。
+    markPoll(true);
     // 归档开启时以归档为准——「区间内没有记录」是一个真实结果，不能回落成内存里
     // 的最近 100 条（那会把筛选条件之外、时间范围之外的请求显示出来）。
     // 只有归档关闭时才回落到内存指标，保证没有归档的部署仍能看到最近请求。
@@ -1588,7 +1590,7 @@ async function loadLogs() {
     $('logNote').textContent = logCh === 'all'
       ? '任务 ' + (counts.task || 0) + ' · 对话 ' + (counts.chat || 0) + ' · 系统 ' + (counts.sys || 0)
       : (logCh === 'task' ? '任务' : logCh === 'chat' ? '对话' : '系统') + ' ' + entries.length + ' 行';
-  } catch (e) { /* 概览已提示 */ }
+  } catch (e) { markPoll(false); /* 概览已提示 */ }
 }
 
 function renderRequestMetrics(m, entries) {
@@ -2283,7 +2285,8 @@ $('trashList').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-ta]');
   if (!b) return;
   const name = b.dataset.name, act = b.dataset.ta;
-  if (act === 'purge' && !confirm('彻底删除「' + name + '」？该操作不可恢复。')) return;
+  if (act === 'purge' && !await askConfirm('彻底删除「' + name + '」？该操作不可恢复。',
+    { title: '彻底删除账号', okText: '彻底删除' })) return;
   b.disabled = true;
   try {
     if (act === 'restore') {
@@ -2304,7 +2307,8 @@ $('trashList').addEventListener('click', async ev => {
 });
 
 $('btnTrashPurgeAll').onclick = async () => {
-  if (!confirm('清空回收站将彻底删除全部已移除账号的凭证文件，不可恢复。确认清空？')) return;
+  if (!await askConfirm('清空回收站将彻底删除全部已移除账号的凭证文件，不可恢复。',
+    { title: '清空回收站', okText: '清空回收站' })) return;
   try {
     const r = await api('trash/purge_all', { method: 'POST' });
     toast('已清空回收站（删除 ' + r.removed + ' 个文件）', 'ok');
@@ -2389,6 +2393,9 @@ function busyBtn(btn, doing, fn) {
 
 /* ── 轮询 ─────────────────────────────────────────────────────────── */
 function refreshVisible() {
+  // 后台标签页直接跳过：隐藏态下 setInterval 仍会触发（浏览器只节流到 ≥1s，
+  // 5s 周期基本不受影响），请求照发——后台挂着面板就会持续打 /api/overview。
+  if (document.hidden) return;
   // 用 Promise.race 包装：loadXxx 内部 catch 吞错（quiet 轮询），但网络层 fetch
   // 失败会让函数 reject 吗？——不会（内部 catch）。改为探活式：直接打一个最轻
   // 请求判定连通性成本高；务实方案——loadOverview 成功路径里调 markPoll(true)
@@ -2489,7 +2496,8 @@ $('btnTaskAcceptAll').onclick = async () => {
 $('btnTaskAutoAll').onclick = async () => {
   if (!taskUID) return;
   const btn = $('btnTaskAutoAll');
-  if (!confirm('将依次执行：补报对话事件、领取 Buddy、glm-5.2 对话、尝试上报。\n过程约 1-2 分钟（含真实对话），确认继续？')) return;
+  if (!await askConfirm('将依次执行：补报对话事件、领取 Buddy、glm-5.2 对话、尝试上报。过程约 1-2 分钟（含真实对话）。',
+    { title: '一键完成可自动任务', okText: '开始执行' })) return;
   btn.disabled = true; btn.textContent = '执行中…';
   try {
     const r = await api('accounts/' + encodeURIComponent(taskUID) + '/tasks/auto_all', { method: 'POST' });
@@ -2862,7 +2870,8 @@ $('btnScanAll').onclick = async () => {
 };
 $('btnRunQueue').onclick = async () => {
   const conc = Number($('qcConc').value) || 1;
-  if (!confirm('扫描全部账号待办并排队执行（账号并发 ' + conc + '，账号内串行）。\n含真实对话的任务耗时较长，确认继续？')) return;
+  if (!await askConfirm('扫描全部账号待办并排队执行（账号并发 ' + conc + '，账号内串行）。含真实对话的任务耗时较长。',
+    { title: '执行全部待办', okText: '启动队列' })) return;
   const b = $('btnRunQueue');
   b.disabled = true; b.textContent = '启动中…';
   try {
@@ -2948,7 +2957,7 @@ function startQueuePolling() {
   if (queueTimer) clearInterval(queueTimer);
   queueTimer = setInterval(async () => {
     let q;
-    try { q = await api('tasks/queue'); } catch (e) { return; }
+    try { q = await api('tasks/queue'); markPoll(true); } catch (e) { markPoll(false); return; }
     if (!q.started) return;
     // 只渲染本页启动过的那轮队列（刷新页面后不再接管旧队列）。
     if (lastQueueSeq && q.seq !== lastQueueSeq) return;
@@ -2973,9 +2982,11 @@ function reattachQueueView() {
   (async () => {
     try {
       const q = await api('tasks/queue');
+      // 队列视图里 loadOverview 不跑，连通性由这里回报（与 loadOverview 对齐）。
+      markPoll(true);
       if (queueTimer) return; // 轮询已在跑（跨视图不中断）
       if (q.started && q.running && (!lastQueueSeq || q.seq === lastQueueSeq)) startQueuePolling();
-    } catch (e) { /* 静默 */ }
+    } catch (e) { markPoll(false); /* 静默 */ }
   })();
 }
 

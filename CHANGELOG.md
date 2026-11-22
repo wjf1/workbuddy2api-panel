@@ -19,6 +19,15 @@
   var(--line-1)` 引用了不存在的变量 `--line-1`（令牌表只有 `--line` /
   `--line-soft`），整条属性静默失效回退 `currentColor`。改为语义一致的
   `var(--line-soft)`。
+- **后台标签页轮询不暂停**：`setInterval(refreshVisible, 5000)` 无可见性判断，
+  而浏览器隐藏态只把定时器节流到 ≥1s（5s 周期基本不受影响），面板挂在后台
+  标签页就持续打 `/panel/api/overview`。`refreshVisible` 开头加
+  `if (document.hidden) return;`。
+- **离线指示在运行日志 / 任务中心视图失真**：`markPoll(true/false)` 只接在
+  `loadOverview` 的成功 / 失败路径上，停在这两个视图时后端挂掉，左下角
+  「连接断开」指示不更新。`loadLogs`（成功 + 失败 catch）、`reattachQueueView`
+  与任务队列轮询 interval（`startQueuePolling` 的 3s tick，停表前是任务中心
+  真正的持续出口）三处入口补齐 `markPoll` 回报，与 `loadOverview` 行为对齐。
 
 ### 新增
 
@@ -31,11 +40,20 @@
   `var(--x)` 引用，断言每个变量都有定义出处（index.html CSS 令牌表、app.js
   内联 style 动态赋值、`setProperty('--x')` 三者之一），防「未定义变量 →
   整条属性静默失效」再犯（`--line-1` 即先例）。
+- **前端门禁 `TestAppJSNoNativeConfirm`**：断言 app.js 不得出现标识符边界处的
+  裸 `confirm(` 调用（正则要求 `confirm(` 前无标识符字符，`askConfirm` /
+  `settleConfirm` 不误报）——原生 `confirm` 一旦回流立即红。做红绿双向验证：
+  迁移后文件 0 命中，含 `!confirm(` 的样本命中且不波及站内确认。
 
 ### 变更
 
 - README：面板章节「左侧导航分四个视图」纠偏为实际的七个视图，功能表补上
   漏列的「积分构成」与「任务中心」。
+- **4 处原生 `confirm()` 迁站内 `askConfirm`**：彻底删除账号（回收站行）、清空
+  回收站、一键完成可自动任务、执行全部待办仍在用原生 `confirm`（同步阻塞、
+  样式不可控、读屏读不出按钮语义，与账号「移除 / 禁用」已迁站内的做法不一致）。
+  统一迁 `askConfirm`（role=dialog + 焦点陷阱 + Esc=取消），危险操作传语义化
+  `okText`：彻底删除 / 清空回收站 / 开始执行 / 启动队列。
 
 ### 安全
 
