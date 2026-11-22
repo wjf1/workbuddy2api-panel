@@ -79,6 +79,13 @@ func main() {
 		}
 	}
 
+	// 弱密钥启动校验：insecure_write_guard 只看 api_key 非空，照抄样例值 test_key
+	// 即可旁路——非回环监听下弱密钥 ≈ 无鉴权，这里按暴露面分级兜底（回环 WARN /
+	// 非回环拒绝启动，WB2A_ALLOW_WEAK_KEY=1 显式豁免）。
+	if err := checkAPIKeyStrength(cfg.Listen, cfg.APIKey); err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	// M4 租约锁：同一 auths 目录不允许两个执行体同时挂（异机新鲜租约 + strict
 	// 拒绝启动）。Acquire 在 LoadDir 前调用；Release 随进程退出删租约文件。
 	lease, err := authlease.Acquire(cfg.AuthDir, cfg.Auths.StrictLease)

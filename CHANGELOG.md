@@ -4,6 +4,43 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本（`<主>.<次>.<修订>-panel` 后缀表示 fork 面板增强分支）。
 
+## [Unreleased]
+
+### 修复
+
+- **密钥弹窗按 Enter 触发整页重载**：`#keyVeil` 的单字段表单用
+  `<form onsubmit="return false">` 防隐式提交，但该内联事件处理器被页面自身
+  CSP（`script-src 'self'`，无 unsafe-inline）**静默拦截**（仅一条 console
+  warning，界面零报错）——按 Enter 时单字段表单的隐式提交照常发生，整页
+  重载、密钥白输。form 只承担「防提交」职责，无任何表单语义依赖（CSS 与 JS
+  均未以标签选择器引用），改为 `<div style="display:contents">`。
+- **回收站 / 备份列表分隔线渲染成近黑色实线**：app.js 两处模板（回收站行
+  `loadTrash`、备份行 `loadBackups`）的 `border-bottom:1px solid
+  var(--line-1)` 引用了不存在的变量 `--line-1`（令牌表只有 `--line` /
+  `--line-soft`），整条属性静默失效回退 `currentColor`。改为语义一致的
+  `var(--line-soft)`。
+
+### 新增
+
+- **前端门禁 `TestIndexHTMLNoInlineEventHandlers`**：断言 index.html 不得出现
+  `\son[a-z]+\s*=` 形式的内联事件处理器（正则以属性边界空白起始，避免误报
+  `content=` / `data-tone=` / `aria-controls=` 这类词中含 on 的合法属性）——
+  严格 CSP 下内联事件处理器全部静默失效，与既有 `TestIndexHTMLNoInlineScript`
+  同族。
+- **前端门禁 `TestCSSVarReferencesResolve`**：提取 index.html + app.js 全部
+  `var(--x)` 引用，断言每个变量都有定义出处（index.html CSS 令牌表、app.js
+  内联 style 动态赋值、`setProperty('--x')` 三者之一），防「未定义变量 →
+  整条属性静默失效」再犯（`--line-1` 即先例）。
+
+### 变更
+
+- README：面板章节「左侧导航分四个视图」纠偏为实际的七个视图，功能表补上
+  漏列的「积分构成」与「任务中心」。
+
+### 安全
+
+- **弱密钥启动校验：堵住写守卫的样例值旁路**（后端设计专项分析发现的 P1）。`config.example.json` 给出的 `"api_key": "test_key"` 照抄后，`insecure_write_guard` 仅判 api_key 非空即完全旁路——非回环监听下等于「有鉴权之名、无鉴权之实」的全功能暴露。新增启动校验 `checkAPIKeyStrength`：弱密钥（等于样例值 / 长度 <12）在**回环监听**下仅 WARN（本地自用不破坏现状），在**非回环监听**下拒绝启动并给出修复路径，`WB2A_ALLOW_WEAK_KEY=1` 显式豁免（内网信任环境自担风险）。顺带提取 `listenIsLoopback` 供写守卫与校验共用。新增 14 项子用例测试（判定 7 + 分级 7，含豁免与空 key 交写守卫兜底场景），`go test ./cmd/server/` 全绿。
+
 ## [1.23.0-panel] - 2026-11-19
 
 ### 新增

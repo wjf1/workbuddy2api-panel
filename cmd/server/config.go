@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
@@ -548,6 +549,44 @@ func WriteDefault(path string) (string, error) {
 		return "", fmt.Errorf("write config: %w", err)
 	}
 	return key, nil
+}
+
+// weakAPIKeyReason 返回 api_key 判定为弱密钥的原因（"" = 强度可接受）。
+// 空密钥不算弱（由 insecure_write_guard 兜底：非回环拒写）；样例值与过短值算弱——
+// config.example.json 给出的 "test_key" 照抄后能完全旁路写守卫，是「有鉴权之名、
+// 无鉴权之实」的典型暴露面。
+func weakAPIKeyReason(key string) string {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		return ""
+	}
+	if k == "test_key" {
+		return "等于样例值 test_key（config.example.json 的占位值）"
+	}
+	if len(k) < 12 {
+		return fmt.Sprintf("长度 %d 不足 12 字符", len(k))
+	}
+	return ""
+}
+
+// checkAPIKeyStrength 启动时校验 api_key 强度，返回需要终止启动的错误：
+//   - 回环监听 + 弱密钥 → nil（此处 WARN，本地自用无暴露风险，不破坏现状）；
+//   - 非回环监听 + 弱密钥 → 错误（弱密钥旁路写守卫 ≈ 暴露面上无鉴权），
+//     WB2A_ALLOW_WEAK_KEY=1 显式豁免（内网信任环境自担风险）。
+func checkAPIKeyStrength(listen, apiKey string) error {
+	reason := weakAPIKeyReason(apiKey)
+	if reason == "" {
+		return nil
+	}
+	if listenIsLoopback(listen) {
+		logx.Warnf("api_key 弱（%s）：当前为回环监听仅本地自用不受影响，暴露面放开前请换强密钥（≥12 字符随机串）", reason)
+		return nil
+	}
+	if os.Getenv("WB2A_ALLOW_WEAK_KEY") == "1" {
+		logx.Warnf("api_key 弱（%s）：WB2A_ALLOW_WEAK_KEY=1 已显式豁免，风险自担", reason)
+		return nil
+	}
+	return fmt.Errorf("api_key 弱（%s）且监听 %s 非回环：弱密钥会完全旁路 insecure_write_guard（有鉴权之名、无鉴权之实）。请设置强 api_key（≥12 字符随机串）、或将 listen 改为 127.0.0.1 回环；确需豁免请设 WB2A_ALLOW_WEAK_KEY=1", reason, listen)
 }
 
 func applyEnv(c *Config) {

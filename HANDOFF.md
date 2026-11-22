@@ -71,9 +71,18 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（1.22.1-panel：账号表操作列 + 模型表表头吸附修复，2026-11-17）
+## 4. 最近一轮变更与交付成果（弱密钥启动校验，2026-11-22）
 
-### 4.1.4 本轮：PR-3 视图控件（分支 `feat/pk-expiry-controls`→main，未发版）
+### 本轮：弱密钥启动校验（后端设计专项分析发现的 P1，未发版）
+
+- **根因**：`config.example.json` 的样例值 `"test_key"` 照抄后，`insecure_write_guard` 仅判 api_key 非空即完全旁路——非回环监听下等于「有鉴权之名、无鉴权之实」的全功能暴露。
+- **改动**：`cmd/server/config.go` 新增 `weakAPIKeyReason`（样例值/长度 <12 判弱，空 key 交写守卫兜底）与 `checkAPIKeyStrength`（回环 WARN / 非回环拒绝启动并给修复路径 / `WB2A_ALLOW_WEAK_KEY=1` 显式豁免）；`insecure_write_guard.go` 提取 `listenIsLoopback` 共用；`main.go` 在 Load 后挂启动校验。
+- **验证**：`go build` / `go vet` 通过；新增 `config_apikey_strength_test.go` 14 项子用例（判定 7 + 分级 7）全绿，`go test ./cmd/server/` 全套通过（含既有 TestInsecureWriteGuard 不回归）。
+- **遗留（本轮未做）**：内部错误原文回传客户端（`internal/panel/config.go:55`）、用量落盘 30s 防抖崩溃窗口、三个千行文件拆分——见后端设计分析报告 P1/P2 清单。
+
+### 上一轮（1.22.1-panel：账号表操作列 + 模型表表头吸附修复，2026-11-17）
+
+### 4.1.4 PR-3 视图控件（分支 `feat/pk-expiry-controls`→main，未发版）
 
 - **PR-2 已合并 main**（commit `82a1e91`）：tooltip + 图例过滤，见 §4.1.3。
 - **PR-3 改动**（详见 `CHANGELOG.md` [Unreleased]）：
