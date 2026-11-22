@@ -223,8 +223,7 @@ func (p *Panel) backupRun(w http.ResponseWriter, r *http.Request) {
 	}
 	name, err := p.RunBackupNow()
 	if err != nil {
-		logx.Errorf("panel: 手动备份失败: %v", err)
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeErrCode(w, http.StatusInternalServerError, "backup_failed", err.Error())
 		return
 	}
 	logx.Infof("panel: 手动备份完成: %s", name)

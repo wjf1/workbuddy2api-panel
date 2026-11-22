@@ -110,7 +110,16 @@ data/backups/          备份输出（同上）
 
 ## 4.0 上一轮（弱密钥启动校验，2026-11-22）
 
-### 本轮：弱密钥启动校验（后端设计专项分析发现的 P1，未发版）
+### 本轮：P1/P2 逐项加固（同日第二轮，未发版）
+
+- **内部错误响应收敛**：新增 `writeErrCode`（细节进 logx、客户端拿稳定文案 + code 字段），`config_load_failed` / `body_read_failed` / `backup_failed` / `trash_list_failed` / `reqlog_query_failed` 共 5 处接入；校验类错误保持原文回显。
+- **用量落盘窗口** 30s→10s（kill -9 丢失上限；SIGTERM 已有 final flush + safefile 原子 + dirty 跳空写）。
+- **OAuth 会话回收**提取为 `pruneExpiredLoginsLocked` 并接入 `loginPoll`。
+- **README** 补 `WB2A_API_KEY` env 引导与弱密钥校验说明。
+- **验证**：`go build ./...` + `go vet` 通过；`go test ./internal/usage/ ./internal/panel/ ./cmd/server/` 全绿。
+- **遗留待办**：三个千行文件拆分（autotask.go 1299 / panel.go 1084+ / handler_chat.go 1042）——纯机械同包搬移，建议下一次功能迭代时顺路做；`writeErrCode` 模式已立，存量 86 处 `writeErr` 调用按"新代码用新函数、存量触达时迁移"渐进推进。
+
+### 上一轮：弱密钥启动校验（后端设计专项分析发现的 P1，未发版）
 
 - **根因**：`config.example.json` 的样例值 `"test_key"` 照抄后，`insecure_write_guard` 仅判 api_key 非空即完全旁路——非回环监听下等于「有鉴权之名、无鉴权之实」的全功能暴露。
 - **改动**：`cmd/server/config.go` 新增 `weakAPIKeyReason`（样例值/长度 <12 判弱，空 key 交写守卫兜底）与 `checkAPIKeyStrength`（回环 WARN / 非回环拒绝启动并给修复路径 / `WB2A_ALLOW_WEAK_KEY=1` 显式豁免）；`insecure_write_guard.go` 提取 `listenIsLoopback` 共用；`main.go` 在 Load 后挂启动校验。

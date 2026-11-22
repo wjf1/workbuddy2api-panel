@@ -482,7 +482,7 @@ func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 		To:        parseTimeParam(q.Get("to")),
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeErrCode(w, http.StatusInternalServerError, "reqlog_query_failed", err.Error())
 		return
 	}
 	// 空结果回 []（而不是 JSON null）：前端把 null 与"归档关闭"混在一起会走错分支，
@@ -1081,4 +1081,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"ok": false, "error": msg})
+}
+
+// writeErrCode 内部错误响应：细节只进服务端日志，客户端拿稳定文案 + 机器可读 code。
+// 此前 err.Error() 原文回传可能泄露路径等内部信息；校验类错误（需把具体原因回显给
+// 用户）继续用 writeErr，本函数只收 IO / 内部状态类失败。
+func writeErrCode(w http.ResponseWriter, status int, code, detail string) {
+	logx.Errorf("panel: %s: %s", code, detail)
+	writeJSON(w, status, map[string]any{"ok": false, "error": "服务器内部错误，详情见服务端日志", "code": code})
 }

@@ -142,16 +142,21 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.loginMu.Lock()
-	// 顺手回收过期会话，防"开弹窗走开"的 state 滞留。
+	p.pruneExpiredLoginsLocked()
+	p.logins[st.State] = loginSession{created: time.Now(), realm: realm}
+	p.loginMu.Unlock()
+	logx.Infof("panel: 发起 OAuth 添加账号 realm=%s（state=%s...）", realm, st.State[:min(8, len(st.State))])
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": st.AuthURL, "state": st.State, "realm": realm})
+}
+
+// pruneExpiredLoginsLocked 回收超过 TTL 的登录会话，防"开弹窗走开"的 state 滞留。
+// loginStart 与 loginPoll 两个入口都调用（调用方必须已持有 loginMu）。
+func (p *Panel) pruneExpiredLoginsLocked() {
 	for s, sess := range p.logins {
 		if time.Since(sess.created) > loginTTL {
 			delete(p.logins, s)
 		}
 	}
-	p.logins[st.State] = loginSession{created: time.Now(), realm: realm}
-	p.loginMu.Unlock()
-	logx.Infof("panel: 发起 OAuth 添加账号 realm=%s（state=%s...）", realm, st.State[:min(8, len(st.State))])
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": st.AuthURL, "state": st.State, "realm": realm})
 }
 
 // loginPoll 轮询登录态。未完成 → {done:false}；完成 → 建凭证、落盘、热加载、签到。
@@ -162,6 +167,9 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.loginMu.Lock()
+	// poll 分支同样顺手回收：面板常驻下用户可能反复 poll 已过期的 state（前端轮询
+	// 不会停止），只在 loginStart 回收时这些过期 state 会一直占位。
+	p.pruneExpiredLoginsLocked()
 	sess, known := p.logins[state]
 	p.loginMu.Unlock()
 	if !known {

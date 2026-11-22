@@ -59,6 +59,13 @@
 
 - **弱密钥启动校验：堵住写守卫的样例值旁路**（后端设计专项分析发现的 P1）。`config.example.json` 给出的 `"api_key": "test_key"` 照抄后，`insecure_write_guard` 仅判 api_key 非空即完全旁路——非回环监听下等于「有鉴权之名、无鉴权之实」的全功能暴露。新增启动校验 `checkAPIKeyStrength`：弱密钥（等于样例值 / 长度 <12）在**回环监听**下仅 WARN（本地自用不破坏现状），在**非回环监听**下拒绝启动并给出修复路径，`WB2A_ALLOW_WEAK_KEY=1` 显式豁免（内网信任环境自担风险）。顺带提取 `listenIsLoopback` 供写守卫与校验共用。新增 14 项子用例测试（判定 7 + 分级 7，含豁免与空 key 交写守卫兜底场景），`go test ./cmd/server/` 全绿。
 
+### 变更
+
+- **内部错误响应收敛 + 机器可读 code（后端设计专项分析 P1/P2）**：新增 `writeErrCode`——IO / 内部状态类失败的细节只进服务端日志（`logx.Errorf`），客户端拿稳定文案 + `code` 字段（`config_load_failed` / `body_read_failed` / `backup_failed` / `trash_list_failed` / `reqlog_query_failed` 共 5 处接入）；此前 `err.Error()` 原文回传可能泄露路径等内部信息。校验类错误（需把具体原因回显给用户，如 `SaveConfig` 字段校验）保持 `writeErr` 原文回显不变。
+- **用量落盘窗口收紧**：`flushInterval` 30s → 10s——kill -9 / 断电时最多丢这个窗口内的用量（SIGTERM 路径已由 Stop 的 final flush 覆盖、落盘本身是 safefile 原子写 + .bak 回退、无变更时 dirty 检查直接跳过写盘），代价是有变更时写盘频率 ×3，用量文件体量小可接受。
+- **OAuth 登录会话回收补齐**：过期 state 回收提取为 `pruneExpiredLoginsLocked` 并在 `loginPoll` 分支同样调用——面板常驻下前端轮询不会停止，此前只在 `loginStart` 回收时反复 poll 的过期 state 会一直占位。
+- **README 密钥管理建议**：生产 / 非回环部署建议用 `WB2A_API_KEY` 环境变量覆盖（`config.json` 的 `api_key` 为明文落盘、env 优先级更高且不入盘），并同步说明启动时的弱密钥校验行为。
+
 ## [1.23.0-panel] - 2026-11-19
 
 ### 新增

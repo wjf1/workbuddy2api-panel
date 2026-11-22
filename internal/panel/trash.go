@@ -114,7 +114,7 @@ func (p *Panel) trashList(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := p.trashItems()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeErrCode(w, http.StatusInternalServerError, "trash_list_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": items})

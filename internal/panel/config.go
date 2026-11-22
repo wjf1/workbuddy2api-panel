@@ -20,7 +20,7 @@ func (p *Panel) getConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := p.cfg.LoadConfig()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "load config: "+err.Error())
+		writeErrCode(w, http.StatusInternalServerError, "config_load_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -39,7 +39,7 @@ func (p *Panel) saveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
+		writeErrCode(w, http.StatusBadRequest, "body_read_failed", err.Error())
 		return
 	}
 	restartRequired, err := p.cfg.SaveConfig(raw)
