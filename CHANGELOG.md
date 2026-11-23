@@ -8,6 +8,17 @@
 
 ### 修复
 
+- **会员档位读取每轮全量 404（面板胶囊不显示、日志刷屏）**：上游 CN 侧
+  `/v2/billing/meter/get-user-resource-summary` 已在网关层下线——POST/GET 均返回
+  `{"error_msg":"404 Route Not Found"}`，而无 `/v2` 的同名路径可达业务层（真实 token
+  实测 200，`data.IsPaidUser` / `data.SubscriptionPackageName` 字段与解析侧同形）。
+  此前 `summaryMeterPaths` 对 CN 只给 `/v2` 单路径、没有 fallback，于是每次余额刷新
+  都撞 404；又因失败不写 `tierFetchedAt`，`TierNeedsFetch` 恒为真，全池每
+  `balance_refresh_minutes`（默认 10 分钟）重试一轮。现两个 realm 统一「无 `/v2` 优先、
+  带 `/v2` 兜底」，仍由 `billingMeterJSON` 的 404-only fallback 生效（401/403 直接
+  返回，不掩盖鉴权失败，也不会把读失败写成 free）。解析侧零改动。新增 4 例测试
+  `summary_paths_test.go`。**同族端点未动**：余额 `/v2/billing/meter/get-user-resource`、
+  签到 `/v2/billing/meter/daily-checkin`、上报 `/v2/report` 的 `/v2` 路径实测仍在。
 - **密钥弹窗按 Enter 触发整页重载**：`#keyVeil` 的单字段表单用
   `<form onsubmit="return false">` 防隐式提交，但该内联事件处理器被页面自身
   CSP（`script-src 'self'`，无 unsafe-inline）**静默拦截**（仅一条 console

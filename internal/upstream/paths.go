@@ -50,8 +50,8 @@ const (
 	dailyCheckinPath   = "/billing/meter/daily-checkin"        // global 首选
 	billingMeterPathV2 = "/v2/billing/meter/get-user-resource" // CN 现状 / global fallback
 
-	billingSummaryPath   = "/billing/meter/get-user-resource-summary"    // 会员档位摘要 global 首选
-	billingSummaryPathV2 = "/v2/billing/meter/get-user-resource-summary" // CN 现状 / global fallback
+	billingSummaryPath   = "/billing/meter/get-user-resource-summary"    // 会员档位摘要首选（两 realm 通用）
+	billingSummaryPathV2 = "/v2/billing/meter/get-user-resource-summary" // 会员档位摘要 fallback（CN 侧已于 2026-11-23 下线）
 	dailyCheckinPathV2   = "/v2/billing/meter/daily-checkin"
 )
 
@@ -74,12 +74,19 @@ func (c *Client) checkinMeterPaths(a *auth.Auth) []string {
 	return []string{dailyCheckinPathV2}
 }
 
-// summaryMeterPaths 会员档位摘要端点的双路径（与 checkinMeterPaths 同形态）。
+// summaryMeterPaths 会员档位摘要端点的候选路径：无 /v2 在前、带 /v2 兜底，
+// **两个 realm 同序**（不再按 realm 分叉）。
+//
+// 2026-11-23 实测（真实 token 直连）：CN 侧 /v2/billing/meter/get-user-resource-summary
+// 已在网关层下线——POST/GET 均 404 Route Not Found；无 /v2 的同名路径可达业务层，
+// 返回 data.IsPaidUser / data.SubscriptionPackageName（与 global 同形，字段名不变），
+// 故解析侧零改动。同族 get-user-resource（余额）与 daily-checkin（签到）的 /v2 路径
+// 仍在（401 可达，有效 token 下业务正常），属该端点**单独**迁移，只有本函数跟着改。
+//
+// 参数 a 保留为与 checkinMeterPaths 等同族签名一致（两 realm 已同序，不再需要判断）。
+// billingMeterJSON 只在 404 时换下一路径，401/403 直接返回——双路径不会掩盖鉴权失败。
 func (c *Client) summaryMeterPaths(a *auth.Auth) []string {
-	if c.globalOn(a) {
-		return []string{billingSummaryPath, billingSummaryPathV2}
-	}
-	return []string{billingSummaryPathV2}
+	return []string{billingSummaryPath, billingSummaryPathV2}
 }
 
 func (c *Client) chatBase(a *auth.Auth) string {
