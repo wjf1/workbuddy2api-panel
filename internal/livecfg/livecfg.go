@@ -9,10 +9,53 @@
 package livecfg
 
 import (
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 )
+
+// KeyGroup 一组密钥分发的配置单元。
+type KeyGroup struct {
+	Name string `json:"name"` // 组名（面板展示与限流分桶标识；空 = "group-N"）
+	Key  string `json:"key"`  // 该组 API key（强度校验同主 api_key；空 = 该组禁用）
+	// Models 组内模型白名单（口径同 Snapshot.ModelWhitelist 未归一化的原始条目：
+	// 裸名两域生效、"cn:x"/"global:x" 单域）。空 = 不限制（全量模型，受全局
+	// Whitelist/Hidden 约束）。
+	Models []string `json:"models"`
+	// RPM 组内每分钟请求数上限（<=0 = 不限）。命中组的请求按组名分桶计数，
+	// 超限 429（独立于全局 RateLimit，两者可同时生效，先触发先生效）。
+	RPM int `json:"rpm"`
+}
+
+// NormalizeKeyGroups 归一化分组条目：丢弃空 key 组、补齐组名缺省值、
+// 预归一化各组模型白名单。返回空切片 = 单密钥模式。
+func NormalizeKeyGroups(in []KeyGroup) []KeyGroup {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]KeyGroup, 0, len(in))
+	for i, g := range in {
+		g.Key = strings.TrimSpace(g.Key)
+		if g.Key == "" {
+			continue
+		}
+		g.Name = strings.TrimSpace(g.Name)
+		if g.Name == "" {
+			g.Name = "group-" + strconv.Itoa(i+1)
+		}
+		out = append(out, g)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// GroupModelSet 返回该组的模型白名单集合（已归一化）；空 = 不限制（nil）。
+func (g KeyGroup) GroupModelSet() map[string]struct{} {
+	return NormalizeHiddenModels(g.Models)
+}
 
 // Snapshot 一次读取的不可变配置视图。
 type Snapshot struct {
@@ -22,6 +65,13 @@ type Snapshot struct {
 	RecordClientInfo     bool                // 请求日志是否记录调用来源（客户端 IP / UA）
 	HiddenModels         map[string]struct{} // 精确隐藏的模型 id（已归一化为 "cn:x"/"global:x" 全量形式）；nil = 不隐藏
 	ModelAliases         map[string]string   // 客户端名 → 真实模型名（键已归一化小写；"cn:x"/"global:x" 前缀键只在该域生效，裸名键两域都生效）；nil = 不映射
+	// ModelWhitelist 模型白名单（已归一化为 "cn:x"/"global:x" 全量形式）；
+	// nil/空 = 不启用（全部可用，老行为）。启用后仅名单内可用，Hidden 在其后叠加。
+	ModelWhitelist map[string]struct{}
+	// KeyGroups 密钥分组分发（空 = 单密钥模式，与现状一致）。每组一个独立 key，
+	// 可绑定模型白名单子集与 RPM 限流；命中组注入请求 ctx 供模型判定与限流分桶。
+	// 主 APIKey 始终有效（管理面/兼容旧客户端）；KeyGroups 是增量分发通道。
+	KeyGroups []KeyGroup
 	// ModelFallback 模型降级路由表（pool.model_fallback）：key = 请求模型（裸名），
 	// value = 6004 模型级限流时改用的等价模型。空/nil = 不降级（老行为）。
 	// 语义：等价模型是同一底层能力的不同计价档（如 deepseek-v4.1-flash →
@@ -86,6 +136,13 @@ func NormalizeHiddenModels(hidden []string) map[string]struct{} {
 		return nil
 	}
 	return out
+}
+
+// NormalizeModelWhitelist 与 NormalizeHiddenModels 同口径归一化白名单条目：
+// 裸名 → 两域都生效；"cn:"/"global:" 前缀 → 只该域。返回 nil = 未启用。
+// 语义与 Hidden 相反：集合非空 = 仅名单内可用（白名单模式），Hidden 再叠加。
+func NormalizeModelWhitelist(whitelist []string) map[string]struct{} {
+	return NormalizeHiddenModels(whitelist)
 }
 
 // NormalizeModelAliases 把用户配置的 aliases 条目（"客户端名=真实模型名"）归一化为查找表。

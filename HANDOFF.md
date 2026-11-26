@@ -75,7 +75,77 @@ data/backups/          备份输出（同上）
 - **数据流**：OAuth 登录或 cockpit 导入 → `auth.Auth` 落盘 `AuthDir` → `Pool.Add` 热加载 → 调度器 / 网关经 `Pool.AuthByUID` 取凭据；移除 → `Pool.Remove` + 凭证移入 `data/trash/`。
 - **单一事实来源**：版本号 = `cmd/server/main.go appVersion`；面板字段契约 = `cockpitAccount`（导入口径）与 `cockpitExportAccount`（导出口径），两侧字段均对齐 cockpit-tools 的 `WorkbuddyAccount` serde 序列化（1.14.0 起含 `tags`）。
 
-## 4. 最近一轮变更与交付成果（前端审计 P2 三项：confirm 迁移 / 轮询门控 / 离线指示，2026-11-22）
+## 4. 最近一轮变更与交付成果（前后端深度审计批次一+二共 10 项，2026-11-26）
+
+### 本轮：竞品对比驱动的前后端深度审计与修复（未发版）
+
+背景：对照 GitHub WorkBuddy 网关 Top10（ithtelab/workbuddy-manager 等）做功能差距
+分析后，对后端 71.6k 行 Go 与前端 7k 行内嵌面板做两轮深度审查，分两个批次落地。
+
+**批次一（快修，6 项）**：
+
+- **B1 导入接口 zip 炸弹防护**（P0）：`importCockpit` 此前 `io.ReadAll` 无上限，
+  加 MaxBytesReader 64MB 整包 + 单文件 32MB + 文件数 64 + zip 条目 512 +
+  解压累计 32MB 五道防线（internal/panel/import.go）。
+- **F2 任务队列轮询卡死**：`q.started=false` 时清定时器并渲染空态（app.js:2961）。
+- **F3 登录/重登轮补可见性门控**：`pollLogin`/`pollRelogin` 补 `document.hidden`。
+- **F1 loadOverview 响应竞态**：请求序号 `overviewReqSeq`，只落地最新响应。
+- **B5 usage.Start 幂等**：`sync.Once` 保护（停机 flush 链路已完整，未新增钩子）。
+- **B7 pool 洗牌同种子**：time-seeded PCG 改 `math/rand/v2` 全局源（Windows 0.5ms
+  时钟粒度下同种子风险）。
+
+**批次二（兼容性+一致性，4 项）**：
+
+- **B2 `stream_options.include_usage` 契约**：客户端声明后上游全流无 usage 帧时
+  合成 `choices=[] + usage` 末帧（观测自 chatStatsReader，无观测不编造）。
+  `upstream.WithUsageInjection` option + handler_chat.go 解析接线。修复 Codex/SDK
+  异常流丢 token 统计。
+- **B4+B8 Responses 台账与错误形态**：`/v1/responses` 与 `/v1/messages/count_tokens`
+  补入 RequestLog/X-Request-Id 分支；`responsesStreamWriter.Write` 拦截 Chat 形态
+  `{"error":...}` 错误体转 `response.failed` 事件（此前静默吞成空回复）。
+- **F4 日志增量渲染**：内容指纹（首/末条+条数）一致跳过 innerHTML 重建，
+  保留选区与滚动。
+- **F5 裸 fetch 归一**：api() 增 `raw:true` 模式（返回原始 Response），
+  导入/导出/备份下载 4 处裸 fetch 统一走封装（401 自动弹密钥框）。
+
+- **验证**：`go build ./...`、`go vet ./...`、gofmt 干净；`go test ./...` 全绿；
+  `node internal/panel/logic_test.js` 139 断言通过。
+
+**批次三（白名单，1 项）**：
+
+- **IP/模型双白名单**（对齐竞品 ithtelab/workbuddy-manager）：
+  - 模型白名单 `models.whitelist`：livecfg 热生效，非空 = 仅名单内可用，
+    判据收敛在 `hiddenModel`（白名单先于黑名单），列表过滤与点名拒绝共用一处。
+  - 来源 IP 白名单 `server.allowed_ips`：CIDR/精确 IP，`ParseAllowedIPs` 启动
+    fail fast；闸门在限流器之前，`/healthz`+`/status` 豁免、回环始终放行。
+  - 新增 `allowip_test.go` 12 个用例（解析 4 + 闸门 7 + 模型判据 4）全 PASS；
+    golden 配置随新字段重新生成（GOGEN_GOLDEN=1），config.example.json 同步。
+
+**批次四（批量纳管，1 项）**：
+
+- **扫码批量纳管**（对齐竞品）：添加弹窗加「批量纳管」折叠区（数量 1..10）。
+  后端 `loginBatchStart`（一次 N 个 OAuth 会话挂同一 batch 号）+ `loginBatchPoll`
+  （按 batch 聚合 pending/done/error）；单号 loginPoll 的落盘段提取为
+  `finalizeLogin` 供两端点共用，`pollLoginState` 提取探针逻辑。为可测性把上游
+  基址改为 `loginBaseURL` 变量注入；新增 `login_batch_test.go`（start/count 上限/
+  poll 聚合落盘回收 3 个用例，mock OAuth 上游 + 假 Transport）全 PASS。
+  前端 `pollBatch` 3s 聚合轮询带 hidden 门控，完成即刷概览不清列表。
+
+**批次五（密钥分组分发，1 项）**：
+
+- **`key_groups` 密钥分组**（对齐竞品核心差异化能力）：livecfg.KeyGroup
+  `{name, key, models, rpm}` + NormalizeKeyGroups；httpauth 新增
+  `VerifyAnyGroup`（常量时间比对，命中返回下标）；withAuth 主 key 优先、
+  分组命中注入 ctx（keyGroupCtxKey），APIKey 空但有分组时跳过主 key 直通。
+  模型收窄走 `hiddenModelForGroup`（chat 点名 + /v1/models 列表共用，nil 组
+  零回归）；组级 RPM 用组名单桶 RateLimiter（懒创建、RPM 热变更自动重建）。
+  新增 `keygroup_test.go` 4 用例（鉴权注入/x-api-key 形态/模型收窄/RPM 429
+  隔离/归一化）全 PASS；golden 重新生成、example 补字段与说明注释。
+- **遗留（竞品差距，未做）**：带签名一键更新（新 updater 包，3-5 天）。
+  第三批另含 upstream 120s 全局超时分级、autoActions 顺序依赖改 DAG、
+  pick() 240 行拆分三个 P2 项。
+
+## 4.0 上一轮（前端审计 P2 三项：confirm 迁移 / 轮询门控 / 离线指示，2026-11-22）
 
 ### 本轮：前端审计 P2 修复（未发版）
 

@@ -18,7 +18,8 @@
     "max_body_mb": 0,
     "rate_limit_rps": 0,
     "rate_limit_burst": 0,
-    "debug_addr": ""
+    "debug_addr": "",
+    "allowed_ips": null
   },
   "cooldown": {
     "soft_rate": "600s",
@@ -98,8 +99,10 @@
   },
   "models": {
     "hidden": null,
-    "aliases": null
+    "aliases": null,
+    "whitelist": null
   },
+  "key_groups": null,
   "prompt": {
     "mode": "passthrough",
     "file": ""

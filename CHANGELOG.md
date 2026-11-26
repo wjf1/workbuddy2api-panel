@@ -6,6 +6,69 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **`stream_options.include_usage` 流式契约补齐**：客户端请求带该字段而上游
+  全流未发 usage 帧（故障/截断/空 choices 流）时，网关在 `[DONE]` 前合成一帧
+  `choices=[] + usage` chunk（usage 取 chatStatsReader 捕获的末帧观测；无观测
+  则不编造）。修复 Codex / 部分 OpenAI SDK 在异常流上丢失 token 统计的问题。
+  落点：upstream/sse.go 新增 `WithUsageInjection` option，server/handler_chat.go
+  解析请求字段并接线。
+- **Responses 流式错误形态转换**：`responsesStreamWriter.Write` 识别 Chat 形态
+  `{"error":...}` 错误体（chatCompletions 轮转失败后的直写输出），降级为
+  `response.failed` 事件 + `[DONE]`，不再被静默吞成「正常 completed 的空回复」。
+- **api() 封装 `raw` 选项**：`api(path,{raw:true})` 返回原始 Response 给
+  二进制/流式场景（导出、备份下载），401 弹密钥框与错误归一化与 JSON 路径一致。
+- **模型白名单 `models.whitelist`**（热生效）：空 = 不启用（与现状一致）；非空后
+  仅名单内模型可用——`GET /v1/models` 只列名单内（再减 Hidden 黑名单），chat
+  点名调用名单外直接拒绝。条目口径与 Hidden 相同（裸名两域生效、`cn:`/`global:`
+  前缀单域生效）；Hidden 在白名单之后叠加，别名映射不能绕过。
+- **来源 IP 白名单 `server.allowed_ips`**（需重启）：CIDR 或精确 IP 条目数组，
+  空 = 不启用。启用后仅命中来源可访问 `/v1/*` 与 `/panel/*`；`/healthz` 与
+  `/status` 豁免（探活不被误拦）；回环地址（127.0.0.0/8、::1）始终放行，本机
+  面板不会把自己锁门外。非法条目启动 fail fast。闸门位于限流器之前，被拒请求
+  不进台账、不耗令牌桶。
+- **扫码批量纳管**（对齐竞品 ithtelab/workbuddy-manager）：添加账号弹窗新增
+  「批量纳管」折叠区，一次发起 1..10 个 OAuth 授权会话（`POST /panel/api/login/
+  batch/start` 返回批次号与各链接），前端 3s 聚合轮询（`GET .../batch/poll`）
+  逐行显示等待/成功/失败；完成的会话复用单号流程的落盘 → 审计基准重置 →
+  热加载 → 签到 → 余额刷新收尾（`finalizeLogin` 提取共享，单号 loginPoll 同步
+  切换到该路径，行为零回归）。会话数上限 `loginBatchMax=10` 防一次打满上游
+  限流；批次会话过期回收与单号同 TTL。
+- **密钥分组分发 `key_groups`**（热生效，对齐竞品「密钥分组分发」）：每组一个
+  独立 API key（`{name, key, models, rpm}`），可绑定组内模型白名单（chat 点名
+  与 `/v1/models` 列表两侧同时收窄，判据收敛在 `hiddenModelForGroup`）与组级
+  RPM 限流（组名单桶共享，超限 429 带组名与 Retry-After）。主 `api_key` 始终
+  有效（管理面/旧客户端）；分组经 `httpauth.VerifyAnyGroup` 常量时间比对命中
+  后注入请求 ctx。`api_key` 为空但配置了分组时鉴权面只剩分组（避免空主 key
+  恒 true 绕过）。归一化丢弃空 key 组、组名缺省补齐 `group-N`。
+
+### 修复
+
+- **导入接口上传放大攻击面**：`importCockpit` 入口加 `MaxBytesReader`（64MB
+  整包硬上限）、单文件 32MB、单次文件数 64、zip 内 json 条目数 512、解压后
+  累计 32MB 五道防线——此前 `io.ReadAll` 无上限，zip 炸弹可撑爆内存。
+- **任务队列轮询偶发卡死**：后端 `q.started=false` 时前端只 `return` 不清
+  `setInterval`，任务中心停在旧状态直到切视图。改为清定时器并渲染空态。
+- **登录/重登轮询无可见性门控**：后台标签页持续打 `login/poll` 至会话过期，
+  两处补 `document.hidden` 判断（与主轮询同口径）。
+- **loadOverview 响应竞态**：5s 轮询与动作后刷新并发时，慢的旧响应覆盖新状态。
+  加请求序号 `overviewReqSeq`，只落地最新响应。
+- **usage.Recorder.Start 无幂等保护**：重复调用会起多个 ticker goroutine 并发
+  flush；加 `sync.Once` 保护（停机 final flush 链路 main.go SIGINT/SIGTERM →
+  defer Stop 已完整，无需新增 signal 钩子）。
+- **pool 等权重洗牌同种子隐患**：每次 pick 新建 time-seeded `rand.NewPCG`，
+  Windows 时钟粒度约 0.5ms 下连续 pick 可能同种子洗牌雷同。改用
+  `math/rand/v2` 并发安全全局源。
+- **日志视图 5s 全量重建**：`loadLogs` 每次轮询整段 `innerHTML` 重绘，清空
+  用户选区、打断阅读。加内容指纹（首/末条 + 条数）比对，一致时跳过重绘。
+- **Responses / count_tokens 不进请求台账**：`/v1/responses` 与
+  `/v1/messages/count_tokens` 此前无 RequestLog 记录、无 X-Request-Id 响应头，
+  与宣称的 OpenAI 兼容口径不一致。ServeHTTP 台账分支补齐两路径。
+- **导入/导出/备份下载绕过 api() 封装**：4 处裸 fetch 自行处理 401（行为与
+  封装不一致，密钥过期时静默失败）。统一走 api()（raw 模式），删除重复的
+  手写 Authorization 头拼装。
+
 ## [1.23.1-panel] - 2026-11-23
 
 ### 修复

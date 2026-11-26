@@ -8,7 +8,8 @@
     "max_body_mb": 0,
     "rate_limit_rps": 0,
     "rate_limit_burst": 0,
-    "debug_addr": ""
+    "debug_addr": "",
+    "allowed_ips": []
   },
   "panel": {
     "package_detail_limit": 5
@@ -97,8 +98,11 @@
   "models": {
     "_comment": "hidden: 不对外暴露的模型黑名单。裸名=两域都藏；\"cn:xxx\"/\"global:xxx\"=只藏该域。/v1/models 列表过滤 + chat 点名拒绝，面板保存后热生效。aliases: 模型映射，条目 \"客户端名=真实模型名\"，键裸名=两域生效、带 cn:/global: 前缀只该域生效，值可带前缀跨域指向；目标仍受 hidden 约束，响应回显客户端原发名。",
     "hidden": [],
-    "aliases": []
+    "aliases": [],
+    "whitelist": []
   },
+  "key_groups": [],
+  "_comment_key_groups": "key_groups 密钥分组分发（可省略）：每组 {name, key, models, rpm}——独立 API key 分发，models 为组内模型白名单（口径同 models.hidden），rpm 为组级每分钟请求上限（0=不限）。主 api_key 始终有效。面板保存后热生效。",
   "prompt": {
     "mode": "passthrough",
     "file": ""

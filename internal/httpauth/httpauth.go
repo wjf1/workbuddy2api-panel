@@ -43,6 +43,40 @@ func VerifyBearer(r *http.Request, key string) bool {
 // key 为空表示"未启用鉴权"，恒返回 true。两种形态都走常量时间比较；凭证缺失
 // 时同样做一次摘要比较，保持耗时形状一致（与 VerifyBearer 同哲学）。
 func VerifyAny(r *http.Request, key string) bool {
+	ok, _ := VerifyAnyGroup(r, key, nil)
+	return ok
+}
+
+// VerifyAnyGroup 与 VerifyAny 同校验逻辑，但支持多密钥（密钥分组分发）：
+// keys 为 nil/空时退化为单一 key（零行为差异，VerifyAny 的直接调用方）。
+// 命中时返回该密钥在 keys 中的下标（单 key 恒 0）；未命中/未启用时返回 -1。
+// 每个候选密钥独立做常量时间比较，与单 key 路径保持同一耗时形状哲学。
+func VerifyAnyGroup(r *http.Request, key string, keys []string) (bool, int) {
+	if len(keys) == 0 {
+		return verifyAnySingle(r, key), 0
+	}
+	tok, has := credentialToken(r)
+	if !has {
+		// 凭证缺失：对每个候选做一次摘要比较，保持耗时形状一致。
+		for _, k := range keys {
+			subtle.ConstantTimeCompare(digest(""), digest(k))
+		}
+		return false, -1
+	}
+	for i, k := range keys {
+		if k == "" {
+			continue
+		}
+		if subtle.ConstantTimeCompare(digest(tok), digest(k)) == 1 {
+			return true, i
+		}
+	}
+	return false, -1
+}
+
+// verifyAnySingle 单密钥路径（VerifyAny 原实现，经分组版重构后保留独立函数：
+// keys 为空时零循环开销，也供 VerifyBearer 的语义对称）。
+func verifyAnySingle(r *http.Request, key string) bool {
 	if key == "" {
 		return true
 	}
@@ -55,6 +89,17 @@ func VerifyAny(r *http.Request, key string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare(digest(tok), digest(key)) == 1
+}
+
+// credentialToken 取出请求的凭证原文（Bearer token 或 x-api-key）与是否存在。
+func credentialToken(r *http.Request) (string, bool) {
+	if authz := r.Header.Get("Authorization"); strings.HasPrefix(authz, bearerPrefix) {
+		return authz[len(bearerPrefix):], true
+	}
+	if tok := r.Header.Get("x-api-key"); tok != "" {
+		return tok, true
+	}
+	return "", false
 }
 
 // digest 返回 s 的 SHA-256（定长 32 字节，供常量时间比较）。
