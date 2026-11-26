@@ -247,6 +247,7 @@ type responsesStreamWriter struct {
 
 	finishReason string
 	startedAt    time.Time
+	failed       bool       // chat 错误体已拦截转为 response.failed（finish 不再发 completed）
 	wmu          sync.Mutex // 与心跳（无）和主写入互斥，防帧撕裂
 }
 
@@ -284,8 +285,27 @@ func (s *responsesStreamWriter) WriteHeader(status int) {
 }
 
 // Write 逐帧解析 OpenAI SSE 并翻译成 Responses 事件。
+//
+// 错误体拦截：delegateChat 的 chatCompletions 在轮转失败后写出的是 Chat 形态
+// {"error":{"message","type","code"}} JSON 体（非 SSE）——直接吞掉会让客户端
+// 看到一条「正常 completed 的空回复」。这里识别该形态并降级为 response.failed
+// 事件，Codex 等客户端按 Responses 协议拿到真实错误。
 func (s *responsesStreamWriter) Write(p []byte) (int, error) {
 	n := len(p)
+	trimmed := strings.TrimSpace(string(p))
+	// Chat 形态错误体（非 SSE）：整段以 {"error": 开头且非 data: 帧。
+	if strings.HasPrefix(trimmed, `{"error"`) {
+		var e struct {
+			Error struct {
+				Message string `json:"message"`
+				Code    string `json:"code"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(trimmed), &e) == nil && e.Error.Message != "" {
+			s.fail(e.Error.Message, e.Error.Code)
+		}
+		return n, nil
+	}
 	for _, line := range strings.Split(string(p), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -301,6 +321,26 @@ func (s *responsesStreamWriter) Write(p []byte) (int, error) {
 		s.handleChunk(payload)
 	}
 	return n, nil
+}
+
+// fail 以 Responses 事件流报告失败：确保流已起头后发 response.failed。
+// 用于 chat 错误体拦截与 finish() 前的兜底（此前该形态被静默吞成空回复）。
+// 不加外层 wmu：ensureStarted/emit 自带锁，重复加锁会死锁。
+func (s *responsesStreamWriter) fail(msg, code string) {
+	s.ensureStarted()
+	s.emit("response.failed", map[string]any{
+		"type": "response.failed",
+		"response": map[string]any{
+			"id":     s.id,
+			"object": "response",
+			"status": "failed",
+			"error": map[string]any{
+				"message": msg,
+				"code":    code,
+			},
+		},
+	})
+	s.failed = true
 }
 
 // handleChunk 解析单个 data 帧并产出对应事件。
@@ -412,6 +452,17 @@ func (s *responsesStreamWriter) handleToolDelta(idx int, id, name, args string) 
 
 // finish 收尾：各 .done 事件 + response.completed + [DONE]。
 func (s *responsesStreamWriter) finish() {
+	if s.failed {
+		// chat 错误体已被 Write 拦截转为 response.failed：补 [DONE] 即收尾，
+		// 不再发 completed（否则客户端同流收到 failed+completed 两个终态）。
+		s.wmu.Lock()
+		_, _ = io.WriteString(s.w, "data: [DONE]\n\n")
+		if s.flusher != nil {
+			s.flusher.Flush()
+		}
+		s.wmu.Unlock()
+		return
+	}
 	if !s.started {
 		s.ensureStarted() // 上游未产出任何帧：兜底发 created+completed，别让客户端挂住
 	}

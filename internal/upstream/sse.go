@@ -502,6 +502,17 @@ type streamOptions struct {
 	// noHeartbeat 禁用本层 SSE 心跳（供上层自带心跳的转换 writer 用——Anthropic
 	// 路径的 anthropicStreamWriter 会把注释帧丢弃，本层心跳纯属白跑且徒增并发面）。
 	noHeartbeat bool
+	// injectUsage 流尾 usage 合成开关：客户端请求带 stream_options.include_usage
+	// 而全流未见 usage 帧时，[DONE] 前补发一帧合成 usage chunk（OpenAI 契约：
+	// 末帧 choices=[] + usage）。usageFn 惰性求值（正常流零开销），返回 nil 不补。
+	injectUsage   bool
+	usageFn       func() map[string]any
+	sawUsageFrame bool
+	usageFrameID  string
+	// frameModel 流内最近一帧的 model（合成 usage 帧回显用）。
+	frameModel string
+	// frameCreated 流内最近一帧的 created（合成 usage 帧回显用）。
+	frameCreated any
 }
 
 // heartbeatSuppressor 由自带心跳的 ResponseWriter 实现以禁用 StreamHint 层心跳
@@ -515,6 +526,21 @@ type heartbeatSuppressor interface{ heartbeatSuppressed() bool }
 // name 为空 = 不挂（零改动）。
 func WithModelEcho(name string) StreamOption {
 	return func(o *streamOptions) { o.echoModel = name }
+}
+
+// WithUsageInjection 声明「客户端请求了 stream_options.include_usage」：流尾未见
+// usage 帧时，[DONE] 前补发一帧合成 usage chunk（choices=[]、usage 取 usageFn 的
+// 惰性快照，nil 返回则不补——无观测数据时不编造）。全流已有 usage 帧时零改动。
+// id 为合成帧的消息 id（空则用流内首帧 id 兜底/哨兵）。
+func WithUsageInjection(id string, usageFn func() map[string]any) StreamOption {
+	return func(o *streamOptions) {
+		if usageFn == nil {
+			return
+		}
+		o.injectUsage = true
+		o.usageFn = usageFn
+		o.usageFrameID = id
+	}
 }
 
 // WithErrorFrameObserver 注册"上游以 error 帧报错"的观察者：透传该帧之前先用
@@ -676,6 +702,18 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 			} else {
 				obj["id"] = firstID
 			}
+			// usage 注入观测：记录是否见过 usage 帧与回显字段（仅开启注入时维护）。
+			if o.injectUsage {
+				if u, ok := obj["usage"].(map[string]any); ok && u != nil {
+					o.sawUsageFrame = true
+				}
+				if m, ok := obj["model"].(string); ok && m != "" {
+					o.frameModel = m
+				}
+				if c, ok := obj["created"]; ok {
+					o.frameCreated = c
+				}
+			}
 			if raw, err := json.Marshal(normalizeFrame(obj)); err == nil {
 				payload = string(raw)
 			}
@@ -748,6 +786,42 @@ readLoop:
 	// 且 writeRaw 的 hintFn 闭包在空流路径下可能携带上一帧的上下文造成误配。
 	if validFrames == 0 {
 		_ = writeRaw(`{"error":{"message":"empty upstream stream","type":"upstream_error","code":"upstream_parse"}}`)
+	}
+	// stream_options.include_usage 契约：客户端请求了 usage 而全流未见 usage 帧
+	// （上游故障/截断/空 choices 流）时，[DONE] 前补发一帧合成 usage chunk——
+	// choices=[] + usage（OpenAI 官方形态）。usageFn 返回 nil（无观测）时不编造。
+	if o.injectUsage && !o.sawUsageFrame && validFrames > 0 {
+		if u := o.usageFn(); u != nil {
+			id := o.usageFrameID
+			if id == "" {
+				id = firstID
+			}
+			if id == "" {
+				id = "chatcmpl-wb2api"
+			}
+			chunk := map[string]any{
+				"id":      id,
+				"object":  "chat.completion.chunk",
+				"created": o.frameCreated,
+				"model":   o.frameModel,
+				"choices": []any{},
+				"usage":   u,
+			}
+			if chunk["created"] == nil {
+				chunk["created"] = time.Now().Unix()
+			}
+			if o.echoModel != "" {
+				chunk["model"] = o.echoModel
+			}
+			if raw, err := json.Marshal(chunk); err == nil {
+				wmu.Lock()
+				if _, werr := io.WriteString(w, "data: "+string(raw)+"\n\n"); werr == nil && fl != nil {
+					fl.Flush()
+				}
+				wmu.Unlock()
+				touchWrite()
+			}
+		}
 	}
 	// 保证恰好写一个 [DONE]（上游漏发时兜底补上）。同走 wmu：此刻心跳
 	// goroutine 仍在运行（hbDone 的 defer close 要等本函数返回），裸写存在并发窗口。

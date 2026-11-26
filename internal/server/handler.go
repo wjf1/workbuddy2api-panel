@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
@@ -109,6 +111,10 @@ type Config struct {
 	// 构造，按 TCP 对端主机做令牌桶；只作用于 /v1/* 四个推理端点，
 	// 不含 /status 与 /healthz（监控/探活被限流会被误判成服务挂了）。
 	RateLimit *RateLimiter
+	// AllowedNets 入站来源 IP 白名单（nil/空 = 不启用）。启用后仅命中来源可访问
+	// /v1/* 与 /panel/*；/healthz 与 /status 不受限。回环地址始终放行。
+	// 由 server.ParseAllowedIPs 从 config server.allowed_ips 构建，改动需重启。
+	AllowedNets []*net.IPNet
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -131,11 +137,36 @@ func (h *Handler) loadLive() livecfg.Snapshot {
 // （cn 对话列表 / global 对话列表 / chat 点名）共用本判据，避免各写一份 map 查表
 // 而漏掉某一处——漏一处就等于黑名单可被绕过（只藏列表不够，知道名字仍可硬调）。
 func (h *Handler) hiddenModel(realm, bare string) bool {
+	return h.hiddenModelForGroup(nil, realm, bare)
+}
+
+// hiddenModelForGroup 与 hiddenModel 同判据，叠加密钥分组约束：
+// 命中分组且组内 Models 非空时，仅组内白名单可见（在全局 Whitelist/Hidden 之后
+// 再收窄——全局不可用的组内也不可见；全局可用的组内未列同样被拒）。
+// g 为 nil（主 key / 无鉴权）时与 hiddenModel 完全一致，零行为差异。
+func (h *Handler) hiddenModelForGroup(g *livecfg.KeyGroup, realm, bare string) bool {
 	if bare == "" {
 		return false
 	}
-	_, hide := h.loadLive().HiddenModels[realm+":"+bare]
-	return hide
+	live := h.loadLive()
+	// 白名单模式（models.whitelist 非空）：仅名单内可用，Hidden 再叠加。
+	if len(live.ModelWhitelist) > 0 {
+		if _, ok := live.ModelWhitelist[realm+":"+bare]; !ok {
+			return true
+		}
+	}
+	if _, hide := live.HiddenModels[realm+":"+bare]; hide {
+		return true
+	}
+	// 分组收窄：组内 Models 非空 = 仅组内可用。
+	if g != nil {
+		if set := g.GroupModelSet(); len(set) > 0 {
+			if _, ok := set[realm+":"+bare]; !ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // modelAlias 查 aliases 映射：客户端名（剥 realm 前缀后的裸名，大小写不敏感）
@@ -210,6 +241,10 @@ type Handler struct {
 	// 是上游服务端队列水位（与账号、模型都无关）→ 首次命中即 fail-fast 终止轮转，
 	// 账号侧零惩罚。进程内状态、重启清零；任一请求成功即清除。
 	upstreamQueue queueGate
+	// groupRate 密钥分组的组级 RPM 限流器（组名 → 令牌桶），懒创建；
+	// RPM 热更新变化时旧桶过期重建。
+	groupRateMu sync.Mutex
+	groupRate   map[string]*RateLimiter
 }
 
 // NewHandler 构建 handler。
@@ -259,12 +294,17 @@ func NewHandler(cfg Config) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 来源 IP 白名单在限流之前：被拒的请求既不进台账也不消耗令牌桶。
+	if !h.allowIP(w, r) {
+		return
+	}
 	// 限流在最外层：被拒的请求不进台账、不占用 X-Request-Id、不消耗选号。
 	if !h.allowRate(w, r) {
 		return
 	}
 	if h.cfg.RequestLog != nil && r.Method == http.MethodPost &&
-		(r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/messages") {
+		(r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/messages" ||
+			r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/messages/count_tokens") {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now()}
 		if h.loadLive().RecordClientInfo {
 			trace.captureClientInfo(r)
@@ -284,6 +324,95 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// allowIP 来源 IP 白名单闸门。未配置（nil/空）恒放行——热路径零开销。
+// /healthz 与 /status 不受限（探活被拦会被误判成服务挂了）；回环地址始终放行
+// （本机面板与回环客户端不被自己锁门外）。返回 false 时已写好 403。
+func (h *Handler) allowIP(w http.ResponseWriter, r *http.Request) bool {
+	if len(h.cfg.AllowedNets) == 0 {
+		return true
+	}
+	if r.URL.Path == "/healthz" || r.URL.Path == "/status" {
+		return true
+	}
+	ipStr, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ipStr = r.RemoteAddr
+	}
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return true // 解析失败不拦（Unix socket 等非常规来源交后续鉴权把关）
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	for _, n := range h.cfg.AllowedNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	writeOpenAIError(w, http.StatusForbidden, "ip_not_allowed", "source IP is not in the gateway allowlist")
+	return false
+}
+
+// ParseAllowedIPs 把 config server.allowed_ips 条目（CIDR 或精确 IP）解析为
+// []*net.IPNet。空/空白条目跳过；非法条目返回错误（启动 fail fast）。
+func ParseAllowedIPs(entries []string) ([]*net.IPNet, error) {
+	var out []*net.IPNet
+	for _, e := range entries {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if strings.Contains(e, "/") {
+			_, n, err := net.ParseCIDR(e)
+			if err != nil {
+				return nil, fmt.Errorf("allowed_ips: invalid CIDR %q: %w", e, err)
+			}
+			out = append(out, n)
+			continue
+		}
+		ip := net.ParseIP(e)
+		if ip == nil {
+			return nil, fmt.Errorf("allowed_ips: invalid IP %q", e)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return out, nil
+}
+
+// allowGroupRate 组内 RPM 限流：按「组名」分桶（同组多客户端共享额度——
+// 分组语义本来就是发给一个调用方的配额，不是单客户端速率）。组限流器按需
+// 懒创建（配置热更新后 RPM 变化时旧桶自然过期重建）。
+func (h *Handler) allowGroupRate(w http.ResponseWriter, r *http.Request, g *livecfg.KeyGroup) bool {
+	h.groupRateMu.Lock()
+	if h.groupRate == nil {
+		h.groupRate = map[string]*RateLimiter{}
+	}
+	rl, ok := h.groupRate[g.Name]
+	if !ok || rl.rps != float64(g.RPM)/60 {
+		rl = NewRateLimiter(float64(g.RPM)/60, g.RPM)
+		h.groupRate[g.Name] = rl
+	}
+	h.groupRateMu.Unlock()
+
+	okRate, retry := rl.Allow(g.Name) // 组级单桶：组名即键，全组共享
+	if okRate {
+		return true
+	}
+	secs := int(retry.Seconds() + 0.999)
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_exceeded",
+		"key group "+strconv.Quote(g.Name)+" rate limit exceeded ("+strconv.Itoa(g.RPM)+" rpm); retry after "+strconv.Itoa(secs)+"s")
+	return false
 }
 
 // allowRate 入站限流闸门。未配置限流器时恒放行——只多一次 nil 判断，热路径无感。
@@ -315,18 +444,55 @@ func (h *Handler) allowRate(w http.ResponseWriter, r *http.Request) bool {
 
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !httpauth.VerifyAny(r, h.loadLive().APIKey) {
-			// Anthropic 面用 Anthropic 错误体（Claude Code / ZCode 按其协议解析）。
-			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
-				writeAnthropicError(w, http.StatusUnauthorized, "authentication_error",
-					"missing or invalid API key (send x-api-key or Authorization: Bearer)")
+		live := h.loadLive()
+		// 主 key 校验（管理面/旧客户端恒走这里）。APIKey 为空且配置了分组时
+		// 跳过主 key 直通（VerifyAny 空 key 恒 true 会让分组形同虚设）：
+		// 此时鉴权面只剩「命中任一分组」，未命中走下方 401。
+		if live.APIKey != "" || len(live.KeyGroups) == 0 {
+			if httpauth.VerifyAny(r, live.APIKey) {
+				next(w, r)
 				return
 			}
-			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
+		}
+		// 分组 key 校验（密钥分组分发）：命中组注入 ctx，后续模型判定与限流分桶。
+		if len(live.KeyGroups) > 0 {
+			keys := make([]string, len(live.KeyGroups))
+			for i, g := range live.KeyGroups {
+				keys[i] = g.Key
+			}
+			if ok, idx := httpauth.VerifyAnyGroup(r, "", keys); ok {
+				g := live.KeyGroups[idx]
+				// 组内 RPM 限流（独立于全局 RateLimit，先触发先生效）。
+				if g.RPM > 0 {
+					if !h.allowGroupRate(w, r, &g) {
+						return
+					}
+				}
+				r = r.WithContext(context.WithValue(r.Context(), keyGroupCtxKey{}, &g))
+				next(w, r)
+				return
+			}
+		} else {
+			// 无分组时也走一次分组比较（空 keys 退化为对 "" 的比较），保持耗时形状。
+			_, _ = httpauth.VerifyAnyGroup(r, "", nil)
+		}
+		// Anthropic 面用 Anthropic 错误体（Claude Code / ZCode 按其协议解析）。
+		if strings.HasPrefix(r.URL.Path, "/v1/messages") {
+			writeAnthropicError(w, http.StatusUnauthorized, "authentication_error",
+				"missing or invalid API key (send x-api-key or Authorization: Bearer)")
 			return
 		}
-		next(w, r)
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 	}
+}
+
+// keyGroupCtxKey 命中密钥分组的 ctx 键（withAuth 注入，hiddenModel/allowRate 消费）。
+type keyGroupCtxKey struct{}
+
+// keyGroupFrom 取请求命中的密钥分组；未命中（主 key 或无鉴权）返回 nil。
+func keyGroupFrom(r *http.Request) *livecfg.KeyGroup {
+	g, _ := r.Context().Value(keyGroupCtxKey{}).(*livecfg.KeyGroup)
+	return g
 }
 
 // sanitizePassthroughHeader 入站透传头白名单：8-128 个可打印 ASCII（0x21-0x7E）。

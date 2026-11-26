@@ -48,11 +48,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var peek struct {
 		Stream bool   `json:"stream"`
 		Model  string `json:"model"`
+		// StreamOptions 只识别 include_usage（OpenAI 流式契约：客户端声明后
+		// 末帧须带 usage chunk；上游缺失时网关合成，见 WithUsageInjection）。
+		StreamOptions *struct {
+			IncludeUsage bool `json:"include_usage"`
+		} `json:"stream_options"`
 		// Tools 只用来数「客户端声明了几个工具」（issue #44 静默回合判据之一），
 		// 条目内容本身不用，声明了才解析、随请求结束即回收。
 		Tools []json.RawMessage `json:"tools"`
 	}
 	_ = json.Unmarshal(body, &peek)
+	clientIncludeUsage := peek.StreamOptions != nil && peek.StreamOptions.IncludeUsage
 
 	// realm 前缀解析（D6）：model 名可能带 "[realm:]" 前缀。剥出 realm + bareModel，
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
@@ -116,7 +122,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// models.hidden 黑名单：点名调用直接拒绝，不打上游、不占选号。
 	// 与 /v1/models 的列表过滤对称（只藏列表不够，知道名字仍可硬调）。
 	// realm/bareModel 此处已是**映射后**的真实名——别名不能绕过黑名单。
-	if h.hiddenModel(realm, bareModel) {
+	// 命中密钥分组时叠加组内白名单收窄（见 hiddenModelForGroup）。
+	if h.hiddenModelForGroup(keyGroupFrom(r), realm, bareModel) {
 		writeOpenAIErrorHint(w, http.StatusBadRequest, "model_unavailable",
 			"model is hidden by gateway configuration, try another model", "")
 		st.status = http.StatusBadRequest
@@ -709,12 +716,40 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 组装请求上下文做判定）。
 			// errFrame：上游 error 帧原文（观察者旁路采集），用于流尾的账号处置。
 			var errFrame string
-			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
-				return h.hintContext(bareModel, reqHasImage)
-			}), upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }),
+			streamOpts := []upstream.StreamOption{
+				upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }),
 				// 模型名回显（models.aliases）：映射请求的帧内 model 覆写回客户端
 				// 原发名；modelEcho 为空（未映射）时 StreamHint 侧零改动。
-				upstream.WithModelEcho(modelEcho))
+				upstream.WithModelEcho(modelEcho),
+			}
+			if clientIncludeUsage {
+				// stream_options.include_usage 契约：上游全流未给 usage 帧时
+				// 用 stats 捕获的末帧观测合成（无观测则不补，不编造零值）。
+				st := stats
+				streamOpts = append(streamOpts, upstream.WithUsageInjection("", func() map[string]any {
+					ud := st.Usage()
+					u := map[string]any{}
+					if ud.HasPromptTokens {
+						u["prompt_tokens"] = ud.PromptTokens
+					}
+					if ud.HasCompletionTokens {
+						u["completion_tokens"] = ud.CompletionTokens
+					}
+					if ud.HasTotalTokens {
+						u["total_tokens"] = ud.TotalTokens
+					}
+					if len(u) == 0 {
+						return nil
+					}
+					if !ud.HasTotalTokens && ud.HasPromptTokens && ud.HasCompletionTokens {
+						u["total_tokens"] = ud.PromptTokens + ud.CompletionTokens
+					}
+					return u
+				}))
+			}
+			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
+				return h.hintContext(bareModel, reqHasImage)
+			}), streamOpts...)
 			switch {
 			case upstream.IsEmptyStreamError(sErr):
 				// 上游 200 但空流（0 有效帧）：StreamHint 已写 error 帧 + [DONE]
