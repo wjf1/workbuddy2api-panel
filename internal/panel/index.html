@@ -1760,6 +1760,16 @@ legend { font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; padding
         </div>
         <div id="addDone" class="state ok" hidden></div>
         <div id="addErr" class="state err" hidden></div>
+        <!-- 批量扫码纳管：一次发起多个授权会话，逐行显示状态 -->
+        <details id="addBatch" style="margin-top:10px">
+          <summary style="cursor:pointer;font-size:var(--fs-sm);color:var(--ink-2)">批量纳管（一次最多 10 个账号）</summary>
+          <div class="realm-row" style="margin-top:6px">
+            <span class="hint" style="font-size:var(--fs-sm)">数量：</span>
+            <input id="batchCount" type="number" min="1" max="10" value="3" style="width:56px">
+            <button id="btnBatchStart">发起批量授权</button>
+          </div>
+          <div id="batchList" style="margin-top:6px"></div>
+        </details>
       </div>
       <!-- 导入 JSON -->
       <div id="addTabImport" class="tab-panel" hidden>

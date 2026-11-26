@@ -188,6 +188,9 @@ const loginTTL = 15 * time.Minute
 type loginSession struct {
 	created time.Time
 	realm   string // "cn" / "global"，缺省 cn
+	// batch 批量纳管批次号（loginBatchStart 创建；空 = 单账号添加流程）。
+	// 批量 poll 按它聚合状态；完成/过期清理同单号流程。
+	batch string
 }
 
 // New 构建面板。
@@ -225,6 +228,9 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/login/start", p.withAuth(p.loginStart))
 	p.mux.HandleFunc("GET /panel/api/login/poll", p.withAuth(p.loginPoll))
 	p.mux.HandleFunc("GET /panel/api/login/regions", p.withAuth(p.loginRegions))
+	// 批量扫码纳管：一次发起 N 个 OAuth 会话（上限 loginBatchMax），前端聚合轮询。
+	p.mux.HandleFunc("POST /panel/api/login/batch/start", p.withAuth(p.loginBatchStart))
+	p.mux.HandleFunc("GET /panel/api/login/batch/poll", p.withAuth(p.loginBatchPoll))
 	p.mux.HandleFunc("POST /panel/api/import/cockpit", p.withAuth(p.importCockpit))
 	p.mux.HandleFunc("GET /panel/api/export/cockpit", p.withAuth(p.exportCockpit))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/revive", p.withAuth(p.accountRevive))
