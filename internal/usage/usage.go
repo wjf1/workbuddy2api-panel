@@ -91,9 +91,10 @@ type Recorder struct {
 	dirty   bool
 	started time.Time
 
-	stopOnce sync.Once
-	stop     chan struct{}
-	done     chan struct{}
+	stopOnce  sync.Once
+	startOnce sync.Once
+	stop      chan struct{}
+	done      chan struct{}
 }
 
 // New 创建记录器。path 为空时禁用落盘（纯内存，测试用）。
@@ -113,28 +114,30 @@ func New(path string) *Recorder {
 	return r
 }
 
-// Start 启动后台防抖落盘与折叠。Stop 前一直运行。
+// Start 启动后台防抖落盘与折叠。Stop 前一直运行。幂等：重复调用安全（首次生效）。
 func (r *Recorder) Start() {
-	go func() {
-		defer close(r.done)
-		t := time.NewTicker(flushInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-r.stop:
-				r.flush(true)
-				return
-			case <-t.C:
-				r.mu.Lock()
-				n := len(r.buckets)
-				r.mu.Unlock()
-				if n > maxBuckets {
-					r.Rollup(time.Now())
+	r.startOnce.Do(func() {
+		go func() {
+			defer close(r.done)
+			t := time.NewTicker(flushInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-r.stop:
+					r.flush(true)
+					return
+				case <-t.C:
+					r.mu.Lock()
+					n := len(r.buckets)
+					r.mu.Unlock()
+					if n > maxBuckets {
+						r.Rollup(time.Now())
+					}
+					r.flush(false)
 				}
-				r.flush(false)
 			}
-		}
-	}()
+		}()
+	})
 }
 
 // Stop 停止后台循环并做最后一次落盘。

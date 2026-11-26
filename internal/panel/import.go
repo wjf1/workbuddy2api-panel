@@ -58,6 +58,9 @@ type cockpitAccount struct {
 // 多负载（zip / 多文件）时单个负载失败只记 errors 不阻断其余。
 // 返回 {ok, total, imported, skipped, errors}。
 func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
+	// 上传体硬上限：ParseMultipartForm 只限内存暂存部分，超大文件会转磁盘临时
+	// 文件后继续被 io.ReadAll 全量读回内存。这里在入口处封顶，超限直接 400。
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportUpload)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeErr(w, http.StatusBadRequest, "parse form: "+err.Error())
 		return
@@ -65,6 +68,10 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 	fhs := r.MultipartForm.File["file"]
 	if len(fhs) == 0 {
 		writeErr(w, http.StatusBadRequest, "missing file field")
+		return
+	}
+	if len(fhs) > maxImportFiles {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("too many files: %d > %d", len(fhs), maxImportFiles))
 		return
 	}
 
@@ -76,10 +83,14 @@ func (p *Panel) importCockpit(w http.ResponseWriter, r *http.Request) {
 			units = append(units, payloadFile{Name: fh.Filename, Err: err})
 			continue
 		}
-		raw, err := io.ReadAll(f)
+		raw, err := io.ReadAll(io.LimitReader(f, maxImportFile+1))
 		f.Close()
 		if err != nil {
 			units = append(units, payloadFile{Name: fh.Filename, Err: err})
+			continue
+		}
+		if len(raw) > maxImportFile {
+			units = append(units, payloadFile{Name: fh.Filename, Err: fmt.Errorf("file too large: > %d bytes", maxImportFile)})
 			continue
 		}
 		fs, err := expandPayloadFile(fh.Filename, raw)
@@ -247,6 +258,19 @@ func validImportUID(uid string) bool {
 // ParseMultipartForm 的 32MB 上限兜底）。
 const maxImportEntry = 4 << 20
 
+const (
+	// maxImportUpload 整个 multipart 请求体硬上限（入口 MaxBytesReader）。
+	maxImportUpload = 64 << 20
+	// maxImportFile 单个上传文件读取上限（超限拒绝，防单文件撑爆内存）。
+	maxImportFile = 32 << 20
+	// maxImportFiles 单次请求允许的文件数上限。
+	maxImportFiles = 64
+	// maxImportEntries zip 内允许的 json 条目数上限（防条目数炸弹）。
+	maxImportEntries = 512
+	// maxImportTotalRaw zip 解包后累计字节上限（防高压缩比炸弹）。
+	maxImportTotalRaw = 32 << 20
+)
+
 // payloadFile 一个待解析的 JSON 负载单元（来源名 + 字节）。
 // Err 非 nil：该单元在展开/读取阶段失败，调用方记错跳过。
 type payloadFile struct {
@@ -267,6 +291,7 @@ func expandPayloadFile(name string, raw []byte) ([]payloadFile, error) {
 		return nil, fmt.Errorf("invalid zip: %w", err)
 	}
 	var out []payloadFile
+	var totalRaw int64
 	for _, f := range zr.File {
 		base := path.Base(f.Name)
 		if f.FileInfo().IsDir() ||
@@ -274,6 +299,9 @@ func expandPayloadFile(name string, raw []byte) ([]payloadFile, error) {
 			strings.HasPrefix(base, "._") ||
 			!strings.HasSuffix(strings.ToLower(f.Name), ".json") {
 			continue
+		}
+		if len(out) >= maxImportEntries {
+			return nil, fmt.Errorf("zip has too many entries: > %d", maxImportEntries)
 		}
 		rc, err := f.Open()
 		if err != nil {
@@ -285,6 +313,10 @@ func expandPayloadFile(name string, raw []byte) ([]payloadFile, error) {
 		if err != nil {
 			out = append(out, payloadFile{Name: f.Name, Err: err})
 			continue
+		}
+		totalRaw += int64(len(data))
+		if totalRaw > maxImportTotalRaw {
+			return nil, fmt.Errorf("zip decompressed size exceeds limit: > %d bytes", maxImportTotalRaw)
 		}
 		out = append(out, payloadFile{Name: f.Name, Data: data})
 	}

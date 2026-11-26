@@ -92,6 +92,8 @@ addEventListener('keydown', e => {
 let theme = lsGet(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
+/* overviewReqSeq 防竞态：5s 轮询与动作后刷新可并发，慢的旧响应不得覆盖新状态。 */
+let overviewReqSeq = 0;
 let logPin = true, loginState = null, loginTimer = null, loginCloseTimer = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
@@ -131,9 +133,18 @@ async function api(path, opts = {}) {
   const h = Object.assign({}, opts.headers || {});
   const k = lsGet(LS_KEY);
   if (k) h['Authorization'] = 'Bearer ' + k;
-  if (opts.body) h['Content-Type'] = 'application/json';
+  if (opts.body && !(opts.body instanceof FormData)) h['Content-Type'] = 'application/json';
   const r = await fetch('/panel/api/' + path, Object.assign({}, opts, { headers: h }));
   if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
+  // raw：调用方要自己消费 Response（导出/下载/导入等二进制或流式场景），
+  // 只做 401 归一与 ok 检查，不强制 json 解析。
+  if (opts.raw) {
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || ('HTTP ' + r.status));
+    }
+    return r;
+  }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
   return d;
@@ -639,8 +650,10 @@ async function loadOverview(quiet) {
   // 静默轮询遇闸门直接跳过：比「重绘后恢复焦点」更稳——不重绘就不会丢焦点、
   // 丢勾选、丢滚动。主动刷新（quiet=false）不受闸门限制。
   if (quiet && pollPaused()) return;
+  const reqSeq = ++overviewReqSeq;
   try {
     const d = await api('overview');
+    if (reqSeq !== overviewReqSeq) return; // 已有更新的请求发出，丢弃这份旧响应
     markPoll(true);
     overviewData = d;
     $('sTotal').textContent = d.total;
@@ -1546,6 +1559,11 @@ $('btnModels').onclick = loadModels;
 
 /* ── 日志（频道：全部/任务/对话/系统） ─────────────────────────────── */
 let logCh = 'all';
+/* logRenderedKey 已渲染日志的指纹（首条 ts+text / 条数 / 末条 ts+text）：
+   5s 轮询整段 innerHTML 重建会清空用户选中的文本、打断阅读；指纹一致时跳过重绘。
+   日志是 append-only 的环形缓冲，这三元组相同 ⇒ 内容相同（同容量下新条目必然
+   改变末条；清缓冲/换频道时条数与首条同时变）。 */
+let logRenderedKey = '';
 $('logChips').addEventListener('click', ev => {
   const b = ev.target.closest('button[data-ch]');
   if (!b) return;
@@ -1576,15 +1594,22 @@ async function loadLogs() {
     const recent = archiveOn ? (requestRows.entries || []) : (metrics.recent || []);
     renderRequestMetrics(metrics, recent);
     const entries = (d.entries || []).filter(e => logCh === 'all' || e.ch === logCh);
-    box.innerHTML = entries.length
-      ? entries.map(e => {
-        const lvl = /error|失败|错误/.test(e.text) ? ' e' : /warn|冷却|熔断/.test(e.text) ? ' w' : '';
-        const t = e.ts ? new Date(e.ts).toLocaleTimeString('zh-CN', { hour12: false }) : '';
-        const ch = logCh === 'all' ? '<i class="lch c-' + esc(e.ch) + '">' + ({ task: '任务', chat: '对话', sys: '系统' }[e.ch] || esc(e.ch)) + '</i>' : '';
-        return '<span class="ln' + lvl + '">' + ch + esc(t + ' ' + e.text) + '</span>';
-      }).join('')
-      : '<span style="color:var(--ink-3)">暂无日志</span>';
-    if (logPin && atEnd) box.scrollTop = box.scrollHeight;
+    // 增量渲染：内容指纹一致时跳过 innerHTML 重建（5s 轮询下大多数时候日志没变），
+    // 保留用户的文本选区与滚动位置；变化时才整段重绘并维持吸底。
+    const fk = entries.length + '|' + (entries[0] ? entries[0].ts + entries[0].text : '') +
+      '|' + (entries[entries.length - 1] ? entries[entries.length - 1].ts + entries[entries.length - 1].text : '');
+    if (fk !== logRenderedKey) {
+      logRenderedKey = fk;
+      box.innerHTML = entries.length
+        ? entries.map(e => {
+          const lvl = /error|失败|错误/.test(e.text) ? ' e' : /warn|冷却|熔断/.test(e.text) ? ' w' : '';
+          const t = e.ts ? new Date(e.ts).toLocaleTimeString('zh-CN', { hour12: false }) : '';
+          const ch = logCh === 'all' ? '<i class="lch c-' + esc(e.ch) + '">' + ({ task: '任务', chat: '对话', sys: '系统' }[e.ch] || esc(e.ch)) + '</i>' : '';
+          return '<span class="ln' + lvl + '">' + ch + esc(t + ' ' + e.text) + '</span>';
+        }).join('')
+        : '<span style="color:var(--ink-3)">暂无日志</span>';
+      if (logPin && atEnd) box.scrollTop = box.scrollHeight;
+    }
     const counts = {};
     for (const e of (d.entries || [])) counts[e.ch] = (counts[e.ch] || 0) + 1;
     $('logNote').textContent = logCh === 'all'
@@ -1946,6 +1971,7 @@ function startAddLogin() {
 function stopPoll() { if (loginTimer) { clearInterval(loginTimer); loginTimer = null; } }
 async function pollLogin() {
   if (!loginState) return;
+  if (document.hidden) return; // 后台标签页跳过，省无效请求（主轮询同口径）
   try {
     const r = await api('login/poll?state=' + encodeURIComponent(loginState));
     if (r.done) {
@@ -1964,10 +1990,72 @@ async function pollLogin() {
 }
 function closeAdd() {
   stopPoll();
+  stopBatchPoll();
   if (loginCloseTimer) { clearTimeout(loginCloseTimer); loginCloseTimer = null; } // 手动关闭清定时器：防旧定时器误关下一次打开的弹窗
   loginState = null;
   hideVeil('addVeil');
 }
+
+/* ── 批量扫码纳管 ─────────────────────────────────────────────────── */
+let batchId = null, batchTimer = null, batchDoneCount = 0;
+function stopBatchPoll() { if (batchTimer) { clearInterval(batchTimer); batchTimer = null; } }
+$('btnBatchStart').onclick = async () => {
+  const realm = (document.querySelector('input[name="addRealm"]:checked') || {}).value || 'cn';
+  const count = Math.max(1, Math.min(10, parseInt($('batchCount').value, 10) || 3));
+  $('btnBatchStart').disabled = true;
+  try {
+    const r = await api('login/batch/start', { method: 'POST', body: JSON.stringify({ realm, count }) });
+    batchId = r.batch;
+    batchDoneCount = 0;
+    renderBatchList((r.sessions || []).map(s => ({ state: s.state, url: s.url, status: 'pending', message: '等待扫码授权' })));
+    if (r.errors && r.errors.length) toast('部分会话发起失败：' + r.errors.length + ' 个（详见列表）', 'err');
+    stopBatchPoll();
+    batchTimer = setInterval(pollBatch, 3000);
+  } catch (e) {
+    toast('批量发起失败：' + e.message, 'err');
+  } finally {
+    $('btnBatchStart').disabled = false;
+  }
+};
+function renderBatchList(items) {
+  const box = $('batchList');
+  box.innerHTML = items.map((it, i) => {
+    const cls = it.status === 'done' ? 'ok' : it.status === 'error' ? 'err' : '';
+    const label = it.status === 'done' ? '✓ 已添加 ' + esc(it.nickname || it.uid || '')
+      : it.status === 'error' ? '✗ ' + esc(it.message || '失败')
+      : '<span class="dots">等待授权</span>';
+    return '<div class="state ' + cls + '" style="display:flex;gap:8px;align-items:center;padding:4px 0" data-state="' + esc(it.state) + '">' +
+      '<span>#' + (i + 1) + '</span>' +
+      (it.url && it.status === 'pending'
+        ? ' <a href="' + esc(it.url) + '" target="_blank" rel="noopener">授权链接</a>'
+        : '') +
+      '<span class="grow"></span><span>' + label + '</span></div>';
+  }).join('');
+}
+async function pollBatch() {
+  if (!batchId) return;
+  if (document.hidden) return; // 与登录轮询同口径：后台标签页跳过
+  try {
+    const r = await api('login/batch/poll?batch=' + encodeURIComponent(batchId));
+    markPoll(true);
+    const items = (r.items || []).map(it => ({
+      state: it.state,
+      url: it.status === 'pending' ? ($('batchList').querySelector('[data-state="' + it.state + '"] a') || {}).href : '',
+      status: it.status, uid: it.uid, nickname: it.nickname, message: it.message,
+    }));
+    renderBatchList(items);
+    const done = items.filter(i => i.status === 'done').length;
+    if (done > batchDoneCount) {
+      batchDoneCount = done;
+      loadOverview(true); // 有账号落盘即刷新概览（不清空本批量列表）
+    }
+    if (r.finished || (items.length && items.every(i => i.status !== 'pending'))) {
+      stopBatchPoll();
+      if (done > 0) toast('批量纳管完成：成功 ' + done + ' 个', 'ok');
+    }
+  } catch (e) { markPoll(false); }
+}
+
 $('btnCloseAdd').onclick = closeAdd;
 registerVeilCloser('addVeil', closeAdd);
 $('btnStartLogin').onclick = startAddLogin;
@@ -2015,6 +2103,7 @@ function startRelogin() {
 function stopReloginPoll() { if (reloginTimer) { clearInterval(reloginTimer); reloginTimer = null; } }
 async function pollRelogin() {
   if (!reloginState) return;
+  if (document.hidden) return; // 后台标签页跳过（与 pollLogin 同口径）
   try {
     const r = await api('login/poll?state=' + encodeURIComponent(reloginState));
     if (!r.done) return;
@@ -2057,13 +2146,9 @@ $('importFile').onchange = async () => {
   $('importDone').hidden = true; $('importErr').hidden = true;
   const fd = new FormData();
   for (const f of files) fd.append('file', f);
-  const h = {};
-  const k = lsGet(LS_KEY);
-  if (k) h['Authorization'] = 'Bearer ' + k;
   try {
-    const r = await fetch('/panel/api/import/cockpit', { method: 'POST', body: fd, headers: h });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    // 走 api() 统一封装：401 自动弹密钥框、错误归一（FormData 时 api() 不设 Content-Type）。
+    const d = await api('import/cockpit', { method: 'POST', body: fd });
     $('importDone').hidden = false;
     $('importDone').textContent = '导入完成：成功 ' + d.imported + ' 个' + (d.skipped ? '，跳过 ' + d.skipped + ' 个' : '');
     if (d.errors && d.errors.length) {
@@ -2196,12 +2281,7 @@ $('btnDoExport').onclick = async () => {
   } finally { b.disabled = false; b.textContent = '导出选中'; }
 };
 async function fetchExportJson(qs) {
-  const h = {};
-  const k = lsGet(LS_KEY);
-  if (k) h['Authorization'] = 'Bearer ' + k;
-  const r = await fetch('/panel/api/export/cockpit' + qs, { headers: h });
-  if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
-  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const r = await api('export/cockpit' + qs, { raw: true });
   const d = await r.json();
   if (!Array.isArray(d)) throw new Error('响应不是账号数组');
   return d;
@@ -2349,12 +2429,7 @@ $('backupList').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-ba]');
   if (!b) return;
   try {
-    const h = {};
-    const k = lsGet(LS_KEY);
-    if (k) h['Authorization'] = 'Bearer ' + k;
-    const r = await fetch('/panel/api/backup/' + encodeURIComponent(b.dataset.ba) + '/download', { headers: h });
-    if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const r = await api('backup/' + encodeURIComponent(b.dataset.ba) + '/download', { raw: true });
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2958,7 +3033,7 @@ function startQueuePolling() {
   queueTimer = setInterval(async () => {
     let q;
     try { q = await api('tasks/queue'); markPoll(true); } catch (e) { markPoll(false); return; }
-    if (!q.started) return;
+    if (!q.started) { clearInterval(queueTimer); queueTimer = null; renderQueue([]); return; }
     // 只渲染本页启动过的那轮队列（刷新页面后不再接管旧队列）。
     if (lastQueueSeq && q.seq !== lastQueueSeq) return;
     if (q.running) {

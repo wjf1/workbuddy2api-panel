@@ -176,8 +176,10 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 			}
 		}
 		if eq {
-			shuf := rand.New(rand.NewPCG(uint64(now.UnixNano()), uint64(len(ws))))
-			shuf.Shuffle(len(ws), func(i, j int) { ws[i], ws[j] = ws[j], ws[i] })
+			// 用 math/rand/v2 全局源洗牌：并发安全且由运行时强种子初始化。
+			// 原先每次新建 time-seeded 源——Windows 时钟粒度约 0.5ms，连续 pick
+			// 可能拿到同种子导致洗牌序列雷同（惊群单号的次生隐患）。
+			rand.Shuffle(len(ws), func(i, j int) { ws[i], ws[j] = ws[j], ws[i] })
 		}
 	}
 	sort.SliceStable(ws, func(i, j int) bool {
