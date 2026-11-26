@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logx"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
@@ -81,6 +82,11 @@ type Config struct {
 		// 暴露，挂上去等于开了个读内存的后门。建议只绑回环地址。
 		// 改动需重启进程。
 		DebugAddr string `json:"debug_addr"`
+		// AllowedIPs 入站来源 IP 白名单（CIDR 或精确 IP，空 = 不启用）。
+		// 启用后仅命中来源可访问 /v1/* 推理端点与 /panel/* 面板；/healthz 与
+		// /status 不受限（探活被拦会被误判成服务挂了）。回环地址（127.0.0.0/8、
+		// ::1）始终放行——本机面板与回环客户端不被自己锁门外。改动需重启进程。
+		AllowedIPs []string `json:"allowed_ips"`
 	} `json:"server"`
 
 	Cooldown struct {
@@ -259,7 +265,18 @@ type Config struct {
 		// （别名不能绕过黑名单）。响应回显客户端原发名，选号/账本按实际生效模型名。
 		// 面板保存后经 livecfg 热生效，无需重启。
 		Aliases []string `json:"aliases"`
+		// Whitelist 模型白名单（空 = 不启用，与 Hidden 黑名单并存、先白后黑）。
+		// 启用后仅名单内模型可用：列表只列白名单内（再减 Hidden），点名调用
+		// 白名单外直接拒绝。条目口径与 Hidden 相同（裸名两域、"cn:x"/"global:x"
+		// 单域）；面板保存后热生效。
+		Whitelist []string `json:"whitelist"`
 	} `json:"models"`
+
+	// KeyGroups 密钥分组分发（空 = 单密钥模式）。每组一个独立 API key，可绑定
+	// 模型白名单子集与组级 RPM 限流；主 api_key 始终有效（管理面/旧客户端）。
+	// 命中组的请求在 chat 点名与 /v1/models 列表两侧都被收窄到组内模型。
+	// 面板保存后经 livecfg 热生效，无需重启。
+	KeyGroups []livecfg.KeyGroup `json:"key_groups"`
 
 	Prompt struct {
 		// Mode passthrough（默认）= 透传客户端原始 system（降级重试仍会切到 Degraded）；

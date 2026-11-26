@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -32,7 +33,7 @@ const (
 func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
-		"data":   h.modelList(),
+		"data":   h.modelList(keyGroupFrom(r)),
 	})
 }
 
@@ -110,11 +111,11 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 // modelList 模型列表：CN 模型输出统一加 "cn:" 前缀（gateway 路由协议，与 resolveModel
 // 对称）；global.enabled=true 时追加 global: 前缀的国际版名单。
 // 纯动态：动态拉取失败/无号 → 该域空列表，无静态兜底。
-func (h *Handler) modelList() []map[string]any {
+func (h *Handler) modelList(g *livecfg.KeyGroup) []map[string]any {
 	out := make([]map[string]any, 0)
 	for _, mi := range h.fetchDynamicModels() {
 		// models.hidden 黑名单：不对外暴露的模型不出现在列表里（判据见 hiddenModel）。
-		if h.hiddenModel("cn", mi.ID) {
+		if h.hiddenModelForGroup(g, "cn", mi.ID) {
 			continue
 		}
 		entry := map[string]any{
@@ -161,7 +162,7 @@ func (h *Handler) modelList() []map[string]any {
 		globalEfforts, globalDefaults := h.cfg.Upstream.GlobalEffortSnapshot()
 		for _, id := range globalIDs {
 			// 同一条黑名单判定：裸名条目会把 global 域也藏掉。
-			if h.hiddenModel("global", id) {
+			if h.hiddenModelForGroup(g, "global", id) {
 				continue
 			}
 			entry := map[string]any{

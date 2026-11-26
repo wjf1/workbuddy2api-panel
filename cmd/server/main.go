@@ -268,7 +268,9 @@ func main() {
 		SanitizeFingerprints: cfg.Features.SanitizeBlacklistFingerprints,
 		RecordClientInfo:     cfg.Logging.RequestClientInfo,
 		HiddenModels:         livecfg.NormalizeHiddenModels(cfg.Models.Hidden),
+		ModelWhitelist:       livecfg.NormalizeModelWhitelist(cfg.Models.Whitelist),
 		ModelAliases:         livecfg.NormalizeModelAliases(cfg.Models.Aliases),
+		KeyGroups:            livecfg.NormalizeKeyGroups(cfg.KeyGroups),
 		ModelFallback:        cfg.Pool.ModelFallback,
 	})
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
@@ -397,6 +399,16 @@ func main() {
 		}
 	}
 
+	// 来源 IP 白名单（server.allowed_ips）：空 = 不启用；非法条目启动 fail fast
+	// （与 prompt.file 同风格——写错的地址段比运行时静默放行更安全）。
+	allowedNets, err := server.ParseAllowedIPs(cfg.Server.AllowedIPs)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	if len(allowedNets) > 0 {
+		logx.Infof("[server] 来源 IP 白名单已启用: %v", cfg.Server.AllowedIPs)
+	}
+
 	h := server.NewHandler(server.Config{
 		GetKeepaliveStats: func() any { return sch.KeepaliveStats() },
 		// 手动补跑排程（/admin/tasks/*）：*scheduler.Scheduler 直接满足 TaskRunner。
@@ -438,6 +450,8 @@ func main() {
 		// 入站限流（server.rate_limit_rps；rps<=0 时返回 nil = 不启用，缺省即现状）。
 		// 与 max_body_mb 配套：前者管单客户端速率，后者管单请求体积。
 		RateLimit: server.NewRateLimiter(cfg.ServerRateLimitRPS, cfg.ServerRateLimitBurst),
+		// 来源 IP 白名单（server.allowed_ips；空 = 不启用，缺省即现状）。
+		AllowedNets: allowedNets,
 	})
 	// 上游排队门控快照注入面板：排队（6020/6021）是上游服务端队列水位、与账号无关，
 	// 面板横幅据此区分它与账号限流（handler 已装配完，此处才拿得到 h）。
@@ -657,7 +671,9 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		SanitizeFingerprints: newCfg.Features.SanitizeBlacklistFingerprints,
 		RecordClientInfo:     newCfg.Logging.RequestClientInfo,
 		HiddenModels:         livecfg.NormalizeHiddenModels(newCfg.Models.Hidden),
+		ModelWhitelist:       livecfg.NormalizeModelWhitelist(newCfg.Models.Whitelist),
 		ModelAliases:         livecfg.NormalizeModelAliases(newCfg.Models.Aliases),
+		KeyGroups:            livecfg.NormalizeKeyGroups(newCfg.KeyGroups),
 		ModelFallback:        newCfg.Pool.ModelFallback,
 	})
 	up.SanitizeFingerprints.Store(newCfg.Features.SanitizeBlacklistFingerprints)
