@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.24.0-panel] - 2026-11-26
+
 ### 新增
 
 - **`stream_options.include_usage` 流式契约补齐**：客户端请求带该字段而上游
